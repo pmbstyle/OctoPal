@@ -1,3 +1,6 @@
+<p align="center"><img alt="logo" src="https://github.com/user-attachments/assets/75aca977-9475-471a-bfec-78822aa9fd98" /></p>
+
+
 # BroodMind
 
 MVP-0 skeleton for the BroodMind Queen + Workers platform.
