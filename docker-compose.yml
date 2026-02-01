@@ -1,0 +1,14 @@
+services:
+  broodmind:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      target: worker
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      - ./workspace:/app/workspace
+      # Windows Docker Desktop socket
+      - //./pipe/docker_engine:/var/run/docker.sock
+    command: ["python", "-m", "broodmind.cli.main", "start"]
+    restart: unless-stopped

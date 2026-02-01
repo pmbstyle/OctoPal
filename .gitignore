@@ -1,0 +1,13 @@
+.env
+/data
+/src/broodmind/__pycache__
+/src/broodmind/config/__pycache__
+/src/broodmind/intents/__pycache__
+/src/broodmind/memory/__pycache__
+/src/broodmind/policy/__pycache__
+/src/broodmind/providers/__pycache__
+/src/broodmind/queen/__pycache__
+/src/broodmind/store/__pycache__
+/src/broodmind/telegram/__pycache__
+/src/broodmind/workers/__pycache__
+/workspace
