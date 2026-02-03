@@ -37,6 +37,7 @@ class TaskRequest(BaseModel):
     inputs: dict[str, Any] = Field(default_factory=dict)  # Task-specific inputs
     tools: list[str] | None = None  # Override default tools if needed
     timeout_seconds: int | None = None  # Override default timeout
+    correlation_id: str | None = None
 
 
 class WorkerSpec(BaseModel):
@@ -53,6 +54,7 @@ class WorkerSpec(BaseModel):
     max_thinking_steps: int
     run_id: str = ""
     lifecycle: str = "ephemeral"
+    correlation_id: str | None = None
 
 
 class WorkerResult(BaseModel):

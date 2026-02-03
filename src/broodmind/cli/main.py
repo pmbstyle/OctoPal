@@ -9,8 +9,8 @@ import typer
 
 from broodmind.config.settings import Settings, load_settings
 from broodmind.gateway.app import build_app
+from broodmind.logging_config import configure_logging
 from broodmind.state import is_pid_running, read_status, write_start_status
-from broodmind.store.sqlite import SQLiteStore
 from broodmind.telegram.bot import run_bot
 
 app = typer.Typer(add_completion=False)
@@ -22,16 +22,10 @@ def _init_logging(settings: Settings) -> None:
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     log_dir = settings.state_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / "broodmind.log"
-
-    handlers: list[logging.Handler] = [
-        logging.StreamHandler(),
-        logging.FileHandler(log_path, encoding="utf-8"),
-    ]
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        handlers=handlers,
+    configure_logging(
+        log_level=settings.log_level, 
+        log_dir=log_dir, 
+        debug_prompts=settings.debug_prompts
     )
 
 
@@ -43,6 +37,7 @@ def start() -> None:
     try:
         asyncio.run(run_bot(settings))
     except KeyboardInterrupt:
+        # Use standard logging here as structlog might be torn down
         logging.getLogger(__name__).info("Shutting down")
 
 

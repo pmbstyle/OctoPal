@@ -13,7 +13,7 @@ from broodmind.providers.base import Message
 
 logger = logging.getLogger(__name__)
 
-_LOG_MAX_CHARS = 2000
+_LOG_MAX_CHARS = 400  # Reduced from 2000
 
 
 class LiteLLMProvider:
@@ -56,18 +56,17 @@ class LiteLLMProvider:
             raise RuntimeError("ZAI_API_KEY is not set")
 
         serialized_messages = [_serialize_message(m) for m in messages]
-
-        if self._settings.debug_prompts:
-            logger.debug(
-                "LiteLLM payload: %s",
-                _truncate(json.dumps({"messages": serialized_messages}, ensure_ascii=False)),
-            )
+        payload_str = json.dumps({"messages": serialized_messages}, ensure_ascii=False)
 
         logger.debug(
-            "LiteLLM request: model=%s messages=%s",
+            "LiteLLM request: model=%s, messages=%d, total_chars=%d",
             self._model,
             len(serialized_messages),
+            len(payload_str),
         )
+
+        if self._settings.debug_prompts:
+            logger.debug("LiteLLM payload: %s", _truncate(payload_str))
 
         try:
             response = await acompletion(
@@ -99,24 +98,22 @@ class LiteLLMProvider:
             raise RuntimeError("ZAI_API_KEY is not set")
 
         serialized_messages = [_serialize_message(m) for m in messages]
-
-        if self._settings.debug_prompts:
-            logger.debug(
-                "LiteLLM payload (tools): %s",
-                _truncate(
-                    json.dumps(
-                        {"messages": serialized_messages, "tools": tools, "tool_choice": tool_choice},
-                        ensure_ascii=False,
-                    )
-                ),
-            )
+        payload_str = json.dumps(
+            {"messages": serialized_messages, "tools": tools, "tool_choice": tool_choice},
+            ensure_ascii=False,
+        )
+        tool_names = [t.get("function", {}).get("name") for t in tools]
 
         logger.debug(
-            "LiteLLM request (tools): model=%s messages=%s tools=%s",
+            "LiteLLM request (tools): model=%s, messages=%d, tools=%s, total_chars=%d",
             self._model,
             len(serialized_messages),
-            len(tools),
+            tool_names,
+            len(payload_str),
         )
+
+        if self._settings.debug_prompts:
+            logger.debug("LiteLLM payload (tools): %s", _truncate(payload_str))
 
         try:
             response = await acompletion(
@@ -137,10 +134,11 @@ class LiteLLMProvider:
             if content:
                 logger.debug("LiteLLM response (tools) content: %s", _truncate(content))
             if tool_calls:
-                logger.debug("LiteLLM response (tools) tool_calls=%s", len(tool_calls))
+                tool_call_names = [tc.get("function", {}).get("name") for tc in tool_calls]
+                logger.debug("LiteLLM response: tool_calls=%s", tool_call_names)
                 if self._settings.debug_prompts:
                     logger.debug(
-                        "LiteLLM response (tools) tool_calls payload: %s",
+                        "LiteLLM tool_calls payload: %s",
                         _truncate(json.dumps(tool_calls, ensure_ascii=False)),
                     )
 
@@ -220,4 +218,4 @@ def _truncate(text: str) -> str:
         return ""
     if len(text) <= _LOG_MAX_CHARS:
         return text
-    return text[:_LOG_MAX_CHARS] + "...[truncated]"
+    return text[:_LOG_MAX_CHARS] + f"...[truncated {len(text)} bytes]"

@@ -13,3 +13,5 @@
 /workspace
 /src/broodmind/tools/__pycache__
 /src/broodmind/gateway/__pycache__
+/src/broodmind/cli/__pycache__
+/workspace-backup

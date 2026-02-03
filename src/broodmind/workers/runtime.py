@@ -64,6 +64,7 @@ class WorkerRuntime:
             timeout_seconds=task_request.timeout_seconds or template.default_timeout_seconds,
             max_thinking_steps=template.max_thinking_steps,
             lifecycle="ephemeral",
+            correlation_id=task_request.correlation_id,
         )
 
         # Run worker
@@ -208,7 +209,7 @@ class WorkerRuntime:
 
             msg_type = payload.get("type")
             if msg_type == "log":
-                logger.info("Worker %s: %s", spec.id, payload.get("message"))
+                logger.debug("Worker %s: %s", spec.id, payload.get("message"))
                 return None
             if msg_type == "result":
                 result = WorkerResult.model_validate(payload.get("result", {}))

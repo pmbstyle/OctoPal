@@ -29,9 +29,14 @@ logger = logging.getLogger(__name__)
 async def run_agent_worker(spec_path: str) -> None:
     """Main entry point for simplified agent worker."""
     from broodmind.worker_sdk.worker import Worker
+    from broodmind.logging_config import correlation_id_var
 
     worker = Worker.from_spec_file(spec_path)
     base_dir = Path(spec_path).parent
+
+    # Set the correlation ID for this worker's context
+    if worker.spec.correlation_id:
+        correlation_id_var.set(worker.spec.correlation_id)
 
     await worker.log(
         "info",

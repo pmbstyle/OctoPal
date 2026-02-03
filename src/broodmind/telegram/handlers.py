@@ -6,8 +6,10 @@ import asyncio
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
+import uuid
 
 from broodmind.config.settings import Settings
+from broodmind.logging_config import correlation_id_var
 from broodmind.queen.core import Queen, QueenReply
 from broodmind.state import update_last_message
 from broodmind.telegram.approvals import ApprovalManager
@@ -28,9 +30,13 @@ def register_handlers(
     
     @dp.message()
     async def handle_message(message: Message) -> None:
+        # Generate a unique ID for this request chain
+        correlation_id = f"msg-{uuid.uuid4()}"
+        correlation_id_var.set(correlation_id)
+
         if not message.text:
             return
-        logger.info("Incoming message")
+        logger.debug("Incoming message from chat_id=%s", message.chat.id)
         lock = _CHAT_LOCKS.setdefault(message.chat.id, asyncio.Lock())
         async with lock:
             typing_stop = asyncio.Event()

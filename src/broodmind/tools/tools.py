@@ -7,10 +7,11 @@ from broodmind.tools.llm_task import run_llm_subtask
 from broodmind.tools.registry import ToolSpec
 from broodmind.tools.web_fetch import web_fetch
 from broodmind.tools.web_search import web_search
+from broodmind.tools.worker_tools import get_worker_tools
 
 
 def get_tools() -> list[ToolSpec]:
-    return [
+    tools = [
         ToolSpec(
             name="run_llm_subtask",
             description="Run a generic, JSON-only LLM sub-task. Ideal for tasks requiring structured data generation or analysis based on a prompt.",
@@ -192,3 +193,5 @@ def get_tools() -> list[ToolSpec]:
             handler=lambda args, ctx: exec_run(args, ctx["base_dir"]),
         ),
     ]
+    tools.extend(get_worker_tools())
+    return tools

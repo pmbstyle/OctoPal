@@ -17,12 +17,14 @@ from broodmind.store.models import (
     WorkerTemplateRecord,
 )
 from broodmind.utils import utc_now
+from broodmind.workers.loader import discover_worker_templates, get_worker_template as get_template_from_fs
 
 
 class SQLiteStore(Store):
     def __init__(self, settings: Settings) -> None:
         settings.state_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = settings.state_dir / "broodmind.db"
+        self._workspace_dir = settings.workspace_dir
         self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
@@ -86,9 +88,10 @@ class SQLiteStore(Store):
                 metadata_json TEXT NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS worker_templates (
-                id TEXT PRIMARY KEY,
-...
+            CREATE TABLE IF NOT EXISTS chat_state (
+                chat_id INTEGER PRIMARY KEY,
+                bootstrapped_at TEXT,
+                bootstrap_hash TEXT
             );
 
             CREATE INDEX IF NOT EXISTS ix_workers_status_updated_at ON workers (status, updated_at);
@@ -144,6 +147,16 @@ class SQLiteStore(Store):
             # It's a complex operation, so we log if it fails.
             import logging
             logging.getLogger(__name__).warning("Memory schema migration failed (this may be ok if table was empty): %s", e)
+
+        # Drop deprecated worker_templates table (now using filesystem)
+        try:
+            self._conn.execute("DROP TABLE IF EXISTS worker_templates")
+            self._conn.commit()
+            logger = logging.getLogger(__name__)
+            logger.info("Dropped deprecated worker_templates table (workers now loaded from filesystem)")
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning("Failed to drop worker_templates table: %s", e)
 
 
         # Add worker result fields
@@ -373,56 +386,33 @@ class SQLiteStore(Store):
         return self._row_to_audit(row)
 
     def upsert_worker_template(self, record: WorkerTemplateRecord) -> None:
-        self._conn.execute(
-            """
-            INSERT INTO worker_templates (
-                id, name, description, system_prompt, available_tools_json,
-                required_permissions_json, max_thinking_steps, default_timeout_seconds,
-                created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                name = excluded.name,
-                description = excluded.description,
-                system_prompt = excluded.system_prompt,
-                available_tools_json = excluded.available_tools_json,
-                required_permissions_json = excluded.required_permissions_json,
-                max_thinking_steps = excluded.max_thinking_steps,
-                default_timeout_seconds = excluded.default_timeout_seconds,
-                updated_at = excluded.updated_at
-            """,
-            (
-                record.id,
-                record.name,
-                record.description,
-                record.system_prompt,
-                json.dumps(record.available_tools),
-                json.dumps(record.required_permissions),
-                record.max_thinking_steps,
-                record.default_timeout_seconds,
-                record.created_at.isoformat(),
-                record.updated_at.isoformat(),
-            ),
-        )
-        self._conn.commit()
+        """Upsert a worker template by writing to filesystem.
+
+        Note: This is now a no-op for database storage. Workers are managed
+        as files in workspace/workers/{id}/worker.py
+        """
+        # Worker templates are now managed as files in the workspace
+        # This method is kept for API compatibility but does nothing
+        pass
 
     def list_worker_templates(self) -> list[WorkerTemplateRecord]:
-        cursor = self._conn.execute("SELECT * FROM worker_templates ORDER BY updated_at DESC")
-        return [self._row_to_worker_template(row) for row in cursor.fetchall()]
+        """List all worker templates from filesystem."""
+        return discover_worker_templates(self._workspace_dir)
 
     def get_worker_template(self, template_id: str) -> WorkerTemplateRecord | None:
-        cursor = self._conn.execute("SELECT * FROM worker_templates WHERE id = ?", (template_id,))
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return self._row_to_worker_template(row)
-
-        return self._row_to_worker_template(row)
+        """Get a worker template from filesystem by ID."""
+        return get_template_from_fs(self._workspace_dir, template_id)
 
     def delete_worker_template(self, template_id: str) -> None:
-        """Delete a worker template by ID."""
-        self._conn.execute("DELETE FROM worker_templates WHERE id = ?", (template_id,))
-        self._conn.commit()
+        """Delete a worker template by ID.
+
+        Note: This is not implemented. Workers should be managed via file operations.
+        """
+        # Worker templates are now managed as files - use file operations to delete
+        raise NotImplementedError(
+            "Worker templates are managed as files. Delete the worker directory directly: "
+            f"workspace/workers/{template_id}/"
+        )
 
     def add_memory_entry(self, entry: MemoryEntry) -> None:
         self._conn.execute(
@@ -558,20 +548,6 @@ class SQLiteStore(Store):
             embedding=embedding,
             created_at=_parse_dt(row["created_at"]),
             metadata=_loads_json(row["metadata_json"]),
-        )
-
-    def _row_to_worker_template(self, row: sqlite3.Row) -> WorkerTemplateRecord:
-        return WorkerTemplateRecord(
-            id=row["id"],
-            name=row["name"],
-            description=row["description"],
-            system_prompt=row["system_prompt"],
-            available_tools=_loads_json(row["available_tools_json"]),
-            required_permissions=_loads_json(row["required_permissions_json"]),
-            max_thinking_steps=_row_get(row, "max_thinking_steps", 10),
-            default_timeout_seconds=_row_get(row, "default_timeout_seconds", 300),
-            created_at=_parse_dt(row["created_at"]),
-            updated_at=_parse_dt(row["updated_at"]),
         )
 
 
