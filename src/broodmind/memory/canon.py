@@ -39,24 +39,28 @@ class CanonService:
             return ""
         return path.read_text(encoding="utf-8")
 
-    def write_canon(self, filename: str, content: str, mode: Literal["append", "overwrite"] = "append") -> str:
+    async def write_canon(self, filename: str, content: str, mode: Literal["append", "overwrite"] = "append") -> str:
         """Writes to a canonical memory file and triggers re-indexing."""
         if not filename.endswith(".md"):
             filename += ".md"
         path = self.canon_dir / filename
 
-        current_content = ""
-        if path.exists() and mode == "append":
-            current_content = path.read_text(encoding="utf-8")
+        def _write():
+            current_content = ""
+            if path.exists() and mode == "append":
+                current_content = path.read_text(encoding="utf-8")
 
-        new_content = content
-        if mode == "append":
-            # Add newline if needed
-            if current_content and not current_content.endswith("\n"):
-                current_content += "\n"
-            new_content = current_content + content
+            final_content = content
+            if mode == "append":
+                # Add newline if needed
+                if current_content and not current_content.endswith("\n"):
+                    current_content += "\n"
+                final_content = current_content + content
 
-        path.write_text(new_content, encoding="utf-8")
+            path.write_text(final_content, encoding="utf-8")
+            return final_content
+
+        new_content = await asyncio.to_thread(_write)
 
         # Trigger async re-indexing
         if self.embeddings:

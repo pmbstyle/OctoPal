@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def manage_canon(args: dict[str, Any], ctx: dict[str, Any]) -> str:
+async def manage_canon(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Queen tool to manage canonical memory."""
     queen = ctx["queen"]
     canon = queen.canon
@@ -27,7 +27,7 @@ def manage_canon(args: dict[str, Any], ctx: dict[str, Any]) -> str:
              return "Error: filename required for write action."
         if not content:
             return "Error: Content required for write action."
-        return canon.write_canon(filename, content, mode)
+        return await canon.write_canon(filename, content, mode)
 
     return f"Unknown action: {action}"
 

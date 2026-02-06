@@ -79,6 +79,7 @@ def get_worker_tools() -> list[ToolSpec]:
             },
             permission="worker_manage",
             handler=_tool_start_worker,
+            is_async=True,
         ),
         ToolSpec(
             name="stop_worker",
@@ -91,6 +92,7 @@ def get_worker_tools() -> list[ToolSpec]:
             },
             permission="worker_manage",
             handler=_tool_stop_worker,
+            is_async=True,
         ),
         ToolSpec(
             name="get_worker_status",
@@ -410,7 +412,7 @@ def _tool_delete_worker_template(args: dict[str, object], ctx: dict[str, object]
     }, ensure_ascii=False)
 
 
-def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) -> str:
+async def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) -> str:
     """Start a worker task with the specified worker template."""
     queen: Queen = ctx["queen"]
     chat_id = int(ctx.get("chat_id") or 0)
@@ -432,7 +434,7 @@ def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) -> str:
     if not template:
         return f"start_worker error: worker '{worker_id}' not found. Use list_workers to see available workers."
 
-    run_id = queen._start_worker_async(
+    run_id = await queen._start_worker_async(
         worker_id=worker_id,
         task=task,
         chat_id=chat_id,
@@ -449,12 +451,12 @@ def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) -> str:
     }, ensure_ascii=False)
 
 
-def _tool_stop_worker(args: dict[str, object], ctx: dict[str, object]) -> str:
+async def _tool_stop_worker(args: dict[str, object], ctx: dict[str, object]) -> str:
     queen: Queen = ctx["queen"]
     worker_id = str(args.get("worker_id", "")).strip()
     if not worker_id:
         return "stop_worker error: worker_id is required."
-    stopped = queen.runtime.stop_worker(worker_id)
+    stopped = await queen.runtime.stop_worker(worker_id)
     return json.dumps({"status": "stopped" if stopped else "not_found", "worker_id": worker_id}, ensure_ascii=False)
 
 

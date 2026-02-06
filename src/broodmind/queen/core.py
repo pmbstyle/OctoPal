@@ -202,7 +202,7 @@ class Queen:
             )
         return QueenReply(immediate=_normalize_plain_text(reply_text), followup=None)
 
-    def _start_worker_async(
+    async def _start_worker_async(
         self,
         worker_id: str,
         task: str,

@@ -43,6 +43,7 @@ def get_tools() -> list[ToolSpec]:
             },
             permission="canon_manage",
             handler=lambda args, ctx: manage_canon(args, ctx),
+            is_async=True,
         ),
         ToolSpec(
             name="search_canon",

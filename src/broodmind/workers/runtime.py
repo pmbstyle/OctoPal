@@ -172,7 +172,7 @@ class WorkerRuntime:
             if spec.lifecycle == "ephemeral":
                 await self._cleanup_worker_dir(worker_dir)
 
-    def stop_worker(self, worker_id: str) -> bool:
+    async def stop_worker(self, worker_id: str) -> bool:
         """Stop a running worker."""
         process = self._running.get(worker_id)
         if not process:
@@ -182,8 +182,8 @@ class WorkerRuntime:
         except Exception:
             logger.exception("Failed to stop worker: %s", worker_id)
             return False
-        self.store.update_worker_status(worker_id, "stopped")
-        self._append_audit(
+        await asyncio.to_thread(self.store.update_worker_status, worker_id, "stopped")
+        await self._append_audit(
             "worker_stopped",
             level="warning",
             correlation_id=worker_id,
@@ -249,7 +249,8 @@ class WorkerRuntime:
                         # Auto-approve
                         permit = self.policy.issue_permit(request.intent, spec.id)
                         # Save permit to store (for audit/verification)
-                        self.store.create_permit(
+                        await asyncio.to_thread(
+                            self.store.create_permit,
                             PermitRecord(
                                 id=permit.id,
                                 intent_id="auto-approved", # No intent record for now
