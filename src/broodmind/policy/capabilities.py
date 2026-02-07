@@ -6,6 +6,12 @@ DEFAULT_CAPABILITY_WHITELIST: dict[str, list[str]] = {
     "filesystem_write": ["worker"],
     "network": ["*"],
     "exec": ["worker", "python", "node"],
+    "service_read": ["worker"],
+    "service_control": ["worker"],
+    "deploy_control": ["worker"],
+    "db_admin": ["worker"],
+    "security_audit": ["worker"],
+    "self_control": ["worker"],
     "email": ["*"],
     "payment": [],
 }

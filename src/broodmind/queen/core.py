@@ -139,6 +139,7 @@ class Queen:
     memory: MemoryService
     canon: CanonService
     internal_send: callable | None = None
+    internal_progress_send: callable | None = None
     _cleanup_task: asyncio.Task | None = None
     _recent_tasks: set[str] = None  # Track tasks in current conversation to detect duplicates
 
@@ -249,6 +250,12 @@ class Queen:
         if task_signature in self._recent_tasks:
             logger.warning("Duplicate worker task detected, skipping", worker_id=worker_id, task_prefix=task[:50])
             skipped_id = f"skipped-duplicate-{uuid4().hex[:8]}"
+            await self._emit_progress(
+                chat_id,
+                "duplicate",
+                "Duplicate worker request detected; skipping duplicate launch.",
+                {"worker_template_id": worker_id},
+            )
             return {
                 "status": "skipped_duplicate",
                 "run_id": skipped_id,
@@ -257,6 +264,12 @@ class Queen:
 
         self._recent_tasks.add(task_signature)
         run_id = str(uuid4())
+        await self._emit_progress(
+            chat_id,
+            "queued",
+            f"Queued worker '{worker_id}' as {run_id}.",
+            {"worker_id": run_id, "worker_template_id": worker_id},
+        )
         task_request = TaskRequest(
             worker_id=worker_id,
             task=task,
@@ -269,12 +282,51 @@ class Queen:
         )
         async def _runner() -> None:
             try:
+                await self._emit_progress(
+                    chat_id,
+                    "running",
+                    f"Worker {run_id} is running.",
+                    {"worker_id": run_id, "worker_template_id": worker_id},
+                )
                 result = await self.runtime.run_task(task_request)
+                await self._emit_progress(
+                    chat_id,
+                    "completed",
+                    f"Worker {run_id} completed.",
+                    {"worker_id": run_id, "worker_template_id": worker_id},
+                )
             except Exception as exc:
                 result = WorkerResult(summary=f"Worker error: {exc}", output={"error": str(exc)})
+                await self._emit_progress(
+                    chat_id,
+                    "failed",
+                    f"Worker {run_id} failed: {exc}",
+                    {"worker_id": run_id, "worker_template_id": worker_id},
+                )
             _enqueue_internal_result(self, chat_id, task, result)
         asyncio.create_task(_runner())
+        await self._emit_progress(
+            chat_id,
+            "worker_started",
+            f"Worker started: {run_id}",
+            {"worker_id": run_id, "worker_template_id": worker_id},
+        )
         return {"status": "started", "run_id": run_id, "worker_id": run_id}
+
+    async def _emit_progress(
+        self,
+        chat_id: int,
+        state: str,
+        text: str,
+        meta: dict[str, Any] | None = None,
+    ) -> None:
+        sender = self.internal_progress_send
+        if not sender:
+            return
+        try:
+            await sender(chat_id, state, text, meta or {})
+        except Exception:
+            logger.debug("Progress emit failed", exc_info=True)
 
 
 @dataclass
@@ -351,7 +403,21 @@ def _log_system_prompt(messages: list, label: str) -> None:
         )
 
 def _get_queen_tools(queen: Queen, chat_id: int) -> tuple[list[ToolSpec], dict[str, object]]:
-    perms = {"filesystem_read": True, "filesystem_write": True, "worker_manage": True, "llm_subtask": True, "canon_manage": True}
+    perms = {
+        "filesystem_read": True,
+        "filesystem_write": True,
+        "worker_manage": True,
+        "llm_subtask": True,
+        "canon_manage": True,
+        "network": True,
+        "exec": True,
+        "service_read": True,
+        "service_control": True,
+        "deploy_control": True,
+        "db_admin": True,
+        "security_audit": True,
+        "self_control": True,
+    }
     ctx = {"base_dir": Path(os.getenv("BROODMIND_WORKSPACE_DIR", "workspace")).resolve(), "queen": queen, "chat_id": chat_id}
     tool_specs = filter_tools(get_tools(), permissions=perms)
     return tool_specs, ctx

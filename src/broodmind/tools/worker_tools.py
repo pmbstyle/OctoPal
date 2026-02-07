@@ -174,7 +174,7 @@ def get_worker_tools() -> list[ToolSpec]:
                     "required_permissions": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Permissions needed: 'network', 'filesystem_read', 'filesystem_write', 'exec'.",
+                        "description": "Permissions needed: 'network', 'filesystem_read', 'filesystem_write', 'exec', 'service_read', 'service_control', 'deploy_control', 'db_admin', 'security_audit', 'self_control'.",
                     },
                     "model": {
                         "type": "string",

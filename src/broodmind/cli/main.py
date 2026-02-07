@@ -19,6 +19,7 @@ from broodmind.runtime_metrics import read_metrics_snapshot
 from broodmind.state import is_pid_running, read_status, write_start_status
 from broodmind.store.sqlite import SQLiteStore
 from broodmind.telegram.bot import run_bot
+from broodmind.workers.templates import sync_default_templates
 
 app = typer.Typer(add_completion=False)
 workers_app = typer.Typer(add_completion=False)
@@ -535,6 +536,20 @@ def build_worker_image(tag: str = "broodmind-worker:latest") -> None:
     ]
     console.print(f"[bold cyan]Running:[/bold cyan] {' '.join(cmd)}")
     raise SystemExit(__import__("subprocess").call(cmd))
+
+
+@app.command("sync-worker-templates")
+def sync_worker_templates(
+    overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing workspace worker templates"),
+) -> None:
+    """Copy default worker templates into workspace/workers."""
+    settings = load_settings()
+    result = sync_default_templates(settings.workspace_dir, overwrite=overwrite)
+    console.print(
+        "[green]Worker template sync complete[/green]: "
+        f"copied={result['copied']} updated={result['updated']} skipped={result['skipped']}"
+    )
+    console.print(f"[dim]Target:[/dim] {settings.workspace_dir / 'workers'}")
 
 
 app.add_typer(workers_app, name="workers")
