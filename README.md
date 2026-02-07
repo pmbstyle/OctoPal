@@ -10,10 +10,21 @@ The Queen handles conversation, planning, memory, and delegation. Workers execut
 ### Prerequisites
 
 - Python 3.12+
+- `uv` (recommended package/environment manager)
 - Telegram bot token (from [@BotFather](https://t.me/botfather))
 - At least one LLM API key:
   - `ZAI_API_KEY` (default LiteLLM path), or
   - `OPENROUTER_API_KEY` (if using OpenRouter)
+
+If `uv` is not installed:
+
+```bash
+# Windows (PowerShell)
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 ### 1. Clone
 
