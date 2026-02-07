@@ -11,10 +11,12 @@ import logging
 import os
 import shutil
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from broodmind.intents.types import ActionIntent
 from broodmind.policy.engine import PolicyEngine
 from broodmind.store.base import Store
 from broodmind.store.models import AuditEvent, WorkerRecord
@@ -35,7 +37,11 @@ class WorkerRuntime:
     launcher: WorkerLauncher
     _running: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
 
-    async def run_task(self, task_request: TaskRequest) -> WorkerResult:
+    async def run_task(
+        self,
+        task_request: TaskRequest,
+        approval_requester: Callable[[ActionIntent], Awaitable[bool]] | None = None,
+    ) -> WorkerResult:
         """Run a task with the specified worker template."""
         # Get worker template
         template = await asyncio.to_thread(
@@ -71,11 +77,12 @@ class WorkerRuntime:
         )
 
         # Run worker
-        return await self.run(spec)
+        return await self.run(spec, approval_requester=approval_requester)
 
     async def run(
         self,
         spec: WorkerSpec,
+        approval_requester: Callable[[ActionIntent], Awaitable[bool]] | None = None,
     ) -> WorkerResult:
         """Run a worker with the given spec."""
         logger.info(
@@ -134,7 +141,7 @@ class WorkerRuntime:
 
         try:
             result = await asyncio.wait_for(
-                self._read_loop(spec, process),
+                self._read_loop(spec, process, approval_requester=approval_requester),
                 timeout=spec.timeout_seconds,
             )
             logger.info("WorkerRuntime result: id=%s summary_len=%s", spec.id, len(result.summary))
@@ -204,6 +211,7 @@ class WorkerRuntime:
         self,
         spec: WorkerSpec,
         process: asyncio.subprocess.Process,
+        approval_requester: Callable[[ActionIntent], Awaitable[bool]] | None = None,
     ) -> WorkerResult:
         """Read worker output."""
         invalid_lines = 0
@@ -261,16 +269,76 @@ class WorkerRuntime:
                     approval_req = self.policy.check_intent(action_intent)
 
                     if approval_req.requires_approval:
-                        # TODO: Implement user approval flow via Queen
                         await asyncio.to_thread(
                             self.store.update_intent_status,
                             action_intent.id,
                             "requires_approval",
                         )
-                        response = {
-                            "type": "permit_denied",
-                            "reason": f"Intent requires approval (not implemented): {approval_req.reason}",
-                        }
+                        approved = False
+                        if approval_requester:
+                            await self._append_audit(
+                                "intent_approval_requested",
+                                correlation_id=spec.id,
+                                data={
+                                    "intent_id": action_intent.id,
+                                    "intent_type": action_intent.type,
+                                    "risk": action_intent.risk,
+                                },
+                            )
+                            try:
+                                approved = await approval_requester(action_intent)
+                            except Exception as exc:
+                                logger.exception("Approval requester failed")
+                                await self._append_audit(
+                                    "intent_approval_failed",
+                                    level="error",
+                                    correlation_id=spec.id,
+                                    data={
+                                        "intent_id": action_intent.id,
+                                        "error": str(exc),
+                                    },
+                                )
+                        if approved:
+                            permit = self.policy.issue_permit(action_intent, spec.id)
+                            await asyncio.to_thread(
+                                self.store.update_intent_status,
+                                action_intent.id,
+                                "approved",
+                            )
+                            await asyncio.to_thread(
+                                self.store.create_permit,
+                                PermitRecord(
+                                    id=permit.id,
+                                    intent_id=action_intent.id,
+                                    intent_type=action_intent.type,
+                                    worker_id=spec.id,
+                                    payload_hash=permit.payload_hash,
+                                    expires_at=permit.expires_at,
+                                    created_at=utc_now(),
+                                ),
+                            )
+                            await self._append_audit(
+                                "intent_approval_granted",
+                                correlation_id=spec.id,
+                                data={"intent_id": action_intent.id},
+                            )
+                            response = {"type": "permit", "permit": permit.model_dump()}
+                        else:
+                            await asyncio.to_thread(
+                                self.store.update_intent_status,
+                                action_intent.id,
+                                "denied",
+                            )
+                            await self._append_audit(
+                                "intent_approval_denied",
+                                level="warning",
+                                correlation_id=spec.id,
+                                data={"intent_id": action_intent.id},
+                            )
+                            response = {
+                                "type": "permit_denied",
+                                "reason": f"Intent requires approval: {approval_req.reason or 'denied'}",
+                            }
                     else:
                         # Auto-approve
                         permit = self.policy.issue_permit(action_intent, spec.id)
@@ -304,6 +372,20 @@ class WorkerRuntime:
                     logger.exception("Failed to process intent request")
                     error_resp = {"type": "permit_denied", "reason": f"Internal error: {exc}"}
                     await self._write_to_worker(process, error_resp)
+                return None
+
+            if msg_type == "intent_executed":
+                logger.info("Worker %s intent executed report received", spec.id)
+                await self._append_audit(
+                    "intent_executed_reported",
+                    correlation_id=spec.id,
+                    data={
+                        "intent_id": payload.get("intent_id"),
+                        "permit_id": payload.get("permit_id"),
+                        "intent_type": payload.get("intent_type"),
+                        "success": bool(payload.get("success")),
+                    },
+                )
                 return None
 
             if msg_type == "result":

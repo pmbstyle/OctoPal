@@ -277,7 +277,7 @@ def get_tools() -> list[ToolSpec]:
                         "description": "Input text to write to stdin (for 'write' action).",
                     },
                 },
-                "required": ["command"],
+                "required": [],
                 "additionalProperties": False,
             },
             permission="exec",

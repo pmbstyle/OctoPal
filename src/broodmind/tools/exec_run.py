@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
-import select
 import subprocess
-import sys
 import threading
 import time
 import uuid
@@ -61,43 +59,6 @@ def exec_run(args: dict[str, Any], base_dir: Path) -> str:
     else:
         return f"exec_run error: Unknown action '{action}'"
 
-
-def _read_stream(stream: Any) -> str:
-    """Non-blocking read from a stream."""
-    if not stream:
-        return ""
-
-    # Try reading available lines without blocking
-    output = []
-
-    if sys.platform == "win32":
-        # Windows doesn't support select() on pipes.
-        # We can't easily peek into the pipe without blocking or threads.
-        # However, since we are in a synchronous tool call, simply falling back
-        # to a short blocking read or just returning what we can isn't trivial.
-        #
-        # A robust solution for Windows sync non-blocking reads requires
-        # named pipes or threads. For this MVP, we will assume the caller
-        # accepts that 'poll' might not return ALL output immediately
-        # unless we use threads to populate a buffer.
-
-        # NOTE: For this specific implementation, we'll return a note that
-        # full streaming requires the threaded implementation (see below).
-        return "(Output streaming on Windows requires threaded buffer implementation)"
-    else:
-        # Unix-like systems can use select
-        while True:
-            reads, _, _ = select.select([stream], [], [], 0.0)
-            if stream in reads:
-                line = stream.readline()
-                if line:
-                    output.append(line)
-                else:
-                    break
-            else:
-                break
-
-    return "".join(output)
 
 # -------------------------------------------------------------------------
 # THREADED BUFFER IMPLEMENTATION FOR ROBUST CROSS-PLATFORM NON-BLOCKING I/O

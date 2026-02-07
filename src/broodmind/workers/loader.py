@@ -8,12 +8,14 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
 from broodmind.store.models import WorkerTemplateRecord
 
 logger = logging.getLogger(__name__)
+_WORKER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def discover_worker_templates(workspace_dir: Path) -> list[WorkerTemplateRecord]:
@@ -53,7 +55,16 @@ def get_worker_template(workspace_dir: Path, worker_id: str) -> WorkerTemplateRe
 
     Returns None if the worker doesn't exist.
     """
-    worker_file = workspace_dir / "workers" / worker_id / "worker.json"
+    if not _WORKER_ID_PATTERN.fullmatch(worker_id):
+        logger.warning("Invalid worker template id: %s", worker_id)
+        return None
+    workers_root = (workspace_dir / "workers").resolve()
+    worker_file = (workers_root / worker_id / "worker.json").resolve()
+    try:
+        worker_file.relative_to(workers_root)
+    except ValueError:
+        logger.warning("Worker template path escapes workers root: %s", worker_id)
+        return None
     if not worker_file.exists():
         return None
 

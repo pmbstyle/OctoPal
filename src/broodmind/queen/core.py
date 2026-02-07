@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from uuid import uuid4
 
 import structlog
 
+from broodmind.intents.types import ActionIntent
 from broodmind.memory.canon import CanonService
 from broodmind.memory.service import MemoryService
 from broodmind.policy.engine import PolicyEngine
@@ -142,10 +144,13 @@ class Queen:
     internal_progress_send: callable | None = None
     _cleanup_task: asyncio.Task | None = None
     _recent_tasks: set[str] = None  # Track tasks in current conversation to detect duplicates
+    _approval_requesters: dict[int, Callable[[Any], Awaitable[bool]]] | None = None
 
     def __post_init__(self):
         if self._recent_tasks is None:
             self._recent_tasks = set()
+        if self._approval_requesters is None:
+            self._approval_requesters = {}
 
     async def _periodic_cleanup(self, interval_seconds: int):
         while True:
@@ -215,6 +220,8 @@ class Queen:
     ) -> QueenReply:
         # Clear recent tasks at the start of each new user message
         self._recent_tasks.clear()
+        if callable(approval_requester):
+            self._approval_requesters[chat_id] = approval_requester
         logger.info("Handling message", chat_id=chat_id)
         logger.debug("Received message text", text_len=len(text), text=text[:500])
         await self.memory.add_message("user", text, {"chat_id": chat_id})
@@ -280,6 +287,14 @@ class Queen:
             run_id=run_id,
             correlation_id=correlation_id_var.get(),
         )
+
+        requester = self._approval_requesters.get(chat_id)
+        if requester is None and getattr(self.approvals, "bot", None):
+            async def _telegram_requester(intent: ActionIntent) -> bool:
+                return await self.approvals.request_approval(chat_id, intent)
+
+            requester = _telegram_requester
+
         async def _runner() -> None:
             try:
                 await self._emit_progress(
@@ -288,7 +303,7 @@ class Queen:
                     f"Worker {run_id} is running.",
                     {"worker_id": run_id, "worker_template_id": worker_id},
                 )
-                result = await self.runtime.run_task(task_request)
+                result = await self.runtime.run_task(task_request, approval_requester=requester)
                 await self._emit_progress(
                     chat_id,
                     "completed",

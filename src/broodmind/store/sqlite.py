@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+import threading
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -21,12 +22,75 @@ from broodmind.workers.loader import discover_worker_templates
 from broodmind.workers.loader import get_worker_template as get_template_from_fs
 
 
+class LockedCursor:
+    def __init__(self, cursor: sqlite3.Cursor, lock: threading.RLock) -> None:
+        self._cursor = cursor
+        self._lock = lock
+
+    def fetchone(self) -> Any:
+        with self._lock:
+            return self._cursor.fetchone()
+
+    def fetchall(self) -> list[Any]:
+        with self._lock:
+            return self._cursor.fetchall()
+
+    def fetchmany(self, size: int | None = None) -> list[Any]:
+        with self._lock:
+            if size is None:
+                return self._cursor.fetchmany()
+            return self._cursor.fetchmany(size)
+
+    @property
+    def rowcount(self) -> int:
+        with self._lock:
+            return self._cursor.rowcount
+
+    def __iter__(self):
+        with self._lock:
+            return iter(list(self._cursor))
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._cursor, item)
+
+
+class LockedConnection:
+    def __init__(self, conn: sqlite3.Connection, lock: threading.RLock) -> None:
+        object.__setattr__(self, "_conn", conn)
+        object.__setattr__(self, "_lock", lock)
+
+    def execute(self, *args: Any, **kwargs: Any) -> LockedCursor:
+        with self._lock:
+            cursor = self._conn.execute(*args, **kwargs)
+            return LockedCursor(cursor, self._lock)
+
+    def executescript(self, *args: Any, **kwargs: Any) -> LockedCursor:
+        with self._lock:
+            cursor = self._conn.executescript(*args, **kwargs)
+            return LockedCursor(cursor, self._lock)
+
+    def commit(self) -> None:
+        with self._lock:
+            self._conn.commit()
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._conn, item)
+
+    def __setattr__(self, key: str, value: Any) -> None:
+        if key in {"_conn", "_lock"}:
+            object.__setattr__(self, key, value)
+        else:
+            setattr(self._conn, key, value)
+
+
 class SQLiteStore(Store):
     def __init__(self, settings: Settings) -> None:
         settings.state_dir.mkdir(parents=True, exist_ok=True)
         self._db_path = settings.state_dir / "broodmind.db"
         self._workspace_dir = settings.workspace_dir
-        self._conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._lock = threading.RLock()
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
+        self._conn = LockedConnection(conn, self._lock)
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL;")
         self._conn.execute("PRAGMA foreign_keys=ON;")
@@ -630,19 +694,6 @@ class SQLiteStore(Store):
             summary=_row_get(row, "summary"),
             output=_loads_json(row["output_json"]) if "output_json" in row and row["output_json"] else None,
             error=_row_get(row, "error"),
-        )
-
-    def _row_to_intent(self, row: sqlite3.Row) -> IntentRecord:
-        return IntentRecord(
-            id=row["id"],
-            worker_id=row["worker_id"],
-            type=row["type"],
-            payload=_loads_json(row["payload_json"]),
-            payload_hash=row["payload_hash"],
-            risk=row["risk"],
-            requires_approval=bool(row["requires_approval"]),
-            status=row["status"],
-            created_at=_parse_dt(row["created_at"]),
         )
 
     def _row_to_permit(self, row: sqlite3.Row) -> PermitRecord:

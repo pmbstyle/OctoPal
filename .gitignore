@@ -17,3 +17,5 @@
 /workspace-backup
 /src/broodmind.egg-info
 /.claude
+/tests/__pycache__
+/src/broodmind/worker_sdk/__pycache__

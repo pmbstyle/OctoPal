@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -8,6 +9,8 @@ from broodmind.tools.registry import ToolSpec
 
 if TYPE_CHECKING:
     from broodmind.queen.core import Queen
+
+_WORKER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 def get_worker_tools() -> list[ToolSpec]:
@@ -282,6 +285,8 @@ def _tool_create_worker_template(args: dict[str, object], ctx: dict[str, object]
 
     if not worker_id:
         return "create_worker_template error: id is required."
+    if not _is_valid_worker_id(worker_id):
+        return "create_worker_template error: id must match ^[a-z0-9][a-z0-9_-]*$."
     if not name:
         return "create_worker_template error: name is required."
     if not description:
@@ -315,7 +320,9 @@ def _tool_create_worker_template(args: dict[str, object], ctx: dict[str, object]
     }
 
     # Write worker.json file
-    worker_dir = base_dir / "workers" / worker_id
+    worker_dir = _resolve_worker_dir(base_dir, worker_id)
+    if worker_dir is None:
+        return "create_worker_template error: invalid worker id path."
     try:
         worker_dir.mkdir(parents=True, exist_ok=True)
         worker_file = worker_dir / "worker.json"
@@ -341,9 +348,14 @@ def _tool_update_worker_template(args: dict[str, object], ctx: dict[str, object]
     worker_id = str(args.get("id", "")).strip()
     if not worker_id:
         return "update_worker_template error: id is required."
+    if not _is_valid_worker_id(worker_id):
+        return "update_worker_template error: id must match ^[a-z0-9][a-z0-9_-]*$."
 
     # Read existing worker.json
-    worker_file = base_dir / "workers" / worker_id / "worker.json"
+    worker_dir = _resolve_worker_dir(base_dir, worker_id)
+    if worker_dir is None:
+        return "update_worker_template error: invalid worker id path."
+    worker_file = worker_dir / "worker.json"
     if not worker_file.exists():
         return f"update_worker_template error: worker '{worker_id}' not found. Use create_worker_template to create it."
 
@@ -393,9 +405,13 @@ def _tool_delete_worker_template(args: dict[str, object], ctx: dict[str, object]
     worker_id = str(args.get("id", "")).strip()
     if not worker_id:
         return "delete_worker_template error: id is required."
+    if not _is_valid_worker_id(worker_id):
+        return "delete_worker_template error: id must match ^[a-z0-9][a-z0-9_-]*$."
 
     # Check if worker exists
-    worker_dir = base_dir / "workers" / worker_id
+    worker_dir = _resolve_worker_dir(base_dir, worker_id)
+    if worker_dir is None:
+        return "delete_worker_template error: invalid worker id path."
     if not worker_dir.exists():
         return f"delete_worker_template error: worker '{worker_id}' not found."
 
@@ -565,3 +581,18 @@ def _tool_propose_knowledge(args: dict[str, object], ctx: dict[str, object]) -> 
     # In this phase, we just acknowledge it. The Queen sees the tool output.
     # The worker is expected to include this in their final summary or the Queen reviews the tool usage.
     return f"Proposal logged: [{category}] {content}"
+
+
+def _is_valid_worker_id(worker_id: str) -> bool:
+    return bool(_WORKER_ID_PATTERN.fullmatch(worker_id))
+
+
+def _resolve_worker_dir(base_dir: Path, worker_id: str) -> Path | None:
+    base = base_dir.resolve()
+    workers_root = (base / "workers").resolve()
+    candidate = (workers_root / worker_id).resolve()
+    try:
+        candidate.relative_to(workers_root)
+    except ValueError:
+        return None
+    return candidate

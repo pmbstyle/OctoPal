@@ -4,6 +4,7 @@ import glob
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import sqlite3
@@ -144,8 +145,14 @@ def docker_compose_control(args: dict[str, Any], ctx: dict[str, Any]) -> str:
         exec_command = str(args.get("command", "")).strip()
         if not exec_command:
             return "docker_compose_control error: command is required for action=exec."
+        try:
+            exec_args = shlex.split(exec_command, posix=True)
+        except ValueError as exc:
+            return f"docker_compose_control error: invalid command: {exc}"
+        if not exec_args:
+            return "docker_compose_control error: command is required for action=exec."
         cmd.append(services[0])
-        cmd.extend(exec_command.split())
+        cmd.extend(exec_args)
         services = []
     cmd.extend(services)
 
@@ -347,12 +354,19 @@ def config_audit(args: dict[str, Any], ctx: dict[str, Any]) -> str:
 
 def test_run(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     command = str(args.get("command", "python -m pytest -q")).strip()
-    allowed_prefixes = ("python -m pytest", "pytest", "python -m ruff", "ruff", "python -m mypy", "mypy")
-    if not command.startswith(allowed_prefixes):
-        return "test_run error: command must start with a test/lint command (pytest/ruff/mypy)."
+    try:
+        argv = shlex.split(command, posix=True)
+    except ValueError as exc:
+        return f"test_run error: invalid command: {exc}"
+    if not argv:
+        return "test_run error: command is required."
+    if _contains_shell_control_tokens(argv):
+        return "test_run error: shell control operators are not allowed."
+    if not _is_allowed_test_command(argv):
+        return "test_run error: command must be pytest/ruff/mypy (direct or python -m ...)."
     base_dir = _base_dir(ctx)
     timeout = int(args.get("timeout_seconds", 300) or 300)
-    rc, out, err = _run_shell(command, cwd=base_dir, timeout_seconds=timeout)
+    rc, out, err = _run_command(argv, cwd=base_dir, timeout_seconds=timeout)
     return _json({"status": "ok", "returncode": rc, "stdout": out[-12000:], "stderr": err[-4000:]})
 
 
@@ -521,6 +535,22 @@ def _grep_filter(text: str, pattern: str) -> str:
         return text
     regex = re.compile(pattern, flags=re.IGNORECASE)
     return "\n".join([line for line in text.splitlines() if regex.search(line)])
+
+
+def _is_allowed_test_command(argv: list[str]) -> bool:
+    if not argv:
+        return False
+    if argv[0] in {"pytest", "ruff", "mypy"}:
+        return True
+    return len(argv) >= 3 and argv[0] == "python" and argv[1] == "-m" and argv[2] in {"pytest", "ruff", "mypy"}
+
+
+def _contains_shell_control_tokens(argv: list[str]) -> bool:
+    blocked = {"&&", "||", ";", "|", ">", ">>", "<"}
+    return any(token in blocked for token in argv)
+
+
+test_run.__test__ = False
 
 
 def _is_within(base_dir: Path, target: Path) -> bool:
