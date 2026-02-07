@@ -128,6 +128,10 @@ BroodMind includes a command-line interface for management tasks:
 broodmind configure                 # Run interactive onboarding wizard
 broodmind status                    # Show system status
 broodmind logs -f                   # Follow logs
+broodmind dashboard                 # Styled runtime dashboard snapshot
+broodmind dashboard --watch         # Live dashboard refresh mode
+broodmind sync-worker-templates     # Copy default worker templates into workspace/workers
+broodmind sync-worker-templates --overwrite  # Overwrite existing worker templates
 
 # Start/Stop/Restart services
 broodmind start                      # Start Telegram bot (foreground)
@@ -144,6 +148,16 @@ The RAG memory system can grow over time. Use cleanup commands to manage it:
 - `broodmind memory stats` - See total entries, breakdown by role, unique chats
 - `broodmind memory cleanup -d <days> -c <count>` - Delete entries older than N days, but keep N most recent
 - `--dry-run` flag - Preview deletions without executing
+
+### Dashboard
+
+Use the runtime dashboard for a quick operational view:
+
+- `broodmind dashboard` - One-shot snapshot with colored system/queen/worker status
+- `broodmind dashboard --watch` - Live refresh
+- `broodmind dashboard --watch --interval 1.5` - Faster refresh interval
+- `broodmind dashboard --last 20` - Show more recent workers
+- `broodmind dashboard --json` - Machine-readable snapshot
 
 ## Configuration
 

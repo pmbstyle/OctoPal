@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -538,6 +540,42 @@ def build_worker_image(tag: str = "broodmind-worker:latest") -> None:
     raise SystemExit(__import__("subprocess").call(cmd))
 
 
+@app.command("dashboard")
+def dashboard(
+    watch: bool = typer.Option(False, "--watch", "-w", help="Continuously refresh dashboard"),
+    interval: float = typer.Option(2.0, "--interval", "-i", help="Refresh interval in seconds for --watch"),
+    last: int = typer.Option(8, "--last", help="Number of recent workers to show"),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON snapshot instead of dashboard view"),
+) -> None:
+    """Show a live-style runtime dashboard (system, queen, workers, control channel)."""
+    settings = load_settings()
+    last = max(1, min(50, last))
+    interval = max(0.5, min(30.0, interval))
+
+    if json_output and watch:
+        console.print("[red]--json cannot be used with --watch[/red]")
+        raise typer.Exit(code=1)
+
+    def _render_once() -> None:
+        snapshot = _build_dashboard_snapshot(settings, last)
+        if json_output:
+            console.print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+            return
+        _print_dashboard(snapshot)
+
+    if not watch:
+        _render_once()
+        return
+
+    try:
+        while True:
+            console.clear()
+            _render_once()
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        console.print("\n[dim]Dashboard watch stopped.[/dim]")
+
+
 @app.command("sync-worker-templates")
 def sync_worker_templates(
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing workspace worker templates"),
@@ -556,6 +594,210 @@ app.add_typer(workers_app, name="workers")
 app.add_typer(audit_app, name="audit")
 app.add_typer(memory_app, name="memory")
 app.add_typer(config_app, name="config")
+
+
+def _build_dashboard_snapshot(settings: Settings, last: int) -> dict:
+    status_data = read_status(settings) or {}
+    pid = status_data.get("pid")
+    running = is_pid_running(pid)
+    metrics = read_metrics_snapshot(settings.state_dir) or {}
+    queen_metrics = metrics.get("queen", {}) if isinstance(metrics, dict) else {}
+    telegram_metrics = metrics.get("telegram", {}) if isinstance(metrics, dict) else {}
+    exec_metrics = metrics.get("exec_run", {}) if isinstance(metrics, dict) else {}
+
+    store = SQLiteStore(settings)
+    workers = store.list_workers()
+    now = _now_utc()
+    cutoff = now.timestamp() - 24 * 60 * 60
+
+    by_status: dict[str, int] = {}
+    spawned_24h = 0
+    for worker in workers:
+        by_status[worker.status] = by_status.get(worker.status, 0) + 1
+        if worker.created_at.timestamp() >= cutoff:
+            spawned_24h += 1
+
+    running_workers = by_status.get("running", 0) + by_status.get("started", 0)
+    failed_workers = by_status.get("failed", 0)
+    completed_workers = by_status.get("completed", 0)
+    stopped_workers = by_status.get("stopped", 0)
+
+    followup_q = int(queen_metrics.get("followup_queues", 0) or 0)
+    internal_q = int(queen_metrics.get("internal_queues", 0) or 0)
+    if running_workers > 0:
+        queen_state = "tooling"
+    elif (followup_q + internal_q) > 0:
+        queen_state = "thinking"
+    else:
+        queen_state = "idle"
+
+    requests = _read_jsonl(settings.state_dir / "control_requests.jsonl")
+    acks = _read_jsonl(settings.state_dir / "control_acks.jsonl")
+    acked_ids = {str(a.get("request_id", "")) for a in acks}
+    pending_requests = [r for r in requests if str(r.get("request_id", "")) not in acked_ids]
+    last_ack = acks[-1] if acks else None
+
+    return {
+        "system": {
+            "running": running,
+            "pid": pid,
+            "started_at": status_data.get("started_at"),
+            "last_heartbeat": status_data.get("last_message_at"),
+            "uptime": _uptime_human(status_data.get("started_at")),
+        },
+        "queen": {
+            "state": queen_state,
+            "followup_queues": followup_q,
+            "internal_queues": internal_q,
+            "followup_tasks": int(queen_metrics.get("followup_tasks", 0) or 0),
+            "internal_tasks": int(queen_metrics.get("internal_tasks", 0) or 0),
+        },
+        "queues": {
+            "telegram_send_tasks": int(telegram_metrics.get("send_tasks", 0) or 0),
+            "telegram_queues": int(telegram_metrics.get("chat_queues", 0) or 0),
+            "exec_sessions_running": int(exec_metrics.get("background_sessions_running", 0) or 0),
+            "exec_sessions_total": int(exec_metrics.get("background_sessions_total", 0) or 0),
+        },
+        "workers": {
+            "spawned_24h": spawned_24h,
+            "running": running_workers,
+            "completed": completed_workers,
+            "failed": failed_workers,
+            "stopped": stopped_workers,
+            "recent": [
+                {
+                    "id": w.id,
+                    "status": w.status,
+                    "task": w.task,
+                    "updated_at": w.updated_at.isoformat(),
+                    "summary": w.summary or "",
+                    "error": w.error or "",
+                }
+                for w in workers[:last]
+            ],
+        },
+        "control": {
+            "pending_requests": len(pending_requests),
+            "last_ack": last_ack,
+        },
+    }
+
+
+def _print_dashboard(snapshot: dict) -> None:
+    system = snapshot["system"]
+    queen = snapshot["queen"]
+    queues = snapshot["queues"]
+    workers = snapshot["workers"]
+    control = snapshot["control"]
+
+    title = "[bold cyan]BROODMIND LIVE DASHBOARD[/bold cyan]"
+    console.print(Panel(title, border_style="cyan", expand=True))
+
+    sys_state = "[green]RUNNING[/green]" if system["running"] else "[red]STOPPED[/red]"
+    queen_color = (
+        "green"
+        if queen["state"] == "idle"
+        else "yellow" if queen["state"] == "thinking" else "cyan"
+    )
+    top = Table.grid(padding=(0, 2))
+    top.add_column(style="bold white")
+    top.add_column()
+    top.add_row("[SYS] System:", f"{sys_state}  PID={system['pid'] or 'N/A'}  Uptime={system['uptime']}")
+    top.add_row("[QN ] Queen:", f"[{queen_color}]{queen['state']}[/{queen_color}]  Last heartbeat={system['last_heartbeat'] or 'Never'}")
+    console.print(Panel(top, border_style="blue", title="System"))
+
+    qgrid = Table.grid(padding=(0, 2))
+    qgrid.add_column(style="bold white")
+    qgrid.add_column()
+    qgrid.add_row("[Q ] Queen queues:", f"followup={queen['followup_queues']} internal={queen['internal_queues']}")
+    qgrid.add_row("[TG] Telegram queues:", f"queues={queues['telegram_queues']} send_tasks={queues['telegram_send_tasks']}")
+    qgrid.add_row("[EX] Exec sessions:", f"running={queues['exec_sessions_running']} total={queues['exec_sessions_total']}")
+    console.print(Panel(qgrid, border_style="blue", title="Queues"))
+
+    wgrid = Table.grid(padding=(0, 2))
+    wgrid.add_column(style="bold white")
+    wgrid.add_column()
+    wgrid.add_row(
+        "[WK] Worker summary:",
+        (
+            f"spawned_24h={workers['spawned_24h']}  "
+            f"running={workers['running']}  completed={workers['completed']}  "
+            f"failed={workers['failed']}  stopped={workers['stopped']}"
+        ),
+    )
+    console.print(Panel(wgrid, border_style="blue", title="Workers"))
+
+    recent = Table(title="Recent Workers", border_style="blue", show_header=True, header_style="bold cyan")
+    recent.add_column("ID", style="dim", width=12)
+    recent.add_column("Status", width=10)
+    recent.add_column("Task")
+    recent.add_column("Updated", style="dim", width=20)
+    for row in workers["recent"]:
+        status = row["status"]
+        color = "green" if status == "completed" else "red" if status == "failed" else "yellow"
+        recent.add_row(
+            str(row["id"])[:12],
+            f"[{color}]{status}[/{color}]",
+            str(row["task"])[:80],
+            str(row["updated_at"])[:19].replace("T", " "),
+        )
+    console.print(recent)
+
+    cgrid = Table.grid(padding=(0, 2))
+    cgrid.add_column(style="bold white")
+    cgrid.add_column()
+    cgrid.add_row("[CTL] Pending requests:", str(control["pending_requests"]))
+    last_ack = control.get("last_ack")
+    if isinstance(last_ack, dict):
+        cgrid.add_row(
+            "[CTL] Last ack:",
+            (
+                f"{last_ack.get('action', '?')} "
+                f"{last_ack.get('status', '?')} "
+                f"{str(last_ack.get('acked_at', ''))[:19].replace('T', ' ')}"
+            ),
+        )
+    else:
+        cgrid.add_row("[CTL] Last ack:", "none")
+    console.print(Panel(cgrid, border_style="blue", title="Control Channel"))
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    out: list[dict] = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+            if isinstance(item, dict):
+                out.append(item)
+        except Exception:
+            continue
+    return out
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+def _uptime_human(started_at: str | None) -> str:
+    if not started_at:
+        return "N/A"
+    try:
+        start = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+        delta = _now_utc() - start
+        total = int(delta.total_seconds())
+        if total < 0:
+            return "N/A"
+        hours = total // 3600
+        minutes = (total % 3600) // 60
+        seconds = total % 60
+        return f"{hours:02}:{minutes:02}:{seconds:02}"
+    except Exception:
+        return "N/A"
 
 
 if __name__ == "__main__":
