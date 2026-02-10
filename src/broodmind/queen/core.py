@@ -114,9 +114,9 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
                     f"Worker error: {output_error}",
                     {"worker_result": True, "task": task_text, "chat_id": chat_id}
                 )
-            # Deliver worker completion to chat as the final answer.
+            # Deliver a queen-authored follow-up instead of leaking raw worker payloads.
             if queen.internal_send:
-                final_text = _format_worker_completion_message(result)
+                final_text = await _compose_worker_followup_message(queen, task_text, result)
                 if final_text:
                     await queen.internal_send(chat_id, final_text)
             logger.debug("Worker result processed", summary_len=len(result.summary or ""))
@@ -411,6 +411,21 @@ def _postprocess_queen_text(text: str) -> str:
 def _format_worker_completion_message(result: WorkerResult) -> str:
     summary = (result.summary or "").strip()
     if summary:
+        parsed_summary = _try_parse_json_object(summary)
+        if isinstance(parsed_summary, dict) and parsed_summary.get("type") == "result":
+            parsed_text = str(parsed_summary.get("summary", "")).strip()
+            if parsed_text:
+                return parsed_text
+            parsed_output = parsed_summary.get("output")
+            if parsed_output:
+                try:
+                    payload = json.dumps(parsed_output, ensure_ascii=False)
+                except Exception:
+                    payload = str(parsed_output)
+                return payload.strip()[:4000]
+        # Guardrail against dumping raw JSON blobs to chat.
+        if summary.startswith("{") and summary.endswith("}"):
+            return "Worker completed. Result is ready."
         return summary
     if result.output:
         try:
@@ -421,6 +436,97 @@ def _format_worker_completion_message(result: WorkerResult) -> str:
     if result.questions:
         return "\n".join(result.questions).strip()
     return ""
+
+
+async def _compose_worker_followup_message(queen: Queen, task_text: str, result: WorkerResult) -> str:
+    summary = _normalize_worker_summary(result.summary or "")
+    output_error = ""
+    if isinstance(result.output, dict):
+        raw_error = result.output.get("error")
+        if raw_error is not None:
+            output_error = str(raw_error).strip()
+
+    # Deterministic failure/incomplete handling.
+    if output_error:
+        return f"Worker failed: {output_error}"
+    if _is_worker_incomplete(summary):
+        return "Worker finished without a complete answer. I can retry with a clearer task."
+
+    # Fast-path for clean short summaries.
+    if summary and not _looks_like_json_blob(summary) and len(summary) <= 500 and not result.output:
+        return summary
+
+    # Ask queen model to craft a user-facing response from worker artifacts.
+    output_json = ""
+    if result.output is not None:
+        try:
+            output_json = json.dumps(result.output, ensure_ascii=False)
+        except Exception:
+            output_json = str(result.output)
+    if len(output_json) > 5000:
+        output_json = output_json[:5000] + "...[truncated]"
+
+    messages: list[dict[str, str]] = [
+        {
+            "role": "system",
+            "content": (
+                "You are composing the final user-facing answer after a delegated worker completed. "
+                "Use plain conversational text. Do not output JSON. Do not include internal workflow details."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Original task:\n{task_text}\n\n"
+                f"Worker summary:\n{summary or '-'}\n\n"
+                f"Worker output JSON:\n{output_json or '-'}\n\n"
+                "Write the final answer for the user."
+            ),
+        },
+    ]
+    try:
+        crafted = await queen.provider.complete(messages, temperature=0.2)
+        final_text = _normalize_plain_text(crafted)
+        if final_text and not _looks_like_json_blob(final_text):
+            return final_text
+    except Exception:
+        logger.exception("Failed to craft worker follow-up text")
+
+    # Last-resort fallback
+    return _format_worker_completion_message(result)
+
+
+def _normalize_worker_summary(summary: str) -> str:
+    value = (summary or "").strip()
+    if not value:
+        return ""
+    parsed = _try_parse_json_object(value)
+    if isinstance(parsed, dict) and parsed.get("type") == "result":
+        parsed_summary = str(parsed.get("summary", "")).strip()
+        if parsed_summary:
+            return parsed_summary
+    return value
+
+
+def _is_worker_incomplete(summary: str) -> bool:
+    value = (summary or "").strip().lower()
+    if not value.startswith("task incomplete after ") or not value.endswith(" thinking steps"):
+        return False
+    middle = value.removeprefix("task incomplete after ").removesuffix(" thinking steps").strip()
+    return middle.isdigit()
+
+
+def _looks_like_json_blob(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    if not ((stripped.startswith("{") and stripped.endswith("}")) or (stripped.startswith("[") and stripped.endswith("]"))):
+        return False
+    try:
+        json.loads(stripped)
+    except Exception:
+        return False
+    return True
 
 
 async def _route_or_reply(queen: Queen, provider: InferenceProvider, memory: MemoryService, user_text: str, chat_id: int, bootstrap_context: str) -> str:

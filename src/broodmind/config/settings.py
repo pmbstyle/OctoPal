@@ -77,6 +77,7 @@ class Settings(BaseSettings):
     # Comma-separated list of Telegram chat IDs allowed to interact with the queen
     # Get your chat ID by messaging @userinfobot on Telegram
     allowed_telegram_chat_ids: str = Field("", alias="ALLOWED_TELEGRAM_CHAT_IDS")
+    telegram_parse_mode: str = Field("MarkdownV2", alias="BROODMIND_TELEGRAM_PARSE_MODE")
 
 
 def load_settings() -> Settings:

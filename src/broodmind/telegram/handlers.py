@@ -9,6 +9,7 @@ import uuid
 from typing import Any
 
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from broodmind.config.settings import Settings
@@ -27,6 +28,7 @@ _PROGRESS_COALESCE_SECONDS = 8.0
 _CHAT_LAST_PROGRESS: dict[int, tuple[str, float]] = {}
 _WORKER_CB_PREFIX = "worker:"
 _WORKER_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$")
+_TELEGRAM_PARSE_MODE: str | None = None
 
 
 def _publish_runtime_metrics() -> None:
@@ -43,6 +45,9 @@ def _publish_runtime_metrics() -> None:
 def register_handlers(
     dp: Dispatcher, queen: Queen, approvals: ApprovalManager, settings: Settings, bot: Bot
 ) -> None:
+    global _TELEGRAM_PARSE_MODE
+    _TELEGRAM_PARSE_MODE = _normalize_parse_mode(settings.telegram_parse_mode)
+
     async def _internal_send(chat_id: int, text: str) -> None:
         await _enqueue_send(bot, chat_id, text)
     async def _internal_progress_send(
@@ -220,7 +225,24 @@ async def _handle_command(message: Message, queen: Queen, settings: Settings) ->
 async def _send_chunked(bot: Bot, chat_id: int, text: str, limit: int = 4000) -> None:
     chunks = _chunk_text(text, limit)
     for chunk in chunks:
-        await bot.send_message(chat_id, chunk)
+        await _send_message_safe(bot, chat_id, chunk)
+
+
+async def _send_message_safe(bot: Bot, chat_id: int, text: str) -> None:
+    parse_mode = _TELEGRAM_PARSE_MODE
+    if not parse_mode:
+        await bot.send_message(chat_id, text)
+        return
+    try:
+        await bot.send_message(chat_id, text, parse_mode=parse_mode)
+    except TelegramBadRequest as exc:
+        # Formatting mismatch should not drop the message for the user.
+        logger.warning(
+            "Telegram parse failed; retrying without parse_mode",
+            parse_mode=parse_mode,
+            error=str(exc),
+        )
+        await bot.send_message(chat_id, text)
 
 
 async def _enqueue_send(bot: Bot, chat_id: int, text: str) -> None:
@@ -322,6 +344,21 @@ def _chunk_text(text: str, limit: int) -> list[str]:
         parts.append(remaining[:cut].strip())
         remaining = remaining[cut:].lstrip()
     return [p for p in parts if p]
+
+
+def _normalize_parse_mode(raw: str | None) -> str | None:
+    value = (raw or "").strip()
+    if not value:
+        return None
+    lowered = value.lower()
+    if lowered == "markdownv2":
+        return "MarkdownV2"
+    if lowered == "html":
+        return "HTML"
+    if lowered in {"markdown", "markdownv1"}:
+        return "Markdown"
+    logger.warning("Unknown BROODMIND_TELEGRAM_PARSE_MODE value; using plain text", value=value)
+    return None
 
 
 def _worker_controls_keyboard(worker_id: str, *, can_stop: bool) -> InlineKeyboardMarkup:
