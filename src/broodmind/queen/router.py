@@ -82,10 +82,29 @@ async def route_or_reply(
         if had_tool_calls:
             if internal_followup:
                 return "NO_USER_RESPONSE"
-            return "Task accepted. I am processing it."
+            # Force a final response without tools to explain progress.
+            messages.append(
+                Message(
+                    role="system",
+                    content="You have reached the tool call limit for this turn. Summarize what you have initiated and let the user know you are processing their request.",
+                )
+            )
+            final_resp = await provider.complete(messages)
+            return _normalize_plain_text(final_resp)
+            
         if last_error and _looks_like_tool_error(last_error):
-            return "I couldn't complete that request. The tooling failed and needs correction."
-        return last_error or ""
+            if internal_followup:
+                return "NO_USER_RESPONSE"
+            messages.append(
+                Message(
+                    role="system",
+                    content=f"A tool call failed: {last_error}. Explain the problem to the user naturally and ask for guidance if needed.",
+                )
+            )
+            final_resp = await provider.complete(messages)
+            return _normalize_plain_text(final_resp)
+            
+        return ""
         
     response_raw = await provider.complete(messages)
     logger.debug("Queen output", output=response_raw)
