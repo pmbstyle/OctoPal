@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+from broodmind.tools.browser_tools import (
+    browser_click,
+    browser_close,
+    browser_open,
+    browser_snapshot,
+    browser_type,
+)
 from broodmind.tools.canon_tools import manage_canon, search_canon
 from broodmind.tools.download_file import download_file
 from broodmind.tools.exec_run import exec_run
@@ -174,6 +181,69 @@ def get_tools() -> list[ToolSpec]:
             },
             permission="network",
             handler=lambda args, ctx: web_fetch(args),
+        ),
+        ToolSpec(
+            name="browser_open",
+            description="Open a URL in an agentic browser. Supports dynamic JavaScript-heavy sites.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to open."},
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+            permission="network",
+            handler=lambda args, ctx: browser_open(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
+            name="browser_snapshot",
+            description="Capture an accessibility snapshot of the current page. Provides [ref=eN] tags for interacting with elements.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="network",
+            handler=lambda args, ctx: browser_snapshot(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
+            name="browser_click",
+            description="Click an element in the browser using its ref (e.g. 'e1') from the last snapshot.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "string", "description": "Element reference (e.g. 'e1')."},
+                },
+                "required": ["ref"],
+                "additionalProperties": False,
+            },
+            permission="network",
+            handler=lambda args, ctx: browser_click(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
+            name="browser_type",
+            description="Type text into an element in the browser using its ref.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "string", "description": "Element reference (e.g. 'e1')."},
+                    "text": {"type": "string", "description": "Text to type."},
+                    "press_enter": {"type": "boolean", "description": "Whether to press Enter after typing."},
+                },
+                "required": ["ref", "text"],
+                "additionalProperties": False,
+            },
+            permission="network",
+            handler=lambda args, ctx: browser_type(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
+            name="browser_close",
+            description="Close the browser session for the current chat.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="network",
+            handler=lambda args, ctx: browser_close(args, ctx),
+            is_async=True,
         ),
         ToolSpec(
             name="fs_read",

@@ -27,6 +27,9 @@ fi
 echo "Using $(uv --version)"
 uv sync
 
+echo "Installing Playwright browser binaries..."
+uv run playwright install chromium
+
 echo
 echo "Bootstrap complete."
 echo "Next steps:"

@@ -28,6 +28,9 @@ if (-not (Test-Uv)) {
 uv --version
 uv sync
 
+Write-Host "Installing Playwright browser binaries..."
+uv run playwright install chromium
+
 Write-Host ""
 Write-Host "Bootstrap complete."
 Write-Host "Next steps:"

@@ -8,6 +8,9 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends docker.io ca-certificates \
+    && python -m pip install --no-cache-dir playwright \
+    && playwright install-deps chromium \
+    && playwright install chromium \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml README.md /app/
