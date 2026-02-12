@@ -21,6 +21,7 @@ from broodmind.queen.prompt_builder import (
     build_queen_prompt,
 )
 from broodmind.queen.router import (
+    normalize_plain_text,
     route_or_reply,
     route_worker_result_back_to_queen,
     should_send_worker_followup,
@@ -28,8 +29,6 @@ from broodmind.queen.router import (
 from broodmind.runtime_metrics import update_component_gauges
 from broodmind.store.base import Store
 from broodmind.telegram.approvals import ApprovalManager
-from broodmind.tools.registry import ToolSpec, filter_tools
-from broodmind.tools.tools import get_tools
 from broodmind.utils import utc_now
 from broodmind.workers.contracts import TaskRequest, WorkerResult
 from broodmind.workers.runtime import WorkerRuntime
@@ -291,7 +290,7 @@ class Queen:
             await asyncio.to_thread(
                 self.store.set_chat_bootstrap_hash, chat_id, bootstrap_context.hash, utc_now()
             )
-        return QueenReply(immediate=_normalize_plain_text(reply_text), followup=None)
+        return QueenReply(immediate=normalize_plain_text(reply_text), followup=None)
 
     async def _start_worker_async(
         self,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -77,7 +78,7 @@ async def route_or_reply(
             
             if content_raw:
                 logger.debug("Queen output", output=content_raw)
-            return _normalize_plain_text(content_raw)
+            return normalize_plain_text(content_raw)
             
         if had_tool_calls:
             if internal_followup:
@@ -90,7 +91,7 @@ async def route_or_reply(
                 )
             )
             final_resp = await provider.complete(messages)
-            return _normalize_plain_text(final_resp)
+            return normalize_plain_text(final_resp)
             
         if last_error and _looks_like_tool_error(last_error):
             if internal_followup:
@@ -102,13 +103,13 @@ async def route_or_reply(
                 )
             )
             final_resp = await provider.complete(messages)
-            return _normalize_plain_text(final_resp)
+            return normalize_plain_text(final_resp)
             
         return ""
         
     response_raw = await provider.complete(messages)
     logger.debug("Queen output", output=response_raw)
-    return _normalize_plain_text(response_raw)
+    return normalize_plain_text(response_raw)
 
 
 async def route_worker_result_back_to_queen(
@@ -161,7 +162,7 @@ async def route_worker_result_back_to_queen(
         bootstrap_context.content,
         internal_followup=True,
     )
-    return _normalize_plain_text(reply_text)
+    return normalize_plain_text(reply_text)
 
 
 def should_send_worker_followup(text: str) -> bool:
@@ -174,7 +175,7 @@ def should_send_worker_followup(text: str) -> bool:
     return True
 
 
-def _normalize_plain_text(text: str) -> str:
+def normalize_plain_text(text: str) -> str:
     cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
     return cleaned.strip()
 
@@ -232,7 +233,6 @@ async def _handle_queen_tool_call(call: dict, tools: list[ToolSpec], ctx: dict[s
     logger.debug("Queen tool call", tool_name=name, args=args)
     for spec in tools:
         if spec.name == name:
-            import asyncio
             if spec.is_async:
                 result = await spec.handler(args, ctx)
             else:
