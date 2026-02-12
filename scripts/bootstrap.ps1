@@ -18,6 +18,13 @@ if (-not (Test-Uv)) {
     $localUvPath = Join-Path $HOME ".local\bin"
     if (Test-Path $localUvPath) {
         $env:Path = "$localUvPath;$env:Path"
+        
+        # Persist to User PATH
+        $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($currentPath -notlike "*$localUvPath*") {
+            Write-Host "Adding $localUvPath to User PATH persistently..."
+            [Environment]::SetEnvironmentVariable("Path", "$currentPath;$localUvPath", "User")
+        }
     }
 }
 

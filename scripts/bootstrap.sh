@@ -18,6 +18,25 @@ if ! command -v uv >/dev/null 2>&1; then
   fi
 fi
 
+# Ensure ~/.local/bin is in PATH persistently
+UV_BIN_DIR="$HOME/.local/bin"
+if [[ -d "$UV_BIN_DIR" ]] && [[ ":$PATH:" != *":$UV_BIN_DIR:"* ]]; then
+  SHELL_CONFIG=""
+  if [[ "$SHELL" == */zsh ]]; then
+    SHELL_CONFIG="$HOME/.zshrc"
+  elif [[ "$SHELL" == */bash ]]; then
+    SHELL_CONFIG="$HOME/.bashrc"
+  fi
+
+  if [[ -n "$SHELL_CONFIG" ]]; then
+    if ! grep -q "$UV_BIN_DIR" "$SHELL_CONFIG" 2>/dev/null; then
+      echo "Adding $UV_BIN_DIR to PATH in $SHELL_CONFIG"
+      echo "export PATH=\"\$PATH:$UV_BIN_DIR\"" >> "$SHELL_CONFIG"
+    fi
+  fi
+  export PATH="$PATH:$UV_BIN_DIR"
+fi
+
 if ! command -v uv >/dev/null 2>&1; then
   echo "uv is still not available on PATH." >&2
   echo "Run: source \"$HOME/.local/bin/env\"  and retry." >&2
