@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import os
 
+import structlog
 from aiogram import Bot, Dispatcher
 
 from broodmind.config.settings import Settings
@@ -16,10 +16,11 @@ from broodmind.queen.core import Queen, QueenReply
 from broodmind.store.sqlite import SQLiteStore
 from broodmind.telegram.approvals import ApprovalManager
 from broodmind.telegram.handlers import register_handlers
+from broodmind.utils import is_heartbeat_ok
 from broodmind.workers.launcher_factory import build_launcher
 from broodmind.workers.runtime import WorkerRuntime
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 def build_dispatcher(settings: Settings, bot: Bot) -> Dispatcher:
@@ -88,7 +89,7 @@ async def _heartbeat_poker(queen: Queen, interval_seconds: int, chat_id: int):
             # Heartbeat replies are control-plane responses; don't send them to Telegram chat.
             if isinstance(reply, QueenReply):
                 text = (reply.immediate or "").strip()
-                if text.upper() == "HEARTBEAT_OK":
+                if is_heartbeat_ok(text):
                     logger.debug("Heartbeat processed successfully (HEARTBEAT_OK acknowledged)")
                 elif not text:
                     logger.warning("Heartbeat produced empty response (no HEARTBEAT_OK)")

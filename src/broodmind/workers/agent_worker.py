@@ -10,7 +10,7 @@ Workers are pre-defined agents that:
 from __future__ import annotations
 
 import json
-import logging
+import structlog
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,7 @@ from broodmind.workers.contracts import WorkerResult
 
 _LOG_MAX_CHARS = 2000
 _MAX_TOOL_ITERS = 10
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 async def run_agent_worker(spec_path: str) -> None:

@@ -1,18 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
+
+import structlog
 
 if TYPE_CHECKING:
     from broodmind.providers.embeddings import EmbeddingsProvider
     from broodmind.store.base import Store
 
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 @dataclass
 class CanonService:

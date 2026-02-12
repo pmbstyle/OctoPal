@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import re
+import structlog
 import uuid
 from typing import Any, NamedTuple
 
@@ -16,8 +16,9 @@ from broodmind.queen.core import Queen, QueenReply
 from broodmind.runtime_metrics import update_component_gauges
 from broodmind.state import update_last_message
 from broodmind.telegram.approvals import ApprovalManager
+from broodmind.utils import is_heartbeat_ok
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 
 class QueuedMessage(NamedTuple):
@@ -94,13 +95,14 @@ def register_handlers(
 
             if isinstance(reply, QueenReply):
                 update_last_message(settings)
-                if reply.immediate:
+                if reply.immediate and not is_heartbeat_ok(reply.immediate):
                     # Reply with quote/reply to the current message
                     await _enqueue_send(message.bot, message.chat.id, reply.immediate, reply_to_message_id=message.message_id)
                 return
 
         update_last_message(settings)
-        await _enqueue_send(message.bot, message.chat.id, str(reply), reply_to_message_id=message.message_id)
+        if reply and not is_heartbeat_ok(str(reply)):
+            await _enqueue_send(message.bot, message.chat.id, str(reply), reply_to_message_id=message.message_id)
 
     @dp.callback_query()
     async def handle_callback(query: CallbackQuery) -> None:
@@ -233,94 +235,287 @@ def _normalize_parse_mode(raw: str | None) -> str | None:
 
 
 def _prepare_markdown_v2(text: str) -> str:
+
+
     """Robust MarkdownV2 sanitizer that preserves markdown entities while escaping correctly."""
+
+
     source = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+
+
     
-    # Simple state-based parser or regex-with-intelligent-escaping
-    # We'll use the "stash" approach but with recursive escaping for specific parts.
-    
+
+
     protected: list[str] = []
 
+
+
+
+
     def _escape_code(t: str) -> str:
-        # Inside pre and code entities, all '`' and '\' characters must be escaped with a preceding '\' character.
+
+
+        # In pre and code entities, all '`' and '\' characters must be escaped.
+
+
         return t.replace('\\', '\\\\').replace('`', '\\`')
 
+
+
+
+
     def _escape_link_url(t: str) -> str:
-        # Inside (...) part of inline link, all ')' and '\' must be escaped with a preceding '\' character.
+
+
+        # Inside (...) part of inline link, all ')' and '\' must be escaped.
+
+
         return t.replace('\\', '\\\\').replace(')', '\\)')
 
+
+
+
+
+    def _escape_general(t: str) -> str:
+
+
+        # General escaping for MarkdownV2 reserved characters
+
+
+        res = t
+
+
+        for ch in _MDV2_SPECIAL_CHARS:
+
+
+            res = res.replace(ch, f"\\{ch}")
+
+
+        return res
+
+
+
+
+
     def _stash(match: re.Match[str]) -> str:
+
+
         full = match.group(0)
+
+
         
+
+
         if full.startswith("```"):
-            # Fenced code block
-            # Match: ```[lang]\n[code]```
+
+
             m = re.match(r"(```[a-zA-Z0-9]*\n?)([\s\S]*?)(```)", full)
+
+
             if m:
+
+
                 prefix, code, suffix = m.groups()
-                # Do NOT escape special chars in prefix/suffix, but escape code content
+
+
                 val = f"{prefix}{_escape_code(code)}{suffix}"
+
+
                 protected.append(val)
+
+
                 return f"\u0000BMMD{len(protected)-1}\u0000"
+
+
         
+
+
         if full.startswith("`"):
-            # Inline code
+
+
             m = re.match(r"(`)([^`\n]+)(`)", full)
+
+
             if m:
+
+
                 prefix, code, suffix = m.groups()
+
+
                 val = f"{prefix}{_escape_code(code)}{suffix}"
+
+
                 protected.append(val)
+
+
                 return f"\u0000BMMD{len(protected)-1}\u0000"
+
+
+
+
 
         if full.startswith("["):
-            # Link
-            m = re.match(r"(\[)([^\]\n]+)(\]\()([^)]+)(\))", full)
+
+
+            # Handle links with potentially nested parentheses in URL
+
+
+            # We look for [text](url) where url is balanced or ends at first space/newline/paren
+
+
+            m = re.match(r"(\[)([\s\S]+?)(\]\()([\s\S]+?)(\))", full)
+
+
             if m:
-                # [text](url)
-                # We should escape 'text' using plain escape rules? 
-                # Actually, 'text' can have other formatting inside.
-                # But for simplicity, we treat it as plain text here or recursively escape it.
-                # Telegram allows formatting inside links.
+
+
                 p1, text_part, p2, url_part, p3 = m.groups()
-                # We escape the URL part specially
+
+
+                # Recursively escape text part if it's not already handled? 
+
+
+                # For now, just escape it as general text to be safe, or leave it if it might have formatting.
+
+
+                # Actually, text_part can contain *bold* etc. 
+
+
+                # This is tricky. Let's just escape the URL part and protect the whole thing.
+
+
                 val = f"{p1}{text_part}{p2}{_escape_link_url(url_part)}{p3}"
+
+
                 protected.append(val)
+
+
                 return f"\u0000BMMD{len(protected)-1}\u0000"
 
-        # For simple tags like *bold*, _italic_, etc.
-        # We need to ensure we don't have special chars inside them that should be escaped if they ARE NOT formatting.
-        # But wait, MarkdownV2 doesn't allow escaping inside entities easily.
-        # For now, we just protect them and hope for the best.
-        
+
+
+
+
+        # Emphasis markers: **bold**, *italic*, __underline__, ||spoiler||, ~strikethrough~
+
+
         val = full
+
+
         if full.startswith("**") and full.endswith("**") and len(full) >= 4:
-            val = f"*{full[2:-2]}*"
+
+
+            # Convert **bold** to *bold* for Telegram
+
+
+            val = f"*{_escape_general(full[2:-2])}*"
+
+
+        elif full.startswith("*") and full.endswith("*") and len(full) >= 2:
+
+
+            val = f"_{_escape_general(full[1:-1])}_" # Italic
+
+
+        elif full.startswith("__") and full.endswith("__") and len(full) >= 4:
+
+
+            val = f"___{_escape_general(full[2:-2])}___" # Underline
+
+
+        elif full.startswith("||") and full.endswith("||") and len(full) >= 4:
+
+
+            val = f"||{_escape_general(full[2:-2])}||"
+
+
+        elif full.startswith("~") and full.endswith("~") and len(full) >= 2:
+
+
+            val = f"~{_escape_general(full[1:-1])}~"
+
+
             
+
+
         protected.append(val)
+
+
         return f"\u0000BMMD{len(protected)-1}\u0000"
 
-    # Sequence of patterns to stash, from most specific to least
+
+
+
+
+    # Sequence of patterns to stash.
+
+
+    # Note: We use non-greedy matching and multiline support where appropriate.
+
+
     patterns = [
+
+
         r"```[a-zA-Z0-9]*\n?[\s\S]*?```", # fenced code blocks
+
+
         r"`[^`\n]+`",                    # inline code
-        r"\[[^\]\n]+\]\([^)]+\)",        # links
-        r"\|\|[^|\n]+\|\|",              # spoilers
-        r"__[^_\n]+__",                  # underline
-        r"\*\*[^*\n]+\*\*",              # markdown bold (**...**)
-        r"\*[^*\n]+\*",                  # bold (*...*)
-        r"_[^_\n]+_",                    # italic
-        r"~[^~\n]+~",                    # strikethrough
+
+
+        r"\[[\s\S]+?\]\([\s\S]+?\)",     # links (greedy enough to find the end paren)
+
+
+        r"\|\|[\s\S]+?\|\|",             # spoilers
+
+
+        r"__[\s\S]+?__",                 # underline
+
+
+        r"\*\*[\s\S]+?\*\*",             # markdown bold
+
+
+        r"\*[\s\S]+?\*",                 # bold/italic
+
+
+        r"~[\s\S]+?~",                   # strikethrough
+
+
     ]
+
+
     
+
+
     for pattern in patterns:
+
+
         source = re.sub(pattern, _stash, source)
 
+
+
+
+
+    # Escape all remaining special characters
+
+
     escaped = _escape_markdown_v2_plain(source)
+
+
     
+
+
     # Restore protected fragments
+
+
     for idx, fragment in enumerate(protected):
+
+
         escaped = escaped.replace(f"\u0000BMMD{idx}\u0000", fragment)
+
+
         
+
+
     return escaped
 
 

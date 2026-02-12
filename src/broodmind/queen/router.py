@@ -15,6 +15,7 @@ from broodmind.memory.canon import CanonService
 from broodmind.queen.prompt_builder import build_queen_prompt, build_bootstrap_context_prompt
 from broodmind.tools.registry import ToolSpec, filter_tools
 from broodmind.tools.tools import get_tools
+from broodmind.utils import is_heartbeat_ok
 from broodmind.workers.contracts import WorkerResult
 
 logger = structlog.get_logger(__name__)
@@ -170,7 +171,9 @@ def should_send_worker_followup(text: str) -> bool:
     value = (text or "").strip()
     if not value:
         return False
-    if value.upper() in {"NO_USER_RESPONSE", "HEARTBEAT_OK"}:
+    if value.upper() == "NO_USER_RESPONSE":
+        return False
+    if is_heartbeat_ok(value):
         return False
     return True
 
@@ -218,6 +221,8 @@ def _get_queen_tools(queen: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str
         "chat_id": chat_id
     }
     tool_specs = filter_tools(get_tools(), permissions=perms)
+    # Remove web_fetch from Queen; only workers are allowed to fetch raw web content.
+    tool_specs = [spec for spec in tool_specs if spec.name != "web_fetch"]
     return tool_specs, ctx
 
 

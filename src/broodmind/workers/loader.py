@@ -7,14 +7,14 @@ Each worker is defined in a worker.json file with JSON configuration.
 from __future__ import annotations
 
 import json
-import logging
 import re
+import structlog
 from datetime import UTC, datetime
 from pathlib import Path
 
 from broodmind.store.models import WorkerTemplateRecord
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 _WORKER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 

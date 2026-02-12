@@ -100,7 +100,7 @@ def test_queen_passes_approval_requester_to_runtime(monkeypatch) -> None:
     import broodmind.queen.core as queen_core
 
     monkeypatch.setattr(queen_core, "build_bootstrap_context_prompt", fake_bootstrap_context)
-    monkeypatch.setattr(queen_core, "_route_or_reply", fake_route_or_reply)
+    monkeypatch.setattr(queen_core, "route_or_reply", fake_route_or_reply)
 
     runtime = DummyRuntime()
     queen = Queen(

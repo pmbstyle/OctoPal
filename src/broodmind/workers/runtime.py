@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import shutil
+import structlog
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -24,7 +24,7 @@ from broodmind.utils import utc_now
 from broodmind.workers.contracts import TaskRequest, WorkerResult, WorkerSpec
 from broodmind.workers.launcher import WorkerLauncher
 
-logger = logging.getLogger(__name__)
+logger = structlog.get_logger(__name__)
 
 WORKER_MODULE = "broodmind.workers.agent_worker"
 
