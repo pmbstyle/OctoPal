@@ -9,6 +9,8 @@ Workers are pre-defined agents that:
 """
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import structlog
 from pathlib import Path
@@ -254,12 +256,10 @@ async def _execute_tool(tool_name: str, tool_input: dict, base_dir: Path, worker
         ctx = {"base_dir": base_dir, "worker": worker}
 
         # Check if handler is async or sync
-        import asyncio
-        handler_result = tool.handler(tool_input, ctx)
-        if asyncio.iscoroutine(handler_result):
-            result = await handler_result
+        if inspect.iscoroutinefunction(tool.handler):
+            result = await tool.handler(tool_input, ctx)
         else:
-            result = handler_result
+            result = tool.handler(tool_input, ctx)
         return result
     except Exception as exc:
         logger.exception("Tool execution failed: %s", tool_name)

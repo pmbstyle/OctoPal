@@ -16,6 +16,7 @@ from broodmind.memory.canon import CanonService
 from broodmind.memory.service import MemoryService
 from broodmind.policy.engine import PolicyEngine
 from broodmind.providers.base import InferenceProvider
+from broodmind.browser.manager import get_browser_manager
 from broodmind.queen.prompt_builder import (
     build_bootstrap_context_prompt,
     build_queen_prompt,
@@ -221,6 +222,9 @@ class Queen:
                 await self._cleanup_task
             except asyncio.CancelledError:
                 logger.info("Stopped periodic worker cleanup task")
+        
+        # Shutdown browser sessions
+        await get_browser_manager().shutdown()
 
     async def initialize_system(self, bot=None, allowed_chat_ids: list[int] | None = None) -> None:
         system_chat_id = 0
