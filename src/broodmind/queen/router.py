@@ -117,8 +117,12 @@ async def route_or_reply(
         response_raw = await provider.complete(messages)
         logger.debug("Queen output", output=response_raw)
         return normalize_plain_text(response_raw)
+    except Exception:
+        logger.exception("Error in route_or_reply")
+        raise
     finally:
-        if chat_id > 0:
+        if chat_id > 0 and show_typing:
+            logger.debug("Toggling typing indicator off", chat_id=chat_id)
             await queen.set_typing(chat_id, False)
 
 
@@ -248,7 +252,10 @@ async def _handle_queen_tool_call(call: dict, tools: list[ToolSpec], ctx: dict[s
     for spec in tools:
         if spec.name == name:
             if spec.is_async:
-                result = await spec.handler(args, ctx)
+                import inspect
+                result = spec.handler(args, ctx)
+                if inspect.isawaitable(result):
+                    result = await result
             else:
                 result = await asyncio.to_thread(spec.handler, args, ctx)
             logger.debug("Queen tool result", tool_name=name, result_preview=f"{str(result)[:200]}...")
