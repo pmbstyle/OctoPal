@@ -285,6 +285,8 @@ class Queen:
                     logger.info("Queen initialization response sent")
                 except Exception as e:
                     logger.warning("Failed to send queen initialization response", error=e)
+        except Exception:
+            logger.exception("Queen failed to complete wake-up task")
         finally:
             self.internal_send = original_send
 
