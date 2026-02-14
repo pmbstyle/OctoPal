@@ -17,7 +17,7 @@ from broodmind.queen.core import Queen, QueenReply
 from broodmind.store.sqlite import SQLiteStore
 from broodmind.telegram.approvals import ApprovalManager
 from broodmind.telegram.handlers import register_handlers
-from broodmind.utils import is_heartbeat_ok
+from broodmind.utils import is_heartbeat_ok, is_control_response
 from broodmind.workers.launcher_factory import build_launcher
 from broodmind.workers.runtime import WorkerRuntime
 
@@ -94,13 +94,13 @@ async def _heartbeat_poker(queen: Queen, interval_seconds: int, chat_id: int):
             # Heartbeat replies are control-plane responses; don't send them to Telegram chat.
             if isinstance(reply, QueenReply):
                 text = (reply.immediate or "").strip()
-                if is_heartbeat_ok(text):
-                    logger.debug("Heartbeat processed successfully (HEARTBEAT_OK acknowledged)")
+                if is_control_response(text):
+                    logger.debug("Heartbeat processed successfully (control response acknowledged)", response=text)
                 elif not text:
-                    logger.warning("Heartbeat produced empty response (no HEARTBEAT_OK)")
+                    logger.warning("Heartbeat produced empty response")
                 else:
                     logger.info(
-                        "Heartbeat produced non-ACK text (suppressed from chat, chat_id=%s, preview=%s)",
+                        "Heartbeat produced non-control text (suppressed from chat, chat_id=%s, preview=%s)",
                         chat_id,
                         text[:200],
                     )

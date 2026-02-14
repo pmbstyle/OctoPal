@@ -15,7 +15,7 @@ from broodmind.memory.canon import CanonService
 from broodmind.queen.prompt_builder import build_queen_prompt, build_bootstrap_context_prompt
 from broodmind.tools.registry import ToolSpec, filter_tools
 from broodmind.tools.tools import get_tools
-from broodmind.utils import is_heartbeat_ok
+from broodmind.utils import is_heartbeat_ok, is_control_response
 from broodmind.workers.contracts import WorkerResult
 
 logger = structlog.get_logger(__name__)
@@ -181,12 +181,7 @@ async def route_worker_result_back_to_queen(
 
 def should_send_worker_followup(text: str) -> bool:
     """Determine if a worker follow-up should be sent to the user."""
-    value = (text or "").strip()
-    if not value:
-        return False
-    if value.upper() == "NO_USER_RESPONSE":
-        return False
-    if is_heartbeat_ok(value):
+    if is_control_response(text):
         return False
     return True
 
