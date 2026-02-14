@@ -27,6 +27,10 @@ async def mcp_connect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     if not server_id or (not command and not url):
         return "Error: 'id' and either 'command' or 'url' are required."
 
+    # Prevent common mistake where Queen uses ID as command
+    if command == server_id:
+        return f"Error: You provided the server ID '{server_id}' as the command. If this is an SSE server, use the 'url' parameter instead. If it's a local server, you likely need a real command like 'npx' or 'python' with appropriate arguments."
+
     # Helpful hint for local development confusion
     if url and "localhost" in url.lower() and "http://localhost:3000" in url.lower():
         logger.warning("Queen is attempting to connect to what looks like a default localhost URL. This might be a mistake if the server is external.")
@@ -117,17 +121,17 @@ def get_mcp_mgmt_tools() -> list[ToolSpec]:
     return [
         ToolSpec(
             name="mcp_connect",
-            description="Connect to an external MCP server (stdio or SSE/HTTP).",
+            description="Connect to an external MCP server. Use 'url' for HTTP/SSE servers. Use 'command' for local stdio servers. IMPORTANT: For most community servers, use 'command': 'npx' and 'args': ['-y', '@modelcontextprotocol/server-xxx', '--opt', 'val'].",
             parameters={
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "description": "Unique ID for this server."},
+                    "id": {"type": "string", "description": "Unique ID for this server (e.g. 'sqlite')."},
                     "name": {"type": "string", "description": "Human-readable name."},
-                    "command": {"type": "string", "description": "Command to run for stdio servers (e.g., 'python')."},
-                    "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments for the command."},
-                    "env": {"type": "object", "description": "Environment variables for stdio."},
-                    "url": {"type": "string", "description": "URL for SSE (HTTP) servers."},
-                    "headers": {"type": "object", "description": "HTTP headers for SSE servers (e.g. for Auth)."},
+                    "command": {"type": "string", "description": "Command to run for stdio servers (e.g. 'npx', 'python', 'node')."},
+                    "args": {"type": "array", "items": {"type": "string"}, "description": "Arguments for the command (e.g. ['-y', '@modelcontextprotocol/server-fetch'])."},
+                    "env": {"type": "object", "description": "Environment variables for stdio (e.g. API keys)."},
+                    "url": {"type": "string", "description": "URL for SSE (HTTP) servers (e.g. 'https://api.z.ai/api/mcp/web_search_prime/mcp')."},
+                    "headers": {"type": "object", "description": "HTTP headers for SSE servers (e.g. {'Authorization': 'Bearer ...'})."},
                 },
                 "required": ["id"],
             },

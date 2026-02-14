@@ -80,14 +80,37 @@ class MCPManager:
         
         # Wait for the session to be initialized or task to fail
         try:
-            await asyncio.wait_for(ready_event.wait(), timeout=45.0)
-            return self._tools.get(config.id, [])
-        except (asyncio.TimeoutError, Exception) as e:
-            logger.error("Failed to connect to MCP server (wait timeout or error)", server_id=config.id, error=str(e))
+            # Monitor both the ready event and the task itself
+            done, pending = await asyncio.wait(
+                [asyncio.create_task(ready_event.wait()), task],
+                return_when=asyncio.FIRST_COMPLETED,
+                timeout=45.0
+            )
+            
+            # Check if we timed out
+            if not done:
+                for p in pending: p.cancel()
+                raise RuntimeError(f"Connection to MCP server '{config.id}' timed out after 45s.")
+
+            if ready_event.is_set():
+                # Success!
+                return self._tools.get(config.id, [])
+            
+            # If the task finished but ready_event is not set, it failed
+            if task in done:
+                exc = task.exception()
+                if exc:
+                    raise exc
+                raise RuntimeError(f"MCP server task '{config.id}' exited unexpectedly.")
+            
+            raise RuntimeError(f"Connection to MCP server '{config.id}' failed (unknown state).")
+
+        except Exception as e:
+            logger.error("Failed to connect to MCP server", server_id=config.id, error=str(e))
             await self.disconnect_server(config.id)
-            if isinstance(e, asyncio.TimeoutError):
-                raise RuntimeError(f"Connection to MCP server '{config.id}' timed out after 45s.") from e
-            raise
+            if isinstance(e, RuntimeError) and "timed out" in str(e):
+                raise
+            raise RuntimeError(f"MCP Connection Error ({config.id}): {e}") from e
 
     async def _run_server_lifecycle(self, config: MCPServerConfig, ready_event: asyncio.Event, stop_event: asyncio.Event):
         """Manages the lifetime of a single MCP server connection."""

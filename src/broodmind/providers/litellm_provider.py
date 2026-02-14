@@ -111,6 +111,15 @@ class LiteLLMProvider:
             logger.debug("LiteLLM response: %s", _truncate(content))
             return content
         except Exception as exc:
+            err_str = str(exc)
+            if "finish_reason" in err_str and "abort" in err_str:
+                logger.error("LLM provider returned invalid 'abort' finish_reason.")
+                raise RuntimeError(
+                    "LLM provider (z.ai) returned an invalid response code ('abort'). "
+                    "This usually means the model was cut off or is having internal issues. "
+                    "Please try your request again."
+                ) from exc
+            
             logger.exception("LiteLLM completion failed")
             raise RuntimeError(f"LiteLLM completion failed: {exc}") from exc
 
@@ -173,6 +182,15 @@ class LiteLLMProvider:
 
             return {"content": content, "tool_calls": tool_calls}
         except Exception as exc:
+            err_str = str(exc)
+            if "finish_reason" in err_str and "abort" in err_str:
+                logger.error("LLM provider returned invalid 'abort' finish_reason. This is a known compatibility issue with some providers.")
+                raise RuntimeError(
+                    "LLM provider (z.ai) returned an invalid response code ('abort'). "
+                    "This usually means the model was cut off or is having internal issues. "
+                    "Please try your request again or check the provider status."
+                ) from exc
+            
             logger.exception("LiteLLM completion with tools failed")
             raise RuntimeError(f"LiteLLM completion with tools failed: {exc}") from exc
 
