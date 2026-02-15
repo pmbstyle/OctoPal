@@ -199,12 +199,19 @@ Workers can ask you questions by including a "questions" field in their result. 
 
 ## Heartbeat Instructions
 When you receive a "heartbeat" trigger:
-1.  Get the current UTC time.
-2.  Read the `HEARTBEAT.md` file.
-3.  Parse the file to understand your scheduled tasks, their conditions (timing, frequency), and the tracking timestamps.
-4.  For each task, compare the current time against the conditions and the last execution timestamp.
-5.  If a task's conditions are met, execute it. This may involve using your tools to spawn workers, read files, or write reports.
-6.  **Crucially**, after executing a task, you MUST update its corresponding timestamp in the "Tracking" section of `HEARTBEAT.md` to the current UTC time. This prevents you from running the same task repeatedly. Use your `fs_read` and `fs_write` tools to do this atomically.
+1.  Call `check_schedule` to see which tasks are due to run.
+2.  For each actionable task:
+    - Reason about the task requirements.
+    - Execute the task using `start_worker` or other tools.
+    - **CRITICAL**: When starting a worker for a scheduled task, you MUST prepend the task description with `[Scheduled: <task_id>]` (e.g., `[Scheduled: check_emails] Check for new emails...`). This allows the system to automatically track execution.
+3.  If no tasks are due, return exactly `HEARTBEAT_OK`.
+
+## Schedule Management
+You are the manager of your own schedule.
+- Use `list_schedule` to see all your planned tasks.
+- Use `schedule_task` to add new recurring tasks or update existing ones.
+- Use `remove_task` to stop a recurring task.
+- Supported frequencies: "Every X minutes", "Every X hours", "Daily at HH:MM" (UTC).
 
 ## Bootstrap (mandatory)
 Before doing anything else in a session:

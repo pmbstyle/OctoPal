@@ -37,7 +37,7 @@ from broodmind.tools.web_search import web_search
 from broodmind.tools.worker_tools import get_worker_tools
 from broodmind.tools.mcp_tools import get_mcp_mgmt_tools
 
-
+from broodmind.utils import utc_now
 import logging
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,60 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             },
             permission="canon_manage",
             handler=lambda args, ctx: search_canon(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
+            name="list_schedule",
+            description="List all scheduled tasks and their status. Only the Queen can use this.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="self_control",
+            handler=lambda args, ctx: "\n".join([f"- {t['name']} (ID: {t['id']}): {t['frequency']}, Last run: {t['last_run_at'] or 'Never'}" for t in ctx["queen"].scheduler.store.get_scheduled_tasks()]),
+            is_async=True,
+        ),
+        ToolSpec(
+            name="check_schedule",
+            description="Check for tasks that are due to run. Returns a list of actionable tasks and current UTC time. Only the Queen can use this.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="self_control",
+            handler=lambda args, ctx: f"Current UTC: {utc_now().isoformat()}\n\n" + (
+                "No tasks are due at this time." if not ctx["queen"].scheduler.get_actionable_tasks() 
+                else "The following tasks are due:\n" + "\n".join([f"### {t['name']}\n- ID: {t['id']}\n- Worker: {t['worker_id']}\n- Task: {t['task_text']}" for t in ctx["queen"].scheduler.get_actionable_tasks()])
+            ),
+            is_async=True,
+        ),
+        ToolSpec(
+            name="schedule_task",
+            description="Add or update a scheduled task. Only the Queen can use this.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Human-readable name of the task."},
+                    "frequency": {"type": "string", "description": "Frequency (e.g., 'Every 30 minutes', 'Daily at 14:00')."},
+                    "task": {"type": "string", "description": "The task description for the worker or Queen."},
+                    "description": {"type": "string", "description": "Brief description of the task purpose."},
+                    "worker_id": {"type": "string", "description": "Optional: Specific worker template ID to use."},
+                    "inputs": {"type": "object", "description": "Optional: Inputs for the worker."},
+                },
+                "required": ["name", "frequency", "task"],
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=lambda args, ctx: f"Task scheduled with ID: {ctx['queen'].scheduler.schedule_task(name=args['name'], frequency=args['frequency'], task_text=args['task'], description=args.get('description'), worker_id=args.get('worker_id'), inputs=args.get('inputs'))}",
+            is_async=True,
+        ),
+        ToolSpec(
+            name="remove_task",
+            description="Remove a scheduled task by ID. Only the Queen can use this.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "The ID of the task to remove (e.g., 'check_emails')."},
+                },
+                "required": ["task_id"],
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=lambda args, ctx: (ctx["queen"].scheduler.remove_task(args["task_id"]), "Task removed.")[1],
             is_async=True,
         ),
         ToolSpec(

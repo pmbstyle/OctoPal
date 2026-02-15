@@ -14,6 +14,7 @@ from broodmind.policy.engine import PolicyEngine
 from broodmind.providers.litellm_provider import LiteLLMProvider
 from broodmind.providers.openai_embeddings import OpenAIEmbeddingsProvider
 from broodmind.queen.core import Queen, QueenReply
+from broodmind.scheduler.service import SchedulerService
 from broodmind.store.sqlite import SQLiteStore
 from broodmind.telegram.approvals import ApprovalManager
 from broodmind.telegram.handlers import register_handlers
@@ -64,6 +65,7 @@ def build_dispatcher(settings: Settings, bot: Bot) -> Dispatcher:
         store=store,
         embeddings=embeddings
     )
+    scheduler = SchedulerService(store=store, workspace_dir=settings.workspace_dir)
     mcp_manager = MCPManager(workspace_dir=settings.workspace_dir)
     queen = Queen(
         provider=provider,
@@ -73,6 +75,7 @@ def build_dispatcher(settings: Settings, bot: Bot) -> Dispatcher:
         approvals=approvals,
         memory=memory,
         canon=canon,
+        scheduler=scheduler,
         mcp_manager=mcp_manager,
     )
 
@@ -89,8 +92,7 @@ async def _heartbeat_poker(queen: Queen, interval_seconds: int, chat_id: int):
         logger.info("Triggering internal heartbeat for chat_id=%s", chat_id)
         try:
             heartbeat_prompt = (
-                "This is a heartbeat trigger. Check your scheduled tasks in `workspace/HEARTBEAT.md` "
-                "and execute any tasks whose conditions are met."
+                "This is a heartbeat trigger. Use `check_schedule` to identify and execute any due tasks."
             )
             reply = await queen.handle_message(heartbeat_prompt, chat_id, show_typing=False)
             # Heartbeat replies are control-plane responses; don't send them to Telegram chat.

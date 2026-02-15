@@ -80,6 +80,6 @@ If you need to remember something, write it down.
 
 Default heartbeat trigger instruction:
 
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
+`Use check_schedule to see if any tasks are due. Follow the schedule strictly. If nothing needs attention, reply HEARTBEAT_OK.`
 
 If no actionable heartbeat items exist, return exactly `HEARTBEAT_OK`.

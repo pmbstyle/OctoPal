@@ -150,9 +150,7 @@ class SQLiteStore(Store):
                 content TEXT NOT NULL,
                 embedding_json TEXT,
                 created_at TEXT NOT NULL,
-                metadata_json TEXT NOT NULL,
-                owner_id TEXT,
-                chat_id INTEGER
+                metadata_json TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS memory_embeddings (
@@ -181,10 +179,21 @@ class SQLiteStore(Store):
                 bootstrap_hash TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT,
+                frequency TEXT NOT NULL,
+                worker_id TEXT,
+                task_text TEXT NOT NULL,
+                inputs_json TEXT,
+                last_run_at TEXT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                metadata_json TEXT
+            );
+
             CREATE INDEX IF NOT EXISTS ix_workers_status_updated_at ON workers (status, updated_at);
             CREATE INDEX IF NOT EXISTS ix_memory_entries_id ON memory_entries (id);
-            CREATE INDEX IF NOT EXISTS ix_memory_entries_owner_id_id ON memory_entries (owner_id, id DESC);
-            CREATE INDEX IF NOT EXISTS ix_memory_entries_owner_chat_id_id ON memory_entries (owner_id, chat_id, id DESC);
             """
         )
         self._conn.commit()
@@ -217,21 +226,6 @@ class SQLiteStore(Store):
                 """
             )
             self._conn.execute("CREATE INDEX IF NOT EXISTS ix_canon_embeddings_filename ON canon_embeddings (filename)")
-            self._conn.commit()
-        except sqlite3.OperationalError:
-            pass
-
-        try:
-            self._conn.execute(
-                """
-                CREATE VIRTUAL TABLE IF NOT EXISTS memory_entries_fts USING fts5(
-                    content,
-                    owner_id UNINDEXED,
-                    chat_id UNINDEXED,
-                    entry_uuid UNINDEXED
-                )
-                """
-            )
             self._conn.commit()
         except sqlite3.OperationalError:
             pass
@@ -299,6 +293,21 @@ class SQLiteStore(Store):
             # This might fail if run in a transaction, but we commit after.
             # It's a complex operation, so we log if it fails.
             logging.getLogger(__name__).warning("Memory schema migration failed (this may be ok if table was empty): %s", e)
+
+        try:
+            self._conn.execute(
+                """
+                CREATE VIRTUAL TABLE IF NOT EXISTS memory_entries_fts USING fts5(
+                    content,
+                    owner_id UNINDEXED,
+                    chat_id UNINDEXED,
+                    entry_uuid UNINDEXED
+                )
+                """
+            )
+            self._conn.commit()
+        except sqlite3.OperationalError:
+            pass
 
         self._backfill_memory_scope_columns()
         self._rebuild_memory_fts()
@@ -798,6 +807,44 @@ class SQLiteStore(Store):
             """,
             (chat_id, ts.isoformat(), bootstrap_hash),
         )
+        self._conn.commit()
+
+    def upsert_scheduled_task(self, task_id: str, name: str, frequency: str, task_text: str, 
+                             description: str | None = None, worker_id: str | None = None, 
+                             inputs: dict | None = None, enabled: bool = True) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO scheduled_tasks (id, name, description, frequency, worker_id, task_text, inputs_json, enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                frequency = excluded.frequency,
+                worker_id = excluded.worker_id,
+                task_text = excluded.task_text,
+                inputs_json = excluded.inputs_json,
+                enabled = excluded.enabled
+            """,
+            (task_id, name, description, frequency, worker_id, task_text, json.dumps(inputs) if inputs else None, 1 if enabled else 0),
+        )
+        self._conn.commit()
+
+    def update_task_last_run(self, task_id: str, ts: datetime) -> None:
+        self._conn.execute(
+            "UPDATE scheduled_tasks SET last_run_at = ? WHERE id = ?",
+            (ts.isoformat(), task_id),
+        )
+        self._conn.commit()
+
+    def get_scheduled_tasks(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        query = "SELECT * FROM scheduled_tasks"
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        cursor = self._conn.execute(query)
+        return [dict(row) for row in cursor.fetchall()]
+
+    def delete_scheduled_task(self, task_id: str) -> None:
+        self._conn.execute("DELETE FROM scheduled_tasks WHERE id = ?", (task_id,))
         self._conn.commit()
 
     def _row_to_worker(self, row: sqlite3.Row) -> WorkerRecord:

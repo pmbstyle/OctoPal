@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ import structlog
 from broodmind.intents.types import ActionIntent
 from broodmind.memory.canon import CanonService
 from broodmind.memory.service import MemoryService
+from broodmind.scheduler.service import SchedulerService
 from broodmind.mcp.manager import MCPManager
 from broodmind.policy.engine import PolicyEngine
 from broodmind.providers.base import InferenceProvider
@@ -189,6 +191,7 @@ class Queen:
     approvals: ApprovalManager
     memory: MemoryService
     canon: CanonService
+    scheduler: SchedulerService | None = None
     mcp_manager: MCPManager | None = None
     internal_send: callable | None = None
     internal_progress_send: callable | None = None
@@ -349,6 +352,15 @@ class Queen:
             }
 
         self._recent_tasks.add(task_signature)
+
+        # Mark scheduled task as executed if tagged
+        if self.scheduler:
+            match = re.search(r'\[Scheduled: ([^\]]+)\]', task)
+            if match:
+                task_id = match.group(1)
+                logger.info("Marking scheduled task as executed", task_id=task_id)
+                self.scheduler.mark_executed(task_id)
+
         run_id = str(uuid4())
         await self._emit_progress(
             chat_id,
