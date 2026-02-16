@@ -863,13 +863,13 @@ class SQLiteStore(Store):
             id=row["id"],
             status=row["status"],
             task=row["task"],
-            granted_caps=_loads_json(row["granted_caps_json"]),
+            granted_caps=_loads_json(row["granted_caps_json"], []),
             created_at=_parse_dt(row["created_at"]),
             updated_at=_parse_dt(row["updated_at"]),
             summary=_row_get(row, "summary"),
-            output=_loads_json(row["output_json"]) if "output_json" in row and row["output_json"] else None,
+            output=_loads_json(row["output_json"]),
             error=_row_get(row, "error"),
-            tools_used=_loads_json(_row_get(row, "tools_used_json", "[]")),
+            tools_used=_loads_json(_row_get(row, "tools_used_json"), []),
         )
 
     def _row_to_permit(self, row: sqlite3.Row) -> PermitRecord:
@@ -968,9 +968,12 @@ def _row_get(row: sqlite3.Row, key: str, default: Any = None) -> Any:
         return default
 
 
-def _loads_json(value: Any) -> dict:
+def _loads_json(value: Any, default: Any = None) -> Any:
     if value is None:
-        return {}
-    if isinstance(value, dict):
+        return default
+    if isinstance(value, (dict, list)):
         return value
-    return json.loads(value)
+    try:
+        return json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return default
