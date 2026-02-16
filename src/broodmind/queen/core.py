@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -360,11 +359,13 @@ class Queen:
         tools: list[str] | None,
         model: str | None,
         timeout_seconds: int | None,
+        scheduled_task_id: str | None = None,
     ) -> dict[str, Any]:
         from broodmind.logging_config import correlation_id_var
 
         # Create a task signature for duplicate detection
-        task_signature = f"{worker_id}:{task[:100]}"  # First 100 chars is enough to detect duplicates
+        schedule_sig = scheduled_task_id or "-"
+        task_signature = f"{worker_id}:{schedule_sig}:{task[:100]}"  # Keep duplicate detection strict per schedule/task pair.
         if task_signature in self._recent_tasks:
             logger.warning("Duplicate worker task detected, skipping", worker_id=worker_id, task_prefix=task[:50])
             skipped_id = f"skipped-duplicate-{uuid4().hex[:8]}"
@@ -381,14 +382,6 @@ class Queen:
             }
 
         self._recent_tasks.add(task_signature)
-
-        # Mark scheduled task as executed if tagged
-        if self.scheduler:
-            match = re.search(r'\[Scheduled: ([^\]]+)\]', task)
-            if match:
-                task_id = match.group(1)
-                logger.info("Marking scheduled task as executed", task_id=task_id)
-                self.scheduler.mark_executed(task_id)
 
         run_id = str(uuid4())
         await self._emit_progress(
@@ -424,6 +417,22 @@ class Queen:
                     {"worker_id": run_id, "worker_template_id": worker_id},
                 )
                 result = await self.runtime.run_task(task_request, approval_requester=requester)
+                if scheduled_task_id and self.scheduler:
+                    worker_record = await asyncio.to_thread(self.store.get_worker, run_id)
+                    if worker_record and worker_record.status == "completed":
+                        self.scheduler.mark_executed(scheduled_task_id)
+                        logger.info(
+                            "Marked scheduled task as executed after worker completion",
+                            task_id=scheduled_task_id,
+                            run_id=run_id,
+                        )
+                    else:
+                        logger.warning(
+                            "Skipped scheduled task execution mark due to non-completed worker state",
+                            task_id=scheduled_task_id,
+                            run_id=run_id,
+                            worker_status=getattr(worker_record, "status", None),
+                        )
                 await self._emit_progress(
                     chat_id,
                     "completed",

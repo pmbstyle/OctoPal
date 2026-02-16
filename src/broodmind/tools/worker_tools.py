@@ -76,6 +76,10 @@ def get_worker_tools() -> list[ToolSpec]:
                         "type": "number",
                         "description": "Override default timeout (optional).",
                     },
+                    "scheduled_task_id": {
+                        "type": "string",
+                        "description": "Optional schedule task ID when this worker run comes from check_schedule. Enables reliable execution tracking.",
+                    },
                 },
                 "required": ["worker_id", "task"],
                 "additionalProperties": False,
@@ -460,6 +464,7 @@ async def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) ->
     tools = args.get("tools") if isinstance(args.get("tools"), list) else None
     model = str(args.get("model", "")).strip() or None
     timeout_seconds = int(args.get("timeout_seconds")) if args.get("timeout_seconds") else None
+    scheduled_task_id = str(args.get("scheduled_task_id", "")).strip() or None
 
     if not worker_id:
         return "start_worker error: worker_id is required. Use list_workers to see available workers."
@@ -479,6 +484,7 @@ async def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) ->
         tools=tools,
         model=model,
         timeout_seconds=timeout_seconds,
+        scheduled_task_id=scheduled_task_id,
     )
     status = str(launch.get("status", "started"))
     launched_worker_id = launch.get("worker_id")
@@ -495,6 +501,7 @@ async def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) ->
         "worker_template_id": worker_id,
         "worker_id": launched_worker_id,
         "run_id": run_id,
+        "scheduled_task_id": scheduled_task_id,
         "message": message,
     }, ensure_ascii=False)
 

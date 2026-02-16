@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +11,11 @@ from broodmind.store.base import Store
 from broodmind.utils import utc_now
 
 logger = structlog.get_logger(__name__)
+
+_EVERY_MINUTES_RE = re.compile(r"^every\s+(\d+)\s+minutes?$", re.IGNORECASE)
+_EVERY_HOURS_RE = re.compile(r"^every\s+(\d+)\s+hours?$", re.IGNORECASE)
+_DAILY_AT_RE = re.compile(r"^daily\s+at\s+(\d{1,2}):(\d{2})$", re.IGNORECASE)
+
 
 class SchedulerService:
     def __init__(self, store: Store, workspace_dir: Path) -> None:
@@ -22,11 +27,12 @@ class SchedulerService:
                       description: str | None = None, worker_id: str | None = None, 
                       inputs: dict | None = None) -> str:
         """Add or update a scheduled task."""
+        normalized_frequency = self._validate_and_normalize_frequency(frequency)
         task_id = self._generate_id(name)
         self.store.upsert_scheduled_task(
             task_id=task_id,
             name=name,
-            frequency=frequency,
+            frequency=normalized_frequency,
             task_text=task_text,
             description=description,
             worker_id=worker_id,
@@ -47,7 +53,7 @@ class SchedulerService:
 
         for task in all_tasks:
             if self._should_run(task, now):
-                actionable.append(task)
+                actionable.append(self._normalize_task_record(task))
         
         return actionable
 
@@ -96,19 +102,19 @@ class SchedulerService:
         freq = task["frequency"].lower()
 
         # Pattern: Every X minutes
-        minute_match = re.search(r'every\s+(\d+)\s+minute', freq)
+        minute_match = _EVERY_MINUTES_RE.search(freq)
         if minute_match:
             minutes = int(minute_match.group(1))
             return now >= last_run + timedelta(minutes=minutes)
 
         # Pattern: Every X hours
-        hour_match = re.search(r'every\s+(\d+)\s+hour', freq)
+        hour_match = _EVERY_HOURS_RE.search(freq)
         if hour_match:
             hours = int(hour_match.group(1))
             return now >= last_run + timedelta(hours=hours)
 
         # Pattern: Daily at HH:MM (UTC)
-        daily_match = re.search(r'daily\s+at\s+(\d{1,2}):(\d{2})', freq)
+        daily_match = _DAILY_AT_RE.search(freq)
         if daily_match:
             target_h = int(daily_match.group(1))
             target_m = int(daily_match.group(2))
@@ -124,3 +130,48 @@ class SchedulerService:
             return last_run < target_today
 
         return False
+
+    def _validate_and_normalize_frequency(self, frequency: str) -> str:
+        freq = (frequency or "").strip()
+        if not freq:
+            raise ValueError("frequency is required.")
+
+        minute_match = _EVERY_MINUTES_RE.fullmatch(freq)
+        if minute_match:
+            minutes = int(minute_match.group(1))
+            if minutes < 1:
+                raise ValueError("Every X minutes requires X >= 1.")
+            return f"Every {minutes} minute{'s' if minutes != 1 else ''}"
+
+        hour_match = _EVERY_HOURS_RE.fullmatch(freq)
+        if hour_match:
+            hours = int(hour_match.group(1))
+            if hours < 1:
+                raise ValueError("Every X hours requires X >= 1.")
+            return f"Every {hours} hour{'s' if hours != 1 else ''}"
+
+        daily_match = _DAILY_AT_RE.fullmatch(freq)
+        if daily_match:
+            hour = int(daily_match.group(1))
+            minute = int(daily_match.group(2))
+            if hour < 0 or hour > 23:
+                raise ValueError("Daily at HH:MM requires HH between 00 and 23.")
+            if minute < 0 or minute > 59:
+                raise ValueError("Daily at HH:MM requires MM between 00 and 59.")
+            return f"Daily at {hour:02d}:{minute:02d}"
+
+        raise ValueError("Unsupported frequency. Use 'Every X minutes', 'Every X hours', or 'Daily at HH:MM' (UTC).")
+
+    def _normalize_task_record(self, task: dict[str, Any]) -> dict[str, Any]:
+        normalized = dict(task)
+        raw_inputs = normalized.get("inputs_json")
+        inputs: dict[str, Any] = {}
+        if isinstance(raw_inputs, str) and raw_inputs.strip():
+            try:
+                parsed = json.loads(raw_inputs)
+                if isinstance(parsed, dict):
+                    inputs = parsed
+            except json.JSONDecodeError:
+                logger.warning("Invalid scheduled task inputs_json", task_id=normalized.get("id"))
+        normalized["inputs"] = inputs
+        return normalized

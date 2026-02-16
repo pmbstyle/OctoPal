@@ -95,6 +95,7 @@ This is distinct from the chat history. It is your "crystallized" knowledge.
     - inputs (object): Task-specific input data
     - tools (array): Override default tools for this task
     - timeout_seconds (number): Override default timeout
+    - scheduled_task_id (string): Schedule task ID when launching a task returned by `check_schedule`
   - Returns: worker_id, run_id, and status
 
 - **stop_worker: Force-stop a running worker.**
@@ -199,11 +200,12 @@ Workers can ask you questions by including a "questions" field in their result. 
 
 ## Heartbeat Instructions
 When you receive a "heartbeat" trigger:
-1.  Call `check_schedule` to see which tasks are due to run.
+1.  Call `check_schedule` and parse its JSON result.
 2.  For each actionable task:
     - Reason about the task requirements.
     - Execute the task using `start_worker` or other tools.
-    - **CRITICAL**: When starting a worker for a scheduled task, you MUST prepend the task description with `[Scheduled: <task_id>]` (e.g., `[Scheduled: check_emails] Check for new emails...`). This allows the system to automatically track execution.
+    - When calling `start_worker` for a scheduled task, pass `scheduled_task_id` with the task ID from `check_schedule`.
+    - Reuse `task_text`, `worker_id`, and `inputs` from the `check_schedule` payload when available.
 3.  If no tasks are due, return exactly `HEARTBEAT_OK`.
 
 ## Schedule Management

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from broodmind.tools.browser_tools import (
     browser_click,
     browser_close,
@@ -104,13 +106,10 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="check_schedule",
-            description="Check for tasks that are due to run. Returns a list of actionable tasks and current UTC time. Only the Queen can use this.",
+            description="Check for tasks that are due to run. Returns machine-readable JSON with due tasks and current UTC time. Only the Queen can use this.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="self_control",
-            handler=lambda args, ctx: f"Current UTC: {utc_now().isoformat()}\n\n" + (
-                "No tasks are due at this time." if not ctx["queen"].scheduler.get_actionable_tasks() 
-                else "The following tasks are due:\n" + "\n".join([f"### {t['name']}\n- ID: {t['id']}\n- Worker: {t['worker_id']}\n- Task: {t['task_text']}" for t in ctx["queen"].scheduler.get_actionable_tasks()])
-            ),
+            handler=_tool_check_schedule,
             is_async=True,
         ),
         ToolSpec(
@@ -130,7 +129,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=lambda args, ctx: f"Task scheduled with ID: {ctx['queen'].scheduler.schedule_task(name=args['name'], frequency=args['frequency'], task_text=args['task'], description=args.get('description'), worker_id=args.get('worker_id'), inputs=args.get('inputs'))}",
+            handler=_tool_schedule_task,
             is_async=True,
         ),
         ToolSpec(
@@ -670,3 +669,50 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             logger.info("Injecting %d MCP tools into registry", len(mcp_tools))
             tools.extend(mcp_tools)
     return tools
+
+
+def _tool_check_schedule(args, ctx) -> str:
+    scheduler = ctx["queen"].scheduler
+    due_tasks = scheduler.get_actionable_tasks()
+    payload = {
+        "current_utc": utc_now().isoformat(),
+        "due_count": len(due_tasks),
+        "due_tasks": [
+            {
+                "task_id": t.get("id"),
+                "name": t.get("name"),
+                "frequency": t.get("frequency"),
+                "worker_id": t.get("worker_id"),
+                "task_text": t.get("task_text"),
+                "description": t.get("description"),
+                "inputs": t.get("inputs") if isinstance(t.get("inputs"), dict) else {},
+                "last_run_at": t.get("last_run_at"),
+            }
+            for t in due_tasks
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _tool_schedule_task(args, ctx) -> str:
+    try:
+        task_id = ctx["queen"].scheduler.schedule_task(
+            name=args["name"],
+            frequency=args["frequency"],
+            task_text=args["task"],
+            description=args.get("description"),
+            worker_id=args.get("worker_id"),
+            inputs=args.get("inputs"),
+        )
+    except ValueError as exc:
+        return f"schedule_task error: {exc}"
+
+    return json.dumps(
+        {
+            "status": "scheduled",
+            "task_id": task_id,
+            "name": args["name"],
+            "frequency": args["frequency"],
+        },
+        ensure_ascii=False,
+    )
