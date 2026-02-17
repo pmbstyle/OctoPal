@@ -39,13 +39,15 @@ async def route_or_reply(
     
     await queen.set_thinking(True)
     try:
+        is_ws = getattr(queen, "is_ws_active", False)
         messages = await build_queen_prompt(
             store=queen.store, 
             memory=memory, 
             canon=queen.canon, 
             user_text=user_text, 
             chat_id=chat_id, 
-            bootstrap_context=bootstrap_context
+            bootstrap_context=bootstrap_context,
+            is_ws=is_ws
         )
         _log_system_prompt(messages, "route")
         
