@@ -63,19 +63,78 @@ async def route_or_reply(
             had_tool_calls = False
             max_attempts = 10
             
+import base64
+import uuid
+# ... (rest of imports)
+
+async def route_or_reply(
+    # ... args ...
+) -> str:
+    # ... (start of function) ...
+    
+        if callable(tool_capable):
+            tools = [spec.to_openai_tool() for spec in queen_tools]
+            last_error: str | None = None
+            had_tool_calls = False
+            max_attempts = 10
+            
             for _ in range(max_attempts):
                 try:
                     result = await provider.complete_with_tools(messages, tools=tools, tool_choice="auto")
                 except Exception as e:
                     # If we have images, this might be a multi-modal conflict (e.g. z.ai GLM-4 doesn't support tools + vision).
-                    # Fallback to text-only completion.
+                    # Fallback strategy: Save images to disk and retry with a text-only prompt pointing to the files.
                     if images:
-                        logger.warning("Tool calling failed with images; falling back to standard completion", error=str(e))
-                        response_raw = await provider.complete(messages)
-                        return normalize_plain_text(response_raw)
+                        logger.warning("Vision+Tools failed; attempting save-to-disk fallback", error=str(e))
+                        try:
+                            # 1. Save images to disk
+                            saved_paths = []
+                            workspace_dir = Path(os.getenv("BROODMIND_WORKSPACE_DIR", "workspace")).resolve()
+                            img_dir = workspace_dir / "tmp" / "telegram_images"
+                            img_dir.mkdir(parents=True, exist_ok=True)
+                            
+                            for idx, img_data in enumerate(images):
+                                # expect data:image/jpeg;base64,....
+                                if "," in img_data:
+                                    header, b64_str = img_data.split(",", 1)
+                                    ext = ".jpg"
+                                    if "png" in header: ext = ".png"
+                                    elif "webp" in header: ext = ".webp"
+                                else:
+                                    b64_str = img_data
+                                    ext = ".jpg" # assume jpg
+                                
+                                file_name = f"img_{uuid.uuid4()}{ext}"
+                                file_path = img_dir / file_name
+                                with open(file_path, "wb") as f:
+                                    f.write(base64.b64decode(b64_str))
+                                saved_paths.append(str(file_path))
+                            
+                            # 2. Construct new text-only message
+                            fallback_text = (
+                                f"{user_text}\n\n"
+                                "[SYSTEM NOTE: User sent {len(images)} image(s). Direct vision processing failed (provider rejected multimodal payload). "
+                                "The images have been saved locally at:\n" + 
+                                "\n".join([f"- {p}" for p in saved_paths]) + 
+                                "\nIf you have file analysis tools, you can use them on these paths. Otherwise, ask the user for a description.]"
+                            )
+                            
+                            # 3. Replace the last message (which had the image payload) with text-only version
+                            # effectively 'popping' the failed multimodal message and replacing it
+                            logger.info("Retrying with text-only fallback and saved images", count=len(saved_paths))
+                            messages[-1] = {"role": "user", "content": fallback_text}
+                            
+                            # 4. Disable images flag so we don't loop forever if this retry fails too
+                            images = None 
+                            continue 
+                            
+                        except Exception as fallback_exc:
+                            logger.error("Fallback save-and-retry failed", error=str(fallback_exc))
+                            return "I see you sent an image, but I am unable to process it. My current model configuration might not support vision, and I could not save it for tool analysis."
                     raise e
-
+                
                 content_raw = result.get("content", "")
+                # ... (rest of loop)
                 tool_calls = result.get("tool_calls") or []
                 
                 if tool_calls:

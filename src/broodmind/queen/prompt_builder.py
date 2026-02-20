@@ -252,7 +252,7 @@ async def build_queen_prompt(
         text_content = user_text if user_text.strip() else "User uploaded an image."
         content_blocks = [{"type": "text", "text": text_content}]
         for img in images:
-            content_blocks.append({"type": "image_url", "image_url": {"url": img}})
+            content_blocks.append({"type": "image_url", "image_url": {"url": img, "detail": "auto"}})
         messages.append(Message(role="user", content=content_blocks))
     else:
         messages.append(Message(role="user", content=user_text))
