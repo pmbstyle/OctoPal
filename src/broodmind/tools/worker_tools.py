@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from broodmind.queen.core import Queen
 
 _WORKER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_TOKEN_RE = re.compile(r"[a-z0-9_]+")
 
 
 def get_worker_tools() -> list[ToolSpec]:
@@ -46,13 +47,13 @@ def get_worker_tools() -> list[ToolSpec]:
         ),
         ToolSpec(
             name="start_worker",
-            description="Start a worker task with the specified worker template. Returns worker_id, run_id, and status.",
+            description="Start a worker task. If worker_id is omitted or set to 'auto', the worker specialization router selects the best template.",
             parameters={
                 "type": "object",
                 "properties": {
                     "worker_id": {
                         "type": "string",
-                        "description": "ID of the worker template to use (e.g., 'web_researcher', 'web_fetcher'). Use list_workers to see available workers.",
+                        "description": "Optional worker template ID (e.g., 'web_researcher'). Use 'auto' or omit to route automatically.",
                     },
                     "task": {
                         "type": "string",
@@ -80,8 +81,18 @@ def get_worker_tools() -> list[ToolSpec]:
                         "type": "string",
                         "description": "Optional schedule task ID when this worker run comes from check_schedule. Enables reliable execution tracking.",
                     },
+                    "required_tools": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional tool capabilities the selected worker should support.",
+                    },
+                    "required_permissions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional permissions the selected worker should include.",
+                    },
                 },
-                "required": ["worker_id", "task"],
+                "required": ["task"],
                 "additionalProperties": False,
             },
             permission="worker_manage",
@@ -462,19 +473,39 @@ async def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) ->
     task = str(args.get("task", "")).strip()
     inputs = args.get("inputs") if isinstance(args.get("inputs"), dict) else {}
     tools = args.get("tools") if isinstance(args.get("tools"), list) else None
+    required_tools = _normalize_str_list(args.get("required_tools"))
+    required_permissions = _normalize_str_list(args.get("required_permissions"))
     model = str(args.get("model", "")).strip() or None
     timeout_seconds = int(args.get("timeout_seconds")) if args.get("timeout_seconds") else None
     scheduled_task_id = str(args.get("scheduled_task_id", "")).strip() or None
 
-    if not worker_id:
-        return "start_worker error: worker_id is required. Use list_workers to see available workers."
     if not task:
         return "start_worker error: task is required."
 
-    # Verify worker template exists
-    template = queen.store.get_worker_template(worker_id)
-    if not template:
-        return f"start_worker error: worker '{worker_id}' not found. Use list_workers to see available workers."
+    router_used = False
+    route_reason = ""
+    route_score: float | None = None
+    template = None
+    if not worker_id or worker_id.lower() in {"auto", "best", "router"}:
+        router_used = True
+        templates = queen.store.list_worker_templates()
+        selection = _select_worker_template(
+            templates=templates,
+            task=task,
+            required_tools=required_tools,
+            required_permissions=required_permissions,
+        )
+        if selection is None:
+            return "start_worker error: no worker templates are available for routing. Use create_worker_template or provide worker_id."
+        template = selection["template"]
+        worker_id = template.id
+        route_reason = selection["reason"]
+        route_score = selection["score"]
+    else:
+        # Verify worker template exists
+        template = queen.store.get_worker_template(worker_id)
+        if not template:
+            return f"start_worker error: worker '{worker_id}' not found. Use list_workers to see available workers."
 
     launch = await queen._start_worker_async(
         worker_id=worker_id,
@@ -490,7 +521,13 @@ async def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) ->
     launched_worker_id = launch.get("worker_id")
     run_id = launch.get("run_id")
     if status == "started" and launched_worker_id:
-        message = f"Worker '{template.name}' started as {launched_worker_id}. Use get_worker_status/get_worker_result with this worker_id."
+        if router_used:
+            message = (
+                f"Worker router selected '{template.id}' ({template.name}) and started run {launched_worker_id}. "
+                "Use get_worker_status/get_worker_result with this worker_id."
+            )
+        else:
+            message = f"Worker '{template.name}' started as {launched_worker_id}. Use get_worker_status/get_worker_result with this worker_id."
     elif status == "skipped_duplicate":
         message = "Duplicate worker task detected in this turn; skipped starting a new worker."
     else:
@@ -502,6 +539,9 @@ async def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) ->
         "worker_id": launched_worker_id,
         "run_id": run_id,
         "scheduled_task_id": scheduled_task_id,
+        "router_used": router_used,
+        "router_reason": route_reason,
+        "router_score": route_score,
         "message": message,
     }, ensure_ascii=False)
 
@@ -675,3 +715,100 @@ def _resolve_worker_dir(base_dir: Path, worker_id: str) -> Path | None:
     except ValueError:
         return None
     return candidate
+
+
+def _normalize_str_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _tokenize(text: str) -> set[str]:
+    return set(_TOKEN_RE.findall((text or "").lower()))
+
+
+def _select_worker_template(
+    *,
+    templates: list[object],
+    task: str,
+    required_tools: list[str] | None = None,
+    required_permissions: list[str] | None = None,
+) -> dict[str, object] | None:
+    if not templates:
+        return None
+
+    required_tools = [t.lower() for t in (required_tools or [])]
+    required_permissions = [p.lower() for p in (required_permissions or [])]
+    task_tokens = _tokenize(task)
+    if not task_tokens:
+        task_tokens = {"task"}
+
+    best: dict[str, object] | None = None
+    for template in templates:
+        score = 0.0
+        reasons: list[str] = []
+        descriptor = " ".join(
+            [
+                str(getattr(template, "id", "")),
+                str(getattr(template, "name", "")),
+                str(getattr(template, "description", "")),
+                str(getattr(template, "system_prompt", "")),
+            ]
+        )
+        template_tokens = _tokenize(descriptor)
+        overlap = len(task_tokens & template_tokens)
+        if overlap:
+            score += overlap * 2.0
+            reasons.append(f"keyword_overlap={overlap}")
+
+        available_tools = [str(t).lower() for t in getattr(template, "available_tools", [])]
+        permissions = [str(p).lower() for p in getattr(template, "required_permissions", [])]
+
+        if required_tools:
+            matched_tools = sum(1 for t in required_tools if t in available_tools)
+            if matched_tools:
+                score += matched_tools * 5.0
+                reasons.append(f"required_tools={matched_tools}/{len(required_tools)}")
+            else:
+                score -= 6.0
+                reasons.append("missing_required_tools")
+        if required_permissions:
+            matched_perms = sum(1 for p in required_permissions if p in permissions)
+            if matched_perms:
+                score += matched_perms * 4.0
+                reasons.append(f"required_permissions={matched_perms}/{len(required_permissions)}")
+            else:
+                score -= 4.0
+                reasons.append("missing_required_permissions")
+
+        if "web" in task_tokens and any("web" in t for t in available_tools):
+            score += 3.0
+            reasons.append("web_tool_bonus")
+        if {"test", "pytest", "unit"} & task_tokens and "test_runner" in str(getattr(template, "id", "")):
+            score += 4.0
+            reasons.append("test_runner_bonus")
+        if {"deploy", "release", "rollback"} & task_tokens and "deploy" in str(getattr(template, "id", "")):
+            score += 4.0
+            reasons.append("deploy_bonus")
+        if {"code", "refactor", "bugfix", "python"} & task_tokens and "coder" in str(getattr(template, "id", "")):
+            score += 4.0
+            reasons.append("coder_bonus")
+
+        tie_key = str(getattr(template, "id", ""))
+        candidate = {
+            "template": template,
+            "score": score,
+            "reason": ", ".join(reasons) if reasons else "default selection",
+            "tie_key": tie_key,
+        }
+        if best is None:
+            best = candidate
+        else:
+            best_score = float(best["score"])
+            if score > best_score or (score == best_score and tie_key < str(best["tie_key"])):
+                best = candidate
+
+    if best is None:
+        return None
+    best.pop("tie_key", None)
+    return best
