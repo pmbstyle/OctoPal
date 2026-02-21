@@ -61,6 +61,68 @@ def _init_logging(settings: Settings) -> None:
     )
 
 
+def _maybe_enable_tailscale_serve(settings: Settings) -> None:
+    import subprocess
+
+    if not settings.tailscale_auto_serve:
+        return
+
+    target_host = "127.0.0.1"
+    target = f"http://{target_host}:{settings.gateway_port}"
+    attempts = [
+        ["tailscale", "serve", "--bg", target],
+        ["tailscale", "serve", "--bg", str(settings.gateway_port)],
+    ]
+
+    ok = False
+    last_err = ""
+    for cmd in attempts:
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        except FileNotFoundError:
+            return
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+
+        if proc.returncode == 0:
+            ok = True
+            break
+        last_err = (proc.stderr or proc.stdout or "").strip()
+
+    if not ok:
+        if last_err:
+            logger.debug("Tailscale serve auto-config skipped", error=last_err)
+        return
+
+    public_hint = ""
+    try:
+        status_proc = subprocess.run(
+            ["tailscale", "status", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+        if status_proc.returncode == 0 and status_proc.stdout:
+            status_data = json.loads(status_proc.stdout)
+            dns_name = str(status_data.get("Self", {}).get("DNSName", "")).strip().rstrip(".")
+            if dns_name:
+                public_hint = f"https://{dns_name}"
+    except Exception:
+        pass
+
+    if public_hint:
+        console.print(
+            f"[bold green][V] Tailscale Serve enabled[/bold green] -> "
+            f"[cyan]{public_hint}[/cyan] (proxy to {target})"
+        )
+    else:
+        console.print(
+            f"[bold green][V] Tailscale Serve enabled[/bold green] "
+            f"(proxy to [cyan]{target}[/cyan])"
+        )
+
+
 @app.command()
 def start(
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground mode (showing logs)"),
@@ -92,6 +154,7 @@ def start(
         return
 
     _init_logging(settings)
+    _maybe_enable_tailscale_serve(settings)
 
     with console.status("[bold green]Initializing BroodMind Queen...[/bold green]", spinner="dots"):
         write_start_status(settings)
@@ -606,6 +669,7 @@ def logs(follow: bool = typer.Option(False, "--follow", "-f")) -> None:
 @app.command()
 def gateway() -> None:
     settings = load_settings()
+    _maybe_enable_tailscale_serve(settings)
     app_instance = build_app(settings)
     import uvicorn
 

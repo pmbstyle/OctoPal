@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from fastapi import FastAPI
 from broodmind.config.settings import Settings
+from broodmind.gateway.dashboard import register_dashboard_routes
 from broodmind.gateway.ws import register_ws_routes
 from broodmind.queen.core import Queen
 
@@ -27,4 +28,5 @@ def build_app(settings: Settings, queen: Queen | None = None) -> FastAPI:
         app.state.canon = queen.canon
     
     register_ws_routes(app)
+    register_dashboard_routes(app)
     return app

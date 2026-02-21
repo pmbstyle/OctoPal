@@ -209,6 +209,8 @@ Primary settings are stored in `.env` and loaded via `pydantic-settings`.
 | `BROODMIND_MEMORY_PREFILTER_K` | No | Lexical prefilter candidate count before vector rerank (default: `80`) |
 | `BROODMIND_WORKSPACE_DIR` | No | Defaults to `workspace` |
 | `BROODMIND_STATE_DIR` | No | Defaults to `data` |
+| `BROODMIND_DASHBOARD_TOKEN` | No (recommended) | Token required by `/api/dashboard/*` when set |
+| `BROODMIND_TAILSCALE_AUTO_SERVE` | No | `1` (default): auto-run `tailscale serve` on startup when available |
 | `BROODMIND_WORKER_LAUNCHER` | No | `same_env` (default) or `docker` |
 | `BROODMIND_WORKER_MAX_SPAWN_DEPTH` | No | Max child spawn depth (default: `2`) |
 | `BROODMIND_WORKER_MAX_CHILDREN_TOTAL` | No | Max children per lineage lifetime (default: `20`) |
@@ -234,6 +236,31 @@ BROODMIND_WORKER_DOCKER_IMAGE=broodmind-worker:latest
 ```
 
 3. Restart BroodMind.
+
+## Private Web Dashboard (Tailscale)
+
+Run gateway:
+
+```bash
+uv run broodmind gateway
+```
+
+Open:
+
+- `http://127.0.0.1:8000/dashboard`
+- API snapshot: `http://127.0.0.1:8000/api/dashboard/snapshot`
+
+Recommended private setup:
+
+1. Bind local-only:
+   `BROODMIND_GATEWAY_HOST=127.0.0.1`
+2. Set auth token:
+   `BROODMIND_DASHBOARD_TOKEN=<strong-random-token>`
+3. Publish only to tailnet via `tailscale serve` (no Funnel).
+
+By default, BroodMind now attempts to auto-configure `tailscale serve` at startup (best effort, skipped if unavailable). Disable with:
+
+`BROODMIND_TAILSCALE_AUTO_SERVE=0`
 
 ## Development
 
