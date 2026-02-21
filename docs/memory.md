@@ -57,3 +57,14 @@ BroodMind enforces a strict hierarchy for writing to memory:
 
 - **Compaction:** If a canonical file exceeds 4,000 characters, the `CanonService` issues a warning to the Queen, who is then responsible for summarizing and refactoring the file.
 - **Cleanup:** Ephemeral SQLite memory is pruned according to settings (default: entries older than 30 days or exceeding 1,000 records). Canonical memory is **never** automatically deleted.
+
+## 6. Quality Controls (Recent Improvements)
+
+BroodMind now applies additional quality controls in the transient/semantic memory pipeline:
+
+- **Deduplication on Write:** Exact normalized duplicates in recent same-chat history are skipped to reduce noise.
+- **Contradiction Tagging:** Simple assertion conflicts (for example, `X is Y` vs `X is not Y`) are flagged in metadata (`contradiction_detected`, `contradiction_with`) instead of silently treated as equal truth.
+- **Confidence Scoring:** Entries carry a confidence value in metadata (role-defaulted and adjustable), which influences retrieval rank.
+- **Recency Weighting:** Semantic retrieval applies a recency decay factor so newer relevant memories are favored while still retaining long-term recall.
+
+These controls improve retrieval precision while preserving auditability of conflicting observations.

@@ -119,6 +119,8 @@ uv run broodmind logs --follow
 
 - Handles Telegram messages
 - Builds prompt context from memory + workspace files
+- Uses a planner/executor split per turn (brief plan first, then execution)
+- Runs a verification pass before final user-facing responses
 - Calls tools directly or delegates to workers
 - Synthesizes final user-facing responses
 
@@ -126,6 +128,7 @@ uv run broodmind logs --follow
 
 - Worker templates are file-based under `workspace/workers/<id>/worker.json`
 - Spawned per task with timeout + lifecycle tracking
+- Includes automatic recovery retries for transient stuck/failure states
 - Report result back to Queen runtime
 
 ### Tools
@@ -135,7 +138,12 @@ Examples:
 - Filesystem: `fs_read`, `fs_write`, `fs_list`, `fs_move`, `fs_delete`
 - Web: `web_search`, `web_fetch`
 - Execution: `exec_run`
-- Worker management: `list_workers`, `start_worker`, `get_worker_status`, `get_worker_result`
+- Worker management: `list_workers`, `start_worker`, `start_workers_parallel`, `synthesize_worker_results`, `get_worker_status`, `get_worker_result`
+
+`start_worker` supports worker specialization routing:
+
+- pass `worker_id="auto"` (or omit `worker_id`) to let the router pick the best template
+- optionally constrain routing with `required_tools` and `required_permissions`
 
 ## CLI Commands
 
