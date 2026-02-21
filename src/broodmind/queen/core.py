@@ -18,6 +18,7 @@ from broodmind.mcp.manager import MCPManager
 from broodmind.policy.engine import PolicyEngine
 from broodmind.providers.base import InferenceProvider
 from broodmind.browser.manager import get_browser_manager
+from broodmind.housekeeping import cleanup_workspace_tmp, rotate_canon_events
 from broodmind.queen.prompt_builder import (
     build_bootstrap_context_prompt,
     build_queen_prompt,
@@ -235,6 +236,7 @@ class Queen:
     _worker_depth: dict[str, int] | None = None
     _lineage_children_total: dict[str, int] | None = None
     _lineage_children_active: dict[str, set[str]] | None = None
+    _housekeeping_cfg: dict[str, int] | None = None
 
     def __post_init__(self):
         if self._recent_tasks is None:
@@ -259,6 +261,18 @@ class Queen:
                 "max_depth": max_depth,
                 "max_children_total": max_total,
                 "max_children_concurrent": max_concurrent,
+            }
+        if self._housekeeping_cfg is None:
+            self._housekeeping_cfg = {
+                "tmp_retention_hours": _env_int(
+                    "BROODMIND_WORKSPACE_TMP_RETENTION_HOURS", 48, minimum=1
+                ),
+                "canon_events_max_bytes": _env_int(
+                    "BROODMIND_CANON_EVENTS_MAX_BYTES", 2_000_000, minimum=1024
+                ),
+                "canon_events_keep_archives": _env_int(
+                    "BROODMIND_CANON_EVENTS_KEEP_ARCHIVES", 7, minimum=1
+                ),
             }
         self._thinking_count = 0
         self._tg_send = self.internal_send
@@ -345,6 +359,35 @@ class Queen:
                 deleted = await asyncio.to_thread(self.store.cleanup_old_workers)
                 if deleted > 0:
                     logger.info("Periodic cleanup complete", deleted_workers=deleted)
+
+                cfg = self._housekeeping_cfg or {}
+                tmp_result = await asyncio.to_thread(
+                    cleanup_workspace_tmp,
+                    self.canon.workspace_dir,
+                    retention_hours=int(cfg.get("tmp_retention_hours", 48)),
+                )
+                if tmp_result.deleted_files or tmp_result.deleted_dirs or tmp_result.errors:
+                    logger.info(
+                        "Workspace tmp cleanup complete",
+                        deleted_files=tmp_result.deleted_files,
+                        deleted_dirs=tmp_result.deleted_dirs,
+                        errors=tmp_result.errors,
+                    )
+
+                rotate_result = await asyncio.to_thread(
+                    rotate_canon_events,
+                    self.canon.workspace_dir,
+                    max_bytes=int(cfg.get("canon_events_max_bytes", 2_000_000)),
+                    keep_archives=int(cfg.get("canon_events_keep_archives", 7)),
+                )
+                if rotate_result.rotated or rotate_result.deleted_archives:
+                    logger.info(
+                        "Canon events rotation complete",
+                        rotated=rotate_result.rotated,
+                        archived_file=rotate_result.archived_file,
+                        deleted_archives=rotate_result.deleted_archives,
+                        bootstrap_entries=rotate_result.bootstrap_entries,
+                    )
             except Exception:
                 logger.exception("Periodic worker cleanup failed")
 
