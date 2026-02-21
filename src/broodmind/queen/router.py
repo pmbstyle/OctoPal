@@ -506,7 +506,11 @@ async def _verify_final_response(
         "</DRAFT_RESPONSE>"
     )
     try:
-        raw = await provider.complete([Message(role="system", content=prompt)])
+        raw = await _complete_text(
+            provider,
+            [Message(role="system", content=prompt)],
+            context="verifier",
+        )
     except Exception:
         logger.debug("Verifier step skipped due to provider error", exc_info=True)
         return candidate
@@ -632,6 +636,13 @@ def _sanitize_messages_for_complete(messages: list[Message | dict[str, Any]]) ->
 
     if not sanitized:
         sanitized.append({"role": "user", "content": "Continue."})
+    elif not any(msg.get("role") == "user" for msg in sanitized):
+        sanitized.append(
+            {
+                "role": "user",
+                "content": "Please follow the instructions above and provide the best supported response.",
+            }
+        )
     return sanitized
 
 

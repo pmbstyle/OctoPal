@@ -32,3 +32,14 @@ def test_sanitize_messages_converts_multimodal_content_to_text() -> None:
     assert len(sanitized) == 1
     assert "Look at this" in sanitized[0]["content"]
     assert "image omitted" in sanitized[0]["content"]
+
+
+def test_sanitize_messages_adds_user_when_missing() -> None:
+    sanitized = _sanitize_messages_for_complete(
+        [
+            Message(role="system", content="Follow strict rules."),
+            {"role": "assistant", "content": "Prior tool context"},
+        ]
+    )
+    roles = [m["role"] for m in sanitized]
+    assert "user" in roles

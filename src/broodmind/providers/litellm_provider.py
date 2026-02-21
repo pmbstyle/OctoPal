@@ -85,7 +85,7 @@ class LiteLLMProvider:
         if not self._api_key:
             raise RuntimeError("API key is not configured. Set OPENROUTER_API_KEY or ZAI_API_KEY.")
 
-        serialized_messages = [_serialize_message(m) for m in messages]
+        serialized_messages = _normalize_plain_messages([_serialize_message(m) for m in messages])
         payload_str = json.dumps({"messages": serialized_messages}, ensure_ascii=False)
 
         logger.debug(
@@ -98,13 +98,13 @@ class LiteLLMProvider:
         if self._settings.debug_prompts:
             logger.debug("LiteLLM payload: %s", _truncate(payload_str))
 
+        request_kwargs = _build_request_kwargs(
+            kwargs,
+            temperature=float(kwargs.get("temperature", 0.3)),
+            timeout=self._settings.litellm_timeout,
+            fallbacks=self._fallbacks,
+        )
         try:
-            request_kwargs = _build_request_kwargs(
-                kwargs,
-                temperature=float(kwargs.get("temperature", 0.3)),
-                timeout=self._settings.litellm_timeout,
-                fallbacks=self._fallbacks,
-            )
             response = await acompletion(
                 model=self._model,
                 messages=serialized_messages,
@@ -116,6 +116,27 @@ class LiteLLMProvider:
             logger.debug("LiteLLM response: %s", _truncate(content))
             return content
         except Exception as exc:
+            if _looks_like_illegal_messages_error(exc):
+                retry_messages = _build_strict_retry_messages(serialized_messages)
+                logger.warning(
+                    "Retrying LiteLLM completion with strict message normalization after provider rejected messages payload",
+                )
+                try:
+                    response = await acompletion(
+                        model=self._model,
+                        messages=retry_messages,
+                        api_base=self._api_base,
+                        api_key=self._api_key,
+                        **request_kwargs,
+                    )
+                    content = _extract_content(response)
+                    logger.debug("LiteLLM response (strict retry): %s", _truncate(content))
+                    return content
+                except Exception:
+                    logger.error(
+                        "LiteLLM strict-retry payload shape on error: %s",
+                        _summarize_messages(retry_messages),
+                    )
             err_str = str(exc)
             logger.error(
                 "LiteLLM completion payload shape on error: %s",
@@ -219,6 +240,78 @@ def _serialize_message(message: Message | dict) -> dict:
     if isinstance(message, dict):
         return message
     return message.to_dict()
+
+
+def _normalize_plain_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    normalized: list[dict[str, str]] = []
+    for message in messages:
+        role_raw = str(message.get("role", "assistant")).strip().lower()
+        role = role_raw if role_raw in {"system", "user", "assistant"} else "assistant"
+        content = _coerce_content_text(message.get("content"))
+        if not content:
+            continue
+        normalized.append({"role": role, "content": content})
+
+    if not normalized:
+        return [{"role": "user", "content": "Continue."}]
+
+    if not any(msg.get("role") == "user" for msg in normalized):
+        system_parts = [msg["content"] for msg in normalized if msg["role"] == "system"]
+        assistant_parts = [msg["content"] for msg in normalized if msg["role"] == "assistant"]
+        composed = []
+        if system_parts:
+            composed.append("Instructions:\n" + "\n\n".join(system_parts))
+        if assistant_parts:
+            composed.append("Context:\n" + "\n\n".join(assistant_parts))
+        if not composed:
+            composed.append("Continue.")
+        normalized.append({"role": "user", "content": "\n\n".join(composed).strip()})
+
+    return normalized
+
+
+def _build_strict_retry_messages(messages: list[dict[str, str]]) -> list[dict[str, str]]:
+    lines: list[str] = []
+    for msg in messages:
+        role = str(msg.get("role", "assistant")).strip().lower()
+        content = str(msg.get("content", "")).strip()
+        if not content:
+            continue
+        lines.append(f"{role}: {content}")
+    payload = "\n\n".join(lines).strip() or "Continue."
+    return [{"role": "user", "content": payload}]
+
+
+def _coerce_content_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                item_type = str(item.get("type", "")).lower()
+                if item_type == "text":
+                    text = str(item.get("text", "")).strip()
+                    if text:
+                        parts.append(text)
+                elif item_type == "image_url":
+                    parts.append("[image omitted]")
+            elif item is not None:
+                raw = str(item).strip()
+                if raw:
+                    parts.append(raw)
+        return "\n".join(parts).strip()
+    if content is None:
+        return ""
+    try:
+        return json.dumps(content, ensure_ascii=False).strip()
+    except Exception:
+        return str(content).strip()
+
+
+def _looks_like_illegal_messages_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "messages parameter is illegal" in err or "'code': '1214'" in err or '"code": "1214"' in err
 
 
 def _extract_content(response: Any) -> str:
