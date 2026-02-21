@@ -429,7 +429,13 @@ class Queen:
         try:
             bootstrap_context = await build_bootstrap_context_prompt(self.store, system_chat_id)
             result = await route_or_reply(
-                self, self.provider, self.memory, wake_up_prompt, system_chat_id, bootstrap_context.content
+                self,
+                self.provider,
+                self.memory,
+                wake_up_prompt,
+                system_chat_id,
+                bootstrap_context.content,
+                internal_followup=True,
             )
             logger.info("Queen wake up complete", result_preview=f"{result[:60]}..." if result else "empty")
             

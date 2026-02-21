@@ -580,7 +580,15 @@ def _normalize_verification_payload(payload: dict[str, Any] | None) -> dict[str,
 def _build_insufficient_evidence_response(payload: dict[str, Any], candidate: str) -> str:
     response = payload.get("response", "").strip()
     if response:
-        return response
+        lower = response.lower()
+        technical_markers = (
+            "provided evidence",
+            "cannot confidently verify",
+            "draft includes details",
+            "not supported by",
+        )
+        if not any(marker in lower for marker in technical_markers):
+            return response
     missing = payload.get("missing_evidence") or []
     if missing:
         return (
