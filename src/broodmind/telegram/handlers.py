@@ -65,9 +65,25 @@ _REACTION_MAPPING = {
 }
 
 
+_REACT_TAG_RE = re.compile(r"<react>(.*?)</react>", re.IGNORECASE | re.DOTALL)
+
+
 def _normalize_reaction(emoji: str) -> str:
     # Handle both raw emoji and potential mapping
     return _REACTION_MAPPING.get(emoji.strip(), emoji.strip())
+
+
+def _extract_reaction_and_strip(text: str) -> tuple[str | None, str]:
+    match = _REACT_TAG_RE.search(text or "")
+    if not match:
+        return None, text or ""
+    emoji = (match.group(1) or "").strip() or None
+    cleaned = _REACT_TAG_RE.sub("", text or "").strip()
+    return emoji, cleaned
+
+
+def _strip_reaction_tags(text: str) -> str:
+    return _REACT_TAG_RE.sub("", text or "").strip()
 
 
 def register_handlers(
@@ -285,19 +301,13 @@ def register_handlers(
                 final_text = reply.immediate or ""
                 
                 # 4. Reaction Parsing
-                # Look for <react>emoji</react> at the start of the message
-                # Regex to match <react>...</react> anywhere, but typically at start.
-                react_match = re.search(r"<react>(.*?)</react>", final_text, re.DOTALL)
-                if react_match:
-                    emoji = react_match.group(1).strip()
-                    # Remove the tag from the text
-                    final_text = final_text.replace(react_match.group(0), "").strip()
-                    if emoji:
-                        mapped_emoji = _normalize_reaction(emoji)
-                        try:
-                            await message.react([ReactionTypeEmoji(emoji=mapped_emoji)])
-                        except Exception as exc:
-                            logger.warning("Failed to apply reaction", emoji=emoji, mapped=mapped_emoji, error=str(exc))
+                emoji, final_text = _extract_reaction_and_strip(final_text)
+                if emoji:
+                    mapped_emoji = _normalize_reaction(emoji)
+                    try:
+                        await message.react([ReactionTypeEmoji(emoji=mapped_emoji)])
+                    except Exception as exc:
+                        logger.warning("Failed to apply reaction", emoji=emoji, mapped=mapped_emoji, error=str(exc))
 
                 if final_text and not is_heartbeat_ok(final_text):
                     # Reply with quote/reply to the current message
@@ -342,6 +352,7 @@ async def _send_chunked(bot: Bot, chat_id: int, text: str, reply_to_message_id: 
 
 async def _send_message_safe(bot: Bot, chat_id: int, text: str, reply_to_message_id: int | None = None) -> None:
     parse_mode = _TELEGRAM_PARSE_MODE
+    text = _strip_reaction_tags(text)
     outbound = text
     if parse_mode == "MarkdownV2":
         outbound = _prepare_markdown_v2(text)
