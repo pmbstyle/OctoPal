@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+from broodmind.workers.contracts import WorkerResult, WorkerSpec
+from broodmind.workers.runtime import WorkerRuntime, _classify_recoverable_error
+
+
+class _StoreStub:
+    def __init__(self) -> None:
+        self.status_updates: list[str] = []
+        self.result_errors: list[str] = []
+
+    def create_worker(self, record):
+        return None
+
+    def update_worker_status(self, _worker_id: str, status: str):
+        self.status_updates.append(status)
+
+    def update_worker_result(self, _worker_id: str, **kwargs):
+        if kwargs.get("error"):
+            self.result_errors.append(str(kwargs["error"]))
+
+    def append_audit(self, _event):
+        return None
+
+
+class _PolicyStub:
+    def grant_capabilities(self, caps):
+        return caps
+
+
+class _FakeProcess:
+    def __init__(self, pid: int) -> None:
+        self.pid = pid
+        self.returncode = None
+        self.stdin = None
+        self.stdout = None
+
+    def kill(self) -> None:
+        self.returncode = -9
+
+    async def wait(self) -> int:
+        if self.returncode is None:
+            self.returncode = 0
+        return self.returncode
+
+
+class _LauncherStub:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def launch(self, spec_path: str, cwd: str, env: dict[str, str]):
+        self.calls += 1
+        return _FakeProcess(pid=self.calls)
+
+
+def _spec() -> WorkerSpec:
+    return WorkerSpec(
+        id="w1",
+        task="do task",
+        inputs={},
+        system_prompt="sys",
+        available_tools=[],
+        mcp_tools=[],
+        model=None,
+        granted_capabilities=[],
+        timeout_seconds=2,
+        max_thinking_steps=5,
+        run_id="w1",
+        lifecycle="ephemeral",
+        correlation_id=None,
+    )
+
+
+def test_recovery_error_classifier() -> None:
+    recoverable, reason = _classify_recoverable_error(RuntimeError("Worker exited without result"))
+    assert recoverable is True
+    assert reason == "exited_without_result"
+    recoverable2, reason2 = _classify_recoverable_error(RuntimeError("hard failure"))
+    assert recoverable2 is False
+    assert reason2 == "non_recoverable"
+
+
+def test_runtime_recovers_after_transient_failure(tmp_path: Path) -> None:
+    store = _StoreStub()
+    launcher = _LauncherStub()
+    runtime = WorkerRuntime(
+        store=store,
+        policy=_PolicyStub(),
+        workspace_dir=tmp_path,
+        launcher=launcher,
+        mcp_manager=None,
+    )
+    calls = {"count": 0}
+
+    async def fake_read_loop(spec, process, approval_requester=None):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("Worker stalled without output")
+        return WorkerResult(summary="ok", output={})
+
+    runtime._read_loop = fake_read_loop  # type: ignore[method-assign]
+
+    async def scenario():
+        return await runtime.run(_spec())
+
+    result = asyncio.run(scenario())
+    assert result.summary == "ok"
+    assert launcher.calls == 2
+    assert isinstance(result.output, dict)
+    assert result.output["_recovery"]["recovered"] is True
+
+
+def test_runtime_fails_after_recovery_exhausted(tmp_path: Path) -> None:
+    store = _StoreStub()
+    launcher = _LauncherStub()
+    runtime = WorkerRuntime(
+        store=store,
+        policy=_PolicyStub(),
+        workspace_dir=tmp_path,
+        launcher=launcher,
+        mcp_manager=None,
+    )
+
+    async def fake_read_loop(spec, process, approval_requester=None):
+        raise RuntimeError("Worker exited without result")
+
+    runtime._read_loop = fake_read_loop  # type: ignore[method-assign]
+
+    async def scenario():
+        await runtime.run(_spec())
+
+    try:
+        asyncio.run(scenario())
+        assert False, "Expected RuntimeError"
+    except RuntimeError as exc:
+        assert "after recovery attempts" in str(exc)
+    assert launcher.calls == 2

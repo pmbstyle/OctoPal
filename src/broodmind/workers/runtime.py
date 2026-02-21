@@ -28,6 +28,8 @@ from broodmind.workers.launcher import WorkerLauncher
 logger = structlog.get_logger(__name__)
 
 WORKER_MODULE = "broodmind.workers.agent_worker"
+_MAX_RECOVERY_ATTEMPTS = 1
+_RECOVERY_BACKOFF_SECONDS = 0.2
 
 
 @dataclass
@@ -163,56 +165,113 @@ class WorkerRuntime:
             "PYTHONPATH": _pythonpath(),
         }
 
-        # Launch worker process
-        process = await self.launcher.launch(
-            spec_path=str(spec_path.resolve()),
-            cwd=str(worker_dir),
-            env=env,
-        )
-        logger.info("WorkerRuntime process started: id=%s pid=%s", spec.id, process.pid)
-        self._running[spec.id] = process
-        await asyncio.to_thread(self.store.update_worker_status, spec.id, "running")
-        await self._append_audit("worker_started", correlation_id=spec.id)
+        attempts = 0
+        max_attempts = 1 + _MAX_RECOVERY_ATTEMPTS
+        last_error: Exception | None = None
+        result: WorkerResult | None = None
 
         try:
-            result = await asyncio.wait_for(
-                self._read_loop(spec, process, approval_requester=approval_requester),
-                timeout=spec.timeout_seconds,
-            )
+            while attempts < max_attempts:
+                attempts += 1
+                process = await self.launcher.launch(
+                    spec_path=str(spec_path.resolve()),
+                    cwd=str(worker_dir),
+                    env=env,
+                )
+                logger.info(
+                    "WorkerRuntime process started: id=%s pid=%s attempt=%s/%s",
+                    spec.id,
+                    process.pid,
+                    attempts,
+                    max_attempts,
+                )
+                self._running[spec.id] = process
+                await asyncio.to_thread(self.store.update_worker_status, spec.id, "running")
+                await self._append_audit(
+                    "worker_started",
+                    correlation_id=spec.id,
+                    data={"attempt": attempts, "max_attempts": max_attempts},
+                )
+
+                try:
+                    result = await asyncio.wait_for(
+                        self._read_loop(spec, process, approval_requester=approval_requester),
+                        timeout=spec.timeout_seconds,
+                    )
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    recoverable, reason = _classify_recoverable_error(exc)
+                    await self._safe_terminate_process(process)
+                    if recoverable and attempts < max_attempts:
+                        await self._append_audit(
+                            "worker_recovery_attempt",
+                            level="warning",
+                            correlation_id=spec.id,
+                            data={
+                                "attempt": attempts,
+                                "next_attempt": attempts + 1,
+                                "reason": reason,
+                                "error": str(exc),
+                            },
+                        )
+                        await asyncio.sleep(_RECOVERY_BACKOFF_SECONDS * attempts)
+                        continue
+                    raise
+                finally:
+                    self._running.pop(spec.id, None)
+
+            if result is None:
+                raise RuntimeError("Worker failed without result after recovery attempts")
+
+            if isinstance(result.output, dict):
+                result.output["_recovery"] = {
+                    "attempts": attempts,
+                    "recovered": attempts > 1,
+                }
             logger.info("WorkerRuntime result: id=%s summary_len=%s", spec.id, len(result.summary))
             await self._append_audit(
                 "worker_result",
                 correlation_id=spec.id,
-                data={"summary": result.summary},
+                data={"summary": result.summary, "attempts": attempts, "recovered": attempts > 1},
             )
             return result
         except TimeoutError:
-            logger.error("Worker %s timed out", spec.id)
-            process.kill()
-            await process.wait()
             await asyncio.to_thread(self.store.update_worker_status, spec.id, "failed")
-            await asyncio.to_thread(self.store.update_worker_result, spec.id, error="Worker timed out")
+            await asyncio.to_thread(
+                self.store.update_worker_result,
+                spec.id,
+                error=f"Worker timed out after recovery attempts ({attempts}/{max_attempts})",
+            )
             await self._append_audit(
                 "worker_failed",
                 level="error",
                 correlation_id=spec.id,
-                data={"reason": "timeout"},
+                data={"reason": "timeout", "attempts": attempts, "max_attempts": max_attempts},
             )
-            raise RuntimeError("Worker timed out") from None
+            raise RuntimeError("Worker timed out after recovery attempts") from None
         except Exception as exc:
             await asyncio.to_thread(self.store.update_worker_status, spec.id, "failed")
             await asyncio.to_thread(
-                self.store.update_worker_result, spec.id, error=f"Worker failed: {exc}"
+                self.store.update_worker_result,
+                spec.id,
+                error=f"Worker failed after recovery attempts: {exc}",
             )
             await self._append_audit(
                 "worker_failed",
                 level="error",
                 correlation_id=spec.id,
-                data={"reason": "exception", "error": str(exc)},
+                data={
+                    "reason": "exception",
+                    "error": str(exc),
+                    "attempts": attempts,
+                    "max_attempts": max_attempts,
+                },
             )
+            if attempts >= max_attempts and last_error is not None:
+                raise RuntimeError(f"Worker failed after recovery attempts: {last_error}") from None
             raise
         finally:
-            self._running.pop(spec.id, None)
             if spec.lifecycle == "ephemeral":
                 await self._cleanup_worker_dir(worker_dir)
 
@@ -535,6 +594,14 @@ class WorkerRuntime:
         except Exception as exc:
             logger.warning("WorkerRuntime cleanup failed: %s", exc)
 
+    async def _safe_terminate_process(self, process: asyncio.subprocess.Process) -> None:
+        try:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+        except Exception:
+            logger.debug("Failed to terminate worker process cleanly", exc_info=True)
+
     def _log_non_json_output(self, text: str) -> None:
         """Log non-JSON output from worker intelligently."""
         import re
@@ -591,3 +658,16 @@ def _extract_mcp_tool_identity(tool_name: str, server_ids: list[str]) -> tuple[s
     if len(parts) < 3:
         return None, None
     return parts[1], "_".join(parts[2:])
+
+
+def _classify_recoverable_error(exc: Exception) -> tuple[bool, str]:
+    if isinstance(exc, TimeoutError):
+        return True, "timeout"
+    lowered = str(exc or "").lower()
+    if "exited without result" in lowered:
+        return True, "exited_without_result"
+    if "stalled" in lowered:
+        return True, "stalled"
+    if "connection reset" in lowered or "temporarily unavailable" in lowered:
+        return True, "transient_io"
+    return False, "non_recoverable"
