@@ -226,7 +226,16 @@ When you receive a "heartbeat" trigger:
     - Execute the task using `start_worker` or other tools.
     - When calling `start_worker` for a scheduled task, pass `scheduled_task_id` with the task ID from `check_schedule`.
     - Reuse `task_text`, `worker_id`, and `inputs` from the `check_schedule` payload when available.
-3.  If no tasks are due, return exactly `HEARTBEAT_OK`.
+3.  Classify task health carefully:
+    - If a worker/tool output is truncated (for example includes `...[truncated ...]` or indicates output truncation), treat this as **partial data**, not API downtime.
+    - Mark API/service as unavailable only when there is explicit transport/upstream evidence (timeouts, connection errors, 5xx/429, auth failure, or explicit `upstream_unavailable`/HTTP status failure).
+    - If HTTP/API response is successful but parsing is incomplete, report as **degraded parsing/truncation**.
+4.  If you provide a heartbeat summary table, use precise status wording:
+    - `✅ OK` for successful task execution.
+    - `⚠️ Partial (truncated/parsing)` for truncation or incomplete parsing with successful upstream response.
+    - `❌ API unavailable` only for confirmed connectivity/upstream/auth failures.
+    - `❌ Tool schema error` for MCP schema/contract mismatches.
+5.  If no tasks are due, return exactly `HEARTBEAT_OK`.
 
 ## Schedule Management
 You are the manager of your own schedule.
