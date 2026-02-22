@@ -119,12 +119,19 @@ async def mcp_call(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
 
     logger.info("Queen calling MCP tool via mcp_call", server_id=server_id, tool=tool_name)
     try:
-        # We reuse the same logic as the generated handlers
-        result = await session.call_tool(tool_name, arguments=tool_args)
+        result = await queen.mcp_manager.call_tool(server_id, tool_name, tool_args)
         return json.dumps([c.model_dump() if hasattr(c, "model_dump") else str(c) for c in result.content], indent=2)
     except Exception as e:
         logger.exception("MCP tool call failed", server_id=server_id, tool=tool_name)
-        return f"Error calling MCP tool {tool_name}: {e}"
+        return json.dumps(
+            {
+                "ok": False,
+                "server_id": server_id,
+                "tool": tool_name,
+                "error": str(e),
+            },
+            indent=2,
+        )
 
 def get_mcp_mgmt_tools() -> list[ToolSpec]:
     return [

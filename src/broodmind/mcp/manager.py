@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import structlog
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -29,6 +30,10 @@ from mcp.client.streamable_http import streamablehttp_client
 from broodmind.tools.registry import ToolSpec
 
 logger = structlog.get_logger(__name__)
+_MCP_PERMANENT_ERROR_THRESHOLD = 2
+_MCP_PERMANENT_ERROR_OPEN_SECONDS = 300.0
+_MCP_TRANSIENT_ERROR_THRESHOLD = 5
+_MCP_TRANSIENT_ERROR_OPEN_SECONDS = 60.0
 
 class MCPManager:
     def __init__(self, workspace_dir: Path):
@@ -40,6 +45,7 @@ class MCPManager:
         self._stop_events: Dict[str, asyncio.Event] = {}
         self._tools: Dict[str, List[ToolSpec]] = {}
         self._server_configs: Dict[str, MCPServerConfig] = {}
+        self._tool_failure_state: Dict[tuple[str, str], Dict[str, Any]] = {}
         self.config_path = workspace_dir / "mcp_servers.json"
 
     async def load_and_connect_all(self):
@@ -213,6 +219,60 @@ class MCPManager:
             await exit_stack.aclose()
             logger.info("MCP server resources released", server_id=config.id)
 
+    async def call_tool(self, server_id: str, tool_name: str, args: Dict[str, Any]) -> Any:
+        session = self.sessions.get(server_id)
+        if not session:
+            raise RuntimeError(f"MCP session '{server_id}' is not active.")
+
+        state_key = (server_id, tool_name)
+        now = time.monotonic()
+        state = self._tool_failure_state.get(state_key)
+        if state and float(state.get("open_until", 0.0)) > now:
+            remaining = max(1, int(float(state["open_until"]) - now))
+            last_class = str(state.get("classification", "unknown"))
+            raise RuntimeError(
+                f"MCP tool '{tool_name}' on '{server_id}' is temporarily paused for {remaining}s "
+                f"after repeated '{last_class}' failures. Try a fallback path or a different tool."
+            )
+
+        try:
+            result = await session.call_tool(tool_name, arguments=args)
+            self._tool_failure_state.pop(state_key, None)
+            return result
+        except Exception as exc:
+            error_info = _classify_mcp_call_error(exc)
+            entry = self._tool_failure_state.get(
+                state_key,
+                {"count": 0, "open_until": 0.0, "classification": error_info["classification"]},
+            )
+            entry["count"] = int(entry.get("count", 0)) + 1
+            entry["classification"] = error_info["classification"]
+            entry["last_error"] = str(exc)
+
+            if error_info["retryable"]:
+                if entry["count"] >= _MCP_TRANSIENT_ERROR_THRESHOLD:
+                    entry["open_until"] = now + _MCP_TRANSIENT_ERROR_OPEN_SECONDS
+            else:
+                if entry["count"] >= _MCP_PERMANENT_ERROR_THRESHOLD:
+                    entry["open_until"] = now + _MCP_PERMANENT_ERROR_OPEN_SECONDS
+
+            self._tool_failure_state[state_key] = entry
+
+            if float(entry.get("open_until", 0.0)) > now:
+                logger.warning(
+                    "Opened MCP tool circuit after repeated failures",
+                    server_id=server_id,
+                    tool=tool_name,
+                    classification=error_info["classification"],
+                    cooldown_seconds=int(float(entry["open_until"]) - now),
+                    failure_count=entry["count"],
+                )
+
+            raise RuntimeError(
+                f"[{error_info['classification']}] {error_info['hint']} "
+                f"(server={server_id}, tool={tool_name})"
+            ) from exc
+
     def _generate_handler(self, server_id: str, tool_name: str):
         async def handler(args: Dict[str, Any], ctx: Dict[str, Any]) -> Any:
             worker = ctx.get("worker")
@@ -230,11 +290,16 @@ class MCPManager:
             
             logger.info("Calling MCP tool", server_id=server_id, tool=tool_name)
             try:
-                result = await session.call_tool(tool_name, arguments=args)
+                result = await self.call_tool(server_id, tool_name, args)
                 return [c.model_dump() if hasattr(c, "model_dump") else str(c) for c in result.content]
             except Exception as e:
                 logger.exception("MCP tool call failed", server_id=server_id, tool=tool_name)
-                return f"Error calling MCP tool {tool_name}: {e}"
+                return {
+                    "ok": False,
+                    "error": str(e),
+                    "server_id": server_id,
+                    "tool": tool_name,
+                }
         
         return handler
 
@@ -319,3 +384,42 @@ def _connection_hint(error: Exception) -> str:
     if "connection closed" in text:
         return "Remote side closed connection early: verify auth and protocol compatibility."
     return "Unknown MCP connection issue. Verify URL/transport/auth."
+
+
+def _classify_mcp_call_error(error: Exception) -> dict[str, Any]:
+    text = str(error).lower()
+    if "-32602" in text or "invalid tools/call result" in text or "structuredcontent" in text:
+        return {
+            "classification": "schema_mismatch",
+            "retryable": False,
+            "hint": "Remote MCP response schema is incompatible (structuredContent is invalid).",
+        }
+    if "unknown tool" in text or "not found" in text:
+        return {
+            "classification": "tool_not_found",
+            "retryable": False,
+            "hint": "Tool name mismatch between BroodMind and remote MCP server.",
+        }
+    if "timeout" in text or "timed out" in text:
+        return {
+            "classification": "timeout",
+            "retryable": True,
+            "hint": "Remote MCP call timed out; retry may succeed.",
+        }
+    if "429" in text or "rate limit" in text:
+        return {
+            "classification": "rate_limited",
+            "retryable": True,
+            "hint": "Remote MCP server is rate-limiting requests.",
+        }
+    if "500" in text or "502" in text or "503" in text:
+        return {
+            "classification": "upstream_5xx",
+            "retryable": True,
+            "hint": "Remote MCP server/upstream returned a temporary server error.",
+        }
+    return {
+        "classification": "unknown_error",
+        "retryable": True,
+        "hint": "MCP call failed with an unclassified error.",
+    }
