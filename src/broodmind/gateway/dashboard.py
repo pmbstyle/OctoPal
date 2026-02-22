@@ -683,6 +683,13 @@ def _dashboard_html() -> str:
       c.data.labels = history.map((h) => h.t);
       c.data.datasets[0].data = history.map((h) => h.workers);
       c.data.datasets[1].data = history.map((h) => h.queues);
+      const peak = Math.max(
+        0,
+        ...history.map((h) => Math.max(Number(h.workers || 0), Number(h.queues || 0)))
+      );
+      const paddedMax = peak <= 2 ? 4 : Math.max(4, Math.ceil(peak * 1.35));
+      c.options.scales.y.max = paddedMax;
+      c.options.scales.y.suggestedMax = paddedMax;
       c.update();
     }
 
