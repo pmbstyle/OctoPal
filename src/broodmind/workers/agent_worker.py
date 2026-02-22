@@ -34,9 +34,16 @@ _TRANSIENT_ERROR_HINTS = (
     "timed out",
     "rate limit",
     "429",
+    "500",
+    "502",
+    "503",
+    "504",
     "connection",
     "temporarily",
     "unavailable",
+    "service unavailable",
+    "backend down",
+    "bad gateway",
     "overloaded",
     "try again",
     "econnreset",
@@ -50,6 +57,16 @@ _PERMANENT_ERROR_HINTS = (
     "validation",
     "required",
     "not found",
+)
+_UPSTREAM_UNAVAILABLE_HINTS = (
+    "500",
+    "502",
+    "503",
+    "504",
+    "service unavailable",
+    "backend down",
+    "bad gateway",
+    "gateway timeout",
 )
 _RESULT_SCHEMA = {
     "type": "object",
@@ -199,6 +216,8 @@ If you need clarification from the Queen, include:
         "tool_result_truncations": 0,
         "tokens": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
+    upstream_failures: dict[str, int] = {}
+    successful_tool_calls = 0
 
     for _iteration in range(effective_max_steps):
         thinking_steps += 1
@@ -253,7 +272,34 @@ If you need clarification from the Queen, include:
                     telemetry["tool_timeouts"] += 1
                 if tool_meta.get("had_error"):
                     telemetry["tool_errors"] += 1
+                else:
+                    successful_tool_calls += 1
                 tools_used.append(tool_name)
+
+                if tool_meta.get("had_error"):
+                    error_text = _extract_error_text(tool_result)
+                    if _is_upstream_unavailable_error(error_text):
+                        signature = f"{tool_name}:{_upstream_error_bucket(error_text)}"
+                        upstream_failures[signature] = upstream_failures.get(signature, 0) + 1
+                        if upstream_failures[signature] >= 2 and successful_tool_calls == 0:
+                            return WorkerResult(
+                                summary=(
+                                    "Task partially completed with degraded state: "
+                                    "upstream service is currently unavailable."
+                                ),
+                                output=_attach_telemetry(
+                                    {
+                                        "degraded": True,
+                                        "reason": "upstream_unavailable",
+                                        "failed_tool": tool_name,
+                                        "error": _truncate_text(error_text, 500),
+                                    },
+                                    telemetry,
+                                ),
+                                knowledge_proposals=worker.knowledge_proposals,
+                                thinking_steps=thinking_steps,
+                                tools_used=tools_used,
+                            )
 
                 # Add tool result message
                 tool_result_text = (
@@ -595,6 +641,19 @@ def _extract_error_text(result: Any) -> str:
     if isinstance(result, str):
         return result
     return str(result)
+
+
+def _is_upstream_unavailable_error(text: str) -> bool:
+    lowered = (text or "").lower()
+    return any(token in lowered for token in _UPSTREAM_UNAVAILABLE_HINTS)
+
+
+def _upstream_error_bucket(text: str) -> str:
+    lowered = (text or "").lower()
+    for token in _UPSTREAM_UNAVAILABLE_HINTS:
+        if token in lowered:
+            return token
+    return "upstream_unavailable"
 
 
 def _retry_backoff(attempt: int) -> float:
