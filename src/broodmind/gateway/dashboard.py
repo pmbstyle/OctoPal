@@ -126,6 +126,9 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int) -> dict[s
     by_status: dict[str, int] = {}
     for worker in active_workers:
         by_status[worker.status] = by_status.get(worker.status, 0) + 1
+    running_nodes = [w for w in active_workers if w.status in {"started", "running"}]
+    root_running = sum(1 for w in running_nodes if not w.parent_worker_id)
+    subworkers_running = sum(1 for w in running_nodes if bool(w.parent_worker_id))
 
     followup_q = int(queen_metrics.get("followup_queues", 0) or 0)
     internal_q = int(queen_metrics.get("internal_queues", 0) or 0)
@@ -168,9 +171,23 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int) -> dict[s
         "workers": {
             "spawned_24h": spawned_24h,
             "running": by_status.get("running", 0) + by_status.get("started", 0),
+            "root_running": root_running,
+            "subworkers_running": subworkers_running,
             "completed": by_status.get("completed", 0),
             "failed": by_status.get("failed", 0),
             "stopped": by_status.get("stopped", 0),
+            "topology": [
+                {
+                    "id": w.id,
+                    "status": w.status,
+                    "task": w.task,
+                    "updated_at": w.updated_at.isoformat(),
+                    "parent_worker_id": w.parent_worker_id,
+                    "lineage_id": w.lineage_id,
+                    "spawn_depth": w.spawn_depth,
+                }
+                for w in running_nodes
+            ],
             "recent": [
                 {
                     "id": w.id,
@@ -180,6 +197,9 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int) -> dict[s
                     "summary": w.summary or "",
                     "error": w.error or "",
                     "tools_used": w.tools_used or [],
+                    "parent_worker_id": w.parent_worker_id,
+                    "lineage_id": w.lineage_id,
+                    "spawn_depth": w.spawn_depth,
                 }
                 for w in recent_workers[:last]
             ],
@@ -407,9 +427,42 @@ def _dashboard_html() -> str:
     .workers { max-height: 310px; overflow: auto; }
     .logs { max-height: 270px; overflow: auto; }
     .log-line { border-bottom: 1px dashed rgba(37, 50, 77, 0.75); padding: 8px 2px; font-size: 13px; line-height: 1.35; }
+    .topology { max-height: 260px; overflow: auto; display: grid; gap: 8px; }
+    .topo-row {
+      border: 1px solid rgba(37, 50, 77, 0.75);
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: rgba(9, 15, 28, 0.75);
+    }
+    .topo-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 12px; }
+    .topo-id { font-family: "JetBrains Mono", monospace; color: #c7d2fe; }
+    .topo-task { margin-top: 6px; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .topo-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 2px 8px;
+      border: 1px solid var(--line);
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .pulse {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--mint);
+      box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.8);
+      animation: pulse 1.4s infinite;
+    }
     .meta { margin-top: 10px; color: var(--muted); font-size: 12px; font-family: "JetBrains Mono", monospace; }
     .err { color: var(--rose); margin-top: 8px; font-size: 13px; min-height: 1.1em; }
     @keyframes lift { to { transform: translateY(0); opacity: 1; } }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.8); }
+      70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
+      100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+    }
     @media (max-width: 1060px) {
       .status-strip { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
       .layout { grid-template-columns: 1fr; }
@@ -451,7 +504,7 @@ def _dashboard_html() -> str:
       <article class="kpi">
         <div class="kpi-label">Workers Running</div>
         <div id="workers-running" class="kpi-value">0</div>
-        <div id="chip-spawned" class="chip">24h spawned -</div>
+        <div id="chip-spawned" class="chip">24h spawned - | subworkers -</div>
       </article>
       <article class="kpi">
         <div class="kpi-label">Failures</div>
@@ -473,6 +526,17 @@ def _dashboard_html() -> str:
       <div class="card">
         <h3>Recent Events</h3>
         <div id="logs" class="logs">No data yet.</div>
+      </div>
+    </section>
+
+    <section class="layout" style="margin-top: 10px;">
+      <div class="card">
+        <h3>MCP Connectivity</h3>
+        <div id="mcp-status">No MCP data yet.</div>
+      </div>
+      <div class="card">
+        <h3>Live Worker Topology</h3>
+        <div id="worker-topology" class="topology">No running workers.</div>
       </div>
     </section>
 
@@ -615,12 +679,65 @@ def _dashboard_html() -> str:
     }
 
     function renderLogs(logs) {
+      const el = document.getElementById("logs");
       const html = (logs || []).map((l) => {
         const level = String(l.level || "info").toLowerCase();
         const cls = level === "error" ? "bad" : (level === "warning" ? "warn" : "ok");
         return "<div class='log-line'><span class='" + cls + "'>" + esc(level.toUpperCase()) + "</span> " + esc(l.event || "") + "</div>";
       });
-      document.getElementById("logs").innerHTML = html.length ? html.join("") : "No logs.";
+      el.innerHTML = html.length ? html.join("") : "No logs.";
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function renderMcp(servers) {
+      const mcp = servers || {};
+      const keys = Object.keys(mcp);
+      if (!keys.length) {
+        document.getElementById("mcp-status").innerHTML = "<div class='meta'>No MCP servers configured.</div>";
+        return;
+      }
+      const rows = keys.map((k) => {
+        const item = mcp[k] || {};
+        const name = item.name || k;
+        const status = String(item.status || "unknown").toLowerCase();
+        const toolCount = Number(item.tool_count || 0);
+        const cls = status === "connected" ? "ok" : (status === "error" ? "bad" : "warn");
+        return "<div class='log-line'>" +
+          "<strong>" + esc(name) + "</strong> " +
+          "<span class='" + cls + "'>" + esc(status.toUpperCase()) + "</span> " +
+          "<span class='mono'>(" + toolCount + " tools)</span>" +
+          "</div>";
+      });
+      document.getElementById("mcp-status").innerHTML = rows.join("");
+    }
+
+    function renderTopology(nodes) {
+      const items = Array.isArray(nodes) ? nodes.slice() : [];
+      items.sort((a, b) => {
+        const depthA = Number(a.spawn_depth || 0);
+        const depthB = Number(b.spawn_depth || 0);
+        if (depthA !== depthB) return depthA - depthB;
+        return String(a.updated_at || "").localeCompare(String(b.updated_at || ""));
+      });
+      if (!items.length) {
+        document.getElementById("worker-topology").innerHTML = "No running workers.";
+        return;
+      }
+      const html = items.map((w) => {
+        const depth = Math.max(0, Number(w.spawn_depth || 0));
+        const left = Math.min(depth * 16, 64);
+        const parent = w.parent_worker_id ? ("child of " + String(w.parent_worker_id).slice(0, 8)) : "root worker";
+        const wid = String(w.id || "");
+        const shortId = wid.includes("-") ? wid.split("-")[0] : wid.slice(0, 8);
+        return "<div class='topo-row' style='margin-left:" + left + "px'>" +
+          "<div class='topo-head'>" +
+          "<span class='topo-id'>" + esc(shortId) + "</span>" +
+          "<span class='topo-badge'><span class='pulse'></span>" + esc(parent) + "</span>" +
+          "</div>" +
+          "<div class='topo-task'>" + esc(w.task || "") + "</div>" +
+          "</div>";
+      });
+      document.getElementById("worker-topology").innerHTML = html.join("");
     }
 
     async function runOnce() {
@@ -639,12 +756,18 @@ def _dashboard_html() -> str:
 
         setChip("chip-channel", "Channel " + (data.system.active_channel || "-"));
         setChip("chip-uptime", "Uptime " + (data.system.uptime || "N/A"));
-        setChip("chip-spawned", "24h spawned " + String(data.workers.spawned_24h || 0));
+        setChip(
+          "chip-spawned",
+          "24h spawned " + String(data.workers.spawned_24h || 0) +
+          " | subworkers " + String(data.workers.subworkers_running || 0)
+        );
         setChip("chip-completed", "completed " + String(data.workers.completed || 0));
         setChip("chip-telegram", "telegram queues " + String(data.queues.telegram_queues || 0));
 
         renderWorkers(data.workers.recent || []);
         renderLogs(data.logs || []);
+        renderMcp((data.connectivity || {}).mcp_servers || {});
+        renderTopology(data.workers.topology || []);
         updateChartPoint(data);
 
         document.getElementById("meta").textContent =
