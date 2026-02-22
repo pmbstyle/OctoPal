@@ -6,6 +6,7 @@ Queen creates tasks -> Runtime looks up worker template -> Launches agent worker
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import shutil
@@ -222,6 +223,9 @@ class WorkerRuntime:
                     correlation_id=spec.id,
                     data={"attempt": attempts, "max_attempts": max_attempts},
                 )
+                stderr_task: asyncio.Task[None] | None = None
+                if process.stderr is not None:
+                    stderr_task = asyncio.create_task(self._read_stderr_loop(spec.id, process.stderr))
 
                 try:
                     result = await asyncio.wait_for(
@@ -249,6 +253,10 @@ class WorkerRuntime:
                         continue
                     raise
                 finally:
+                    if stderr_task is not None:
+                        stderr_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await stderr_task
                     self._running.pop(spec.id, None)
 
             if result is None:
@@ -704,6 +712,17 @@ class WorkerRuntime:
         else:
             # Default to debug for unknown non-JSON output to avoid log noise
             logger.debug("Worker output (non-JSON): %s", clean_text)
+
+    async def _read_stderr_loop(self, worker_id: str, stderr: asyncio.StreamReader) -> None:
+        """Read worker stderr logs without affecting stdout JSON protocol parsing."""
+        while True:
+            line = await stderr.readline()
+            if not line:
+                break
+            text = line.decode("utf-8", errors="replace").strip()
+            if not text:
+                continue
+            logger.warning("Worker stderr: id=%s %s", worker_id, text)
 
 
 
