@@ -407,8 +407,13 @@ def _dashboard_html() -> str:
     .bad { color: var(--rose); }
     .layout {
       display: grid;
-      grid-template-columns: 1.5fr 1fr;
+      grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
       gap: 10px;
+    }
+    .layout > * { min-width: 0; }
+    .layout.mcp-topology {
+      grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+      align-items: start;
     }
     .card {
       background: var(--panel);
@@ -416,6 +421,7 @@ def _dashboard_html() -> str:
       border-radius: 16px;
       padding: 14px;
       box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2);
+      overflow: hidden;
     }
     .card h3 { margin: 0 0 10px; font-size: 15px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
     .chart-wrap { height: 230px; }
@@ -427,7 +433,7 @@ def _dashboard_html() -> str:
     .workers { max-height: 310px; overflow: auto; }
     .logs { max-height: 270px; overflow: auto; }
     .log-line { border-bottom: 1px dashed rgba(37, 50, 77, 0.75); padding: 8px 2px; font-size: 13px; line-height: 1.35; }
-    .topology { max-height: 260px; overflow: auto; display: grid; gap: 8px; }
+    .topology { max-height: 190px; overflow: auto; display: grid; gap: 8px; }
     .topo-row {
       border: 1px solid rgba(37, 50, 77, 0.75);
       border-radius: 12px;
@@ -436,7 +442,17 @@ def _dashboard_html() -> str:
     }
     .topo-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 12px; }
     .topo-id { font-family: "JetBrains Mono", monospace; color: #c7d2fe; }
-    .topo-task { margin-top: 6px; font-size: 13px; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .topo-task {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--ink);
+      white-space: normal;
+      word-break: break-word;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
     .topo-badge {
       display: inline-flex;
       align-items: center;
@@ -457,6 +473,12 @@ def _dashboard_html() -> str:
     }
     .meta { margin-top: 10px; color: var(--muted); font-size: 12px; font-family: "JetBrains Mono", monospace; }
     .err { color: var(--rose); margin-top: 8px; font-size: 13px; min-height: 1.1em; }
+    .workers table { table-layout: fixed; }
+    .workers th:nth-child(1), .workers td:nth-child(1) { width: 14%; }
+    .workers th:nth-child(2), .workers td:nth-child(2) { width: 8%; }
+    .workers th:nth-child(3), .workers td:nth-child(3) { width: 46%; word-break: break-word; }
+    .workers th:nth-child(4), .workers td:nth-child(4) { width: 12%; }
+    .workers th:nth-child(5), .workers td:nth-child(5) { width: 20%; word-break: break-word; }
     @keyframes lift { to { transform: translateY(0); opacity: 1; } }
     @keyframes pulse {
       0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.8); }
@@ -529,7 +551,7 @@ def _dashboard_html() -> str:
       </div>
     </section>
 
-    <section class="layout" style="margin-top: 10px;">
+    <section class="layout mcp-topology" style="margin-top: 10px;">
       <div class="card">
         <h3>MCP Connectivity</h3>
         <div id="mcp-status">No MCP data yet.</div>
@@ -667,10 +689,12 @@ def _dashboard_html() -> str:
     function renderWorkers(workers) {
       const rows = (workers || []).map((w) => {
         const lastTool = (Array.isArray(w.tools_used) && w.tools_used.length > 0) ? w.tools_used[w.tools_used.length - 1] : "-";
+        const taskRaw = String(w.task || "");
+        const taskShort = taskRaw.length > 220 ? (taskRaw.slice(0, 217) + "...") : taskRaw;
         return "<tr>" +
           "<td class='mono'>" + esc(w.id) + "</td>" +
           "<td class='" + statusClass(w.status) + "'><strong>" + esc(w.status) + "</strong></td>" +
-          "<td>" + esc(w.task) + "</td>" +
+          "<td title='" + esc(taskRaw) + "'>" + esc(taskShort) + "</td>" +
           "<td class='mono'>" + esc(lastTool) + "</td>" +
           "<td class='mono'>" + esc(w.updated_at) + "</td>" +
           "</tr>";
