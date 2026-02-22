@@ -4,10 +4,12 @@ import asyncio
 import hashlib
 import json
 import re
+from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from broodmind.tools.registry import ToolSpec
+from broodmind.utils import utc_now
 
 if TYPE_CHECKING:
     from broodmind.queen.core import Queen
@@ -898,6 +900,7 @@ def _tool_get_worker_status(args: dict[str, object], ctx: dict[str, object]) -> 
             "worker_id": worker_id,
             "message": "Worker not found. It may be from an old conversation or never existed."
         }, ensure_ascii=False)
+    worker = _reconcile_stale_worker_status(queen, worker)
 
     return json.dumps({
         "status": worker.status,
@@ -919,6 +922,7 @@ def _tool_list_active_workers(args: dict[str, object], ctx: dict[str, object]) -
     older_than_minutes = int(args.get("older_than_minutes") or 10)
 
     workers = queen.store.get_active_workers(older_than_minutes=older_than_minutes)
+    workers = _reconcile_stale_active_workers(queen, workers, older_than_minutes=older_than_minutes)
     worker_list = []
     for w in workers:
         worker_list.append({
@@ -939,6 +943,50 @@ def _tool_list_active_workers(args: dict[str, object], ctx: dict[str, object]) -
         "count": len(worker_list),
         "workers": worker_list,
     }, ensure_ascii=False)
+
+
+def _reconcile_stale_worker_status(queen: Queen, worker: Any) -> Any:
+    runtime = getattr(queen, "runtime", None)
+    if not runtime or not hasattr(runtime, "is_worker_running"):
+        return worker
+    if worker.status not in {"started", "running"}:
+        return worker
+    # Small grace window avoids false stale marks during process launch transitions.
+    if worker.updated_at >= (utc_now() - timedelta(minutes=2)):
+        return worker
+    if runtime.is_worker_running(worker.id):
+        return worker
+    queen.store.update_worker_status(worker.id, "stopped")
+    queen.store.update_worker_result(
+        worker.id,
+        error="Worker process not found in runtime; stale running state reconciled.",
+    )
+    refreshed = queen.store.get_worker(worker.id)
+    return refreshed or worker
+
+
+def _reconcile_stale_active_workers(queen: Queen, workers: list[Any], older_than_minutes: int) -> list[Any]:
+    stale_ids: list[str] = []
+    runtime = getattr(queen, "runtime", None)
+    if not runtime or not hasattr(runtime, "is_worker_running"):
+        return workers
+    grace_cutoff = utc_now() - timedelta(minutes=2)
+    for worker in workers:
+        if worker.status not in {"started", "running"}:
+            continue
+        if worker.updated_at >= grace_cutoff:
+            continue
+        if runtime.is_worker_running(worker.id):
+            continue
+        queen.store.update_worker_status(worker.id, "stopped")
+        queen.store.update_worker_result(
+            worker.id,
+            error="Worker process not found in runtime; stale running state reconciled.",
+        )
+        stale_ids.append(worker.id)
+    if not stale_ids:
+        return workers
+    return queen.store.get_active_workers(older_than_minutes=older_than_minutes)
 
 
 def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> str:

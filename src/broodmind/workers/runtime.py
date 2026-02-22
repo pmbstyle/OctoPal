@@ -327,6 +327,21 @@ class WorkerRuntime:
         """Stop a running worker."""
         process = self._running.get(worker_id)
         if not process:
+            worker = await asyncio.to_thread(self.store.get_worker, worker_id)
+            if worker and worker.status in {"started", "running"}:
+                await asyncio.to_thread(self.store.update_worker_status, worker_id, "stopped")
+                await asyncio.to_thread(
+                    self.store.update_worker_result,
+                    worker_id,
+                    error="Worker process not found in runtime; stale running state reconciled.",
+                )
+                await self._append_audit(
+                    "worker_stopped",
+                    level="warning",
+                    correlation_id=worker_id,
+                    data={"reason": "stale_record_reconciled"},
+                )
+                return True
             return False
         try:
             process.kill()
@@ -340,6 +355,13 @@ class WorkerRuntime:
             correlation_id=worker_id,
         )
         return True
+
+    def is_worker_running(self, worker_id: str) -> bool:
+        """Return True if worker process is currently tracked as live in this runtime."""
+        process = self._running.get(worker_id)
+        if not process:
+            return False
+        return process.returncode is None
 
     async def _write_to_worker(self, process: asyncio.subprocess.Process, payload: dict[str, Any]) -> None:
         """Write a JSON message to the worker's stdin."""
