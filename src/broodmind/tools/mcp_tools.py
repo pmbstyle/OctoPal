@@ -100,6 +100,23 @@ def mcp_list(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
 
     return json.dumps({"connected_servers": servers}, indent=2)
 
+
+def mcp_status(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+    """List status for all known MCP servers, including disconnected/error states."""
+    queen = ctx.get("queen")
+    if not queen or not queen.mcp_manager:
+        return "Error: MCP Manager not initialized."
+
+    statuses = queen.mcp_manager.get_server_statuses()
+    return json.dumps(
+        {
+            "servers": statuses,
+            "connected_count": len(queen.mcp_manager.sessions),
+            "known_count": len(statuses),
+        },
+        indent=2,
+    )
+
 async def mcp_call(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     """Call an MCP tool on a specific server."""
     queen = ctx.get("queen")
@@ -177,6 +194,13 @@ def get_mcp_mgmt_tools() -> list[ToolSpec]:
             parameters={"type": "object", "properties": {}},
             permission="self_control",
             handler=mcp_list,
+        ),
+        ToolSpec(
+            name="mcp_status",
+            description="Show status for all known MCP servers, including connected/error/disconnected states.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="self_control",
+            handler=mcp_status,
         ),
         ToolSpec(
             name="mcp_call",
