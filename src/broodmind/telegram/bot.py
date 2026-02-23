@@ -18,6 +18,7 @@ from broodmind.scheduler.service import SchedulerService
 from broodmind.store.sqlite import SQLiteStore
 from broodmind.telegram.approvals import ApprovalManager
 from broodmind.telegram.handlers import register_handlers
+from broodmind.tools.skills_tools import ensure_skills_layout
 from broodmind.utils import is_heartbeat_ok, is_control_response
 from broodmind.workers.launcher_factory import build_launcher
 from broodmind.workers.runtime import WorkerRuntime
@@ -27,6 +28,8 @@ logger = structlog.get_logger(__name__)
 
 def build_dispatcher(settings: Settings, bot: Bot) -> Dispatcher:
     os.environ.setdefault("BROODMIND_STATE_DIR", str(settings.state_dir))
+    os.environ.setdefault("BROODMIND_WORKSPACE_DIR", str(settings.workspace_dir))
+    ensure_skills_layout(settings.workspace_dir)
 
     # Use unified LiteLLM provider (supports both OpenRouter and z.ai)
     provider = LiteLLMProvider(settings)

@@ -6,6 +6,7 @@ from broodmind.config.settings import Settings
 from broodmind.gateway.dashboard import register_dashboard_routes
 from broodmind.gateway.ws import register_ws_routes
 from broodmind.queen.core import Queen
+from broodmind.tools.skills_tools import ensure_skills_layout
 
 def build_app(settings: Settings, queen: Queen | None = None) -> FastAPI:
     """Build the FastAPI app for the BroodMind Gateway.
@@ -13,6 +14,8 @@ def build_app(settings: Settings, queen: Queen | None = None) -> FastAPI:
     It reuses the shared Queen instance for WebSocket communication.
     """
     os.environ.setdefault("BROODMIND_STATE_DIR", str(settings.state_dir))
+    os.environ.setdefault("BROODMIND_WORKSPACE_DIR", str(settings.workspace_dir))
+    ensure_skills_layout(settings.workspace_dir)
     app = FastAPI(title="BroodMind Gateway")
     
     app.state.settings = settings

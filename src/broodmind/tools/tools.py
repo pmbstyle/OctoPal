@@ -15,6 +15,7 @@ from broodmind.tools.exec_run import exec_run
 from broodmind.tools.fetch_plan import fetch_plan_tool
 from broodmind.tools.filesystem import fs_delete, fs_list, fs_move, fs_read, fs_write
 from broodmind.tools.llm_task import run_llm_subtask
+from broodmind.tools.skills_tools import get_registered_skill_tools, get_skill_management_tools
 from broodmind.tools.ops_tools import (
     artifact_collect,
     config_audit,
@@ -742,6 +743,8 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             handler=lambda args, ctx: self_control(args, ctx),
         ),
     ]
+    tools.extend(get_skill_management_tools())
+    tools.extend(get_registered_skill_tools())
     tools.extend(get_worker_tools())
     tools.extend(get_mcp_mgmt_tools())
     if mcp_manager:
