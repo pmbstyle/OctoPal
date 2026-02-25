@@ -123,6 +123,25 @@ uv run broodmind logs --follow
 - Runs a verification pass before final user-facing responses
 - Calls tools directly or delegates to workers
 - Synthesizes final user-facing responses
+- Supports self-directed context compaction/reset via `queen_context_reset` with structured handoff
+
+#### Context Reset Flow
+
+- Tool: `queen_context_reset` (`mode=soft|hard`)
+- Persists handoff and reset history:
+  - `workspace/memory/handoff.md`
+  - `workspace/memory/handoff.json`
+  - `workspace/memory/context-audit.md`
+  - `workspace/memory/context-audit.jsonl`
+- `soft` reset: clears chat memory context and continues with bootstrap + wake-up handoff
+- `hard` reset: same as soft + resets stored bootstrap hash for chat state
+- Guardrails:
+  - `hard` requires `confirm=true`
+  - low handoff confidence (`<0.7`) requires `confirm=true`
+  - repeated resets without progress trigger confirmation (`N=2`)
+- After reset, the next turn gets a wake-up directive to choose mode: `continue / clarify / replan`
+- Heartbeat now includes context-health metrics:
+  - `context_size_estimate`, `repetition_score`, `error_streak`, `no_progress_turns`, `resets_since_progress`, `overload_score`
 
 ### Workers
 
@@ -145,6 +164,7 @@ Examples:
 - Web: `web_search`, `web_fetch`
 - Execution: `exec_run`
 - Worker management: `list_workers`, `start_worker`, `start_child_worker`, `start_workers_parallel`, `synthesize_worker_results`, `get_worker_status`, `get_worker_result`
+- Self-management: `queen_context_reset`, `self_control`
 
 `start_worker` supports worker specialization routing:
 

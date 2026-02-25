@@ -39,3 +39,16 @@
 
 - Copy `.env.example` to `.env` and keep secrets out of version control.
 - Key settings include `TELEGRAM_BOT_TOKEN`, provider API keys, and `BROODMIND_STATE_DIR` paths.
+
+## Queen Context Reset Policy
+
+- The Queen can invoke `queen_context_reset` to compact/reset overloaded chat context.
+- Preferred default is `mode=soft` with structured handoff fields (`goal_now`, `done`, `open_threads`, `critical_constraints`, `next_step`).
+- Persist reset artifacts in workspace memory:
+  - `memory/handoff.md`, `memory/handoff.json`
+  - `memory/context-audit.md`, `memory/context-audit.jsonl`
+- Confirmation is required when:
+  - `mode=hard`
+  - `confidence < 0.7`
+  - repeated resets occur without progress (`N=2`)
+- After reset, force a wake-up choice (`continue / clarify / replan`) before major actions.
