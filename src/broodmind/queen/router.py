@@ -45,6 +45,9 @@ async def route_or_reply(
     await queen.set_thinking(True)
     try:
         is_ws = getattr(queen, "is_ws_active", False)
+        wake_notice = ""
+        if hasattr(queen, "consume_context_wakeup"):
+            wake_notice = str(queen.consume_context_wakeup(chat_id) or "")
         messages = await build_queen_prompt(
             store=queen.store, 
             memory=memory, 
@@ -53,7 +56,8 @@ async def route_or_reply(
             chat_id=chat_id, 
             bootstrap_context=bootstrap_context,
             is_ws=is_ws,
-            images=images
+            images=images,
+            wake_notice=wake_notice,
         )
         _log_system_prompt(messages, "route")
         

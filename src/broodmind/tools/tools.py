@@ -727,6 +727,32 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             handler=lambda args, ctx: rollback_release(args, ctx),
         ),
         ToolSpec(
+            name="queen_context_reset",
+            description="Compact or reset Queen chat context with a structured handoff and wake-up directive.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "mode": {"type": "string", "enum": ["soft", "hard"], "description": "soft keeps bootstrap, hard also resets bootstrap hash."},
+                    "reason": {"type": "string", "description": "Why context reset is needed now."},
+                    "goal_now": {"type": "string", "description": "Primary goal to keep after reset."},
+                    "done": {"type": "array", "items": {"type": "string"}, "description": "Completed items worth preserving."},
+                    "open_threads": {"type": "array", "items": {"type": "string"}, "description": "Open threads still unresolved."},
+                    "critical_constraints": {"type": "array", "items": {"type": "string"}, "description": "Non-negotiable constraints."},
+                    "next_step": {"type": "string", "description": "First step after wake-up."},
+                    "current_interest": {"type": "string", "description": "Current focus area."},
+                    "pending_human_input": {"type": "string", "description": "Human input currently needed, if any."},
+                    "cognitive_state": {"type": "string", "enum": ["focused", "fatigued", "frustrated", "energized"]},
+                    "confidence": {"type": "number", "description": "Confidence in handoff quality (0-1)."},
+                    "confirm": {"type": "boolean", "description": "Required for hard reset or guarded retries."},
+                },
+                "required": ["reason"],
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=_tool_queen_context_reset,
+            is_async=True,
+        ),
+        ToolSpec(
             name="self_control",
             description="Request supervised self actions (restart/shutdown/reload) or check action status.",
             parameters={
@@ -800,3 +826,12 @@ def _tool_schedule_task(args, ctx) -> str:
         },
         ensure_ascii=False,
     )
+
+
+async def _tool_queen_context_reset(args, ctx) -> str:
+    queen = ctx.get("queen")
+    chat_id = int(ctx.get("chat_id", 0) or 0)
+    if queen is None or not hasattr(queen, "request_context_reset"):
+        return json.dumps({"status": "error", "message": "queen context reset is unavailable"}, ensure_ascii=False)
+    result = await queen.request_context_reset(chat_id, args or {})
+    return json.dumps(result, ensure_ascii=False)

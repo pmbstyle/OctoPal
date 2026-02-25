@@ -94,8 +94,10 @@ async def _heartbeat_poker(queen: Queen, interval_seconds: int, chat_id: int):
         await asyncio.sleep(interval_seconds)
         logger.info("Triggering internal heartbeat for chat_id=%s", chat_id)
         try:
+            context_hint = await queen.build_heartbeat_context_hint(chat_id)
             heartbeat_prompt = (
-                "This is a heartbeat trigger. Use `check_schedule` to identify and execute any due tasks."
+                "This is a heartbeat trigger. Use `check_schedule` to identify and execute any due tasks.\n\n"
+                f"{context_hint}"
             )
             reply = await queen.handle_message(heartbeat_prompt, chat_id, show_typing=False)
             # Heartbeat replies are control-plane responses; don't send them to Telegram chat.

@@ -846,6 +846,41 @@ class SQLiteStore(Store):
         self._conn.commit()
         return deleted_count
 
+    def delete_memory_entries_by_chat(self, chat_id: int, keep_recent: int = 0) -> int:
+        safe_keep = max(0, int(keep_recent))
+        if safe_keep > 0:
+            cursor = self._conn.execute(
+                """
+                DELETE FROM memory_entries
+                WHERE chat_id = ?
+                  AND id NOT IN (
+                      SELECT id FROM memory_entries
+                      WHERE chat_id = ?
+                      ORDER BY id DESC
+                      LIMIT ?
+                  )
+                """,
+                (chat_id, chat_id, safe_keep),
+            )
+        else:
+            cursor = self._conn.execute(
+                "DELETE FROM memory_entries WHERE chat_id = ?",
+                (chat_id,),
+            )
+
+        deleted_count = cursor.rowcount
+        try:
+            self._conn.execute(
+                """
+                DELETE FROM memory_entries_fts
+                WHERE entry_uuid NOT IN (SELECT uuid FROM memory_entries)
+                """
+            )
+        except sqlite3.OperationalError:
+            pass
+        self._conn.commit()
+        return deleted_count
+
     def is_chat_bootstrapped(self, chat_id: int) -> bool:
         cursor = self._conn.execute(
             "SELECT bootstrapped_at, bootstrap_hash FROM chat_state WHERE chat_id = ?",

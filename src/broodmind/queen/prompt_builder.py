@@ -197,6 +197,7 @@ async def build_queen_prompt(
     bootstrap_context: str,
     is_ws: bool = False,
     images: list[str] | None = None,
+    wake_notice: str = "",
 ) -> list[Message]:
     """Assembles all the pieces into the final message list for the LLM."""
 
@@ -233,6 +234,17 @@ async def build_queen_prompt(
         messages.append(Message(role="system", content="\n".join(persona_prompt_lines)))
     if bootstrap_context:
         messages.append(Message(role="system", content=bootstrap_context))
+    if wake_notice.strip():
+        messages.append(
+            Message(
+                role="system",
+                content=(
+                    "Wake-up directive after context reset:\n"
+                    f"{wake_notice.strip()}\n"
+                    "Do not autopilot; first pick one mode: continue / clarify / replan."
+                ),
+            )
+        )
     messages.append(Message(role="system", content=datetime_prompt))
 
     if canon_context:

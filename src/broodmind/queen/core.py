@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -32,6 +33,7 @@ from broodmind.queen.router import (
 )
 from broodmind.runtime_metrics import update_component_gauges
 from broodmind.store.base import Store
+from broodmind.store.models import AuditEvent
 from broodmind.telegram.approvals import ApprovalManager
 from broodmind.utils import is_control_response, utc_now
 from broodmind.workers.contracts import TaskRequest, WorkerResult
@@ -43,6 +45,8 @@ _FOLLOWUP_TASKS: dict[int, asyncio.Task] = {}
 _INTERNAL_QUEUES: dict[int, asyncio.Queue] = {}
 _INTERNAL_TASKS: dict[int, asyncio.Task] = {}
 _QUEUE_IDLE_TIMEOUT_SECONDS = 300.0
+_RESET_CONFIRM_THRESHOLD = 2
+_RESET_CONFIDENCE_MIN = 0.7
 
 
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
@@ -238,6 +242,13 @@ class Queen:
     _lineage_children_total: dict[str, int] | None = None
     _lineage_children_active: dict[str, set[str]] | None = None
     _housekeeping_cfg: dict[str, int] | None = None
+    _pending_wakeup_by_chat: dict[int, str] | None = None
+    _context_health_by_chat: dict[int, dict[str, Any]] | None = None
+    _last_reply_norm_by_chat: dict[int, str] | None = None
+    _no_progress_turns_by_chat: dict[int, int] | None = None
+    _progress_revision_by_chat: dict[int, int] | None = None
+    _reset_streak_without_progress_by_chat: dict[int, int] | None = None
+    _last_reset_progress_revision_by_chat: dict[int, int] | None = None
 
     def __post_init__(self):
         if self._recent_tasks is None:
@@ -254,6 +265,20 @@ class Queen:
             self._lineage_children_total = {}
         if self._lineage_children_active is None:
             self._lineage_children_active = {}
+        if self._pending_wakeup_by_chat is None:
+            self._pending_wakeup_by_chat = {}
+        if self._context_health_by_chat is None:
+            self._context_health_by_chat = {}
+        if self._last_reply_norm_by_chat is None:
+            self._last_reply_norm_by_chat = {}
+        if self._no_progress_turns_by_chat is None:
+            self._no_progress_turns_by_chat = {}
+        if self._progress_revision_by_chat is None:
+            self._progress_revision_by_chat = {}
+        if self._reset_streak_without_progress_by_chat is None:
+            self._reset_streak_without_progress_by_chat = {}
+        if self._last_reset_progress_revision_by_chat is None:
+            self._last_reset_progress_revision_by_chat = {}
         if self._spawn_limits is None:
             max_depth = _env_int("BROODMIND_WORKER_MAX_SPAWN_DEPTH", 2, minimum=0)
             max_total = _env_int("BROODMIND_WORKER_MAX_CHILDREN_TOTAL", 20, minimum=1)
@@ -528,6 +553,164 @@ class Queen:
         finally:
             self.internal_send = original_send
 
+    def consume_context_wakeup(self, chat_id: int) -> str:
+        pending = self._pending_wakeup_by_chat or {}
+        return str(pending.pop(chat_id, "") or "")
+
+    async def get_context_health_snapshot(self, chat_id: int) -> dict[str, Any]:
+        recent_entries = await asyncio.to_thread(self.store.list_memory_entries_by_chat, chat_id, 120)
+        entry_count = len(recent_entries)
+        context_size_estimate = sum(len(e.content or "") for e in recent_entries)
+        repetition_score = _estimate_repetition_score(recent_entries)
+        error_streak = _estimate_error_streak(recent_entries)
+        no_progress_turns = int((self._no_progress_turns_by_chat or {}).get(chat_id, 0))
+        resets_since_progress = int((self._reset_streak_without_progress_by_chat or {}).get(chat_id, 0))
+        overload_score = min(
+            1.0,
+            (context_size_estimate / 30000.0)
+            + (repetition_score * 0.9)
+            + (min(6, error_streak) / 10.0)
+            + (min(8, no_progress_turns) / 12.0),
+        )
+        snapshot = {
+            "chat_id": chat_id,
+            "entry_count": entry_count,
+            "context_size_estimate": context_size_estimate,
+            "repetition_score": round(repetition_score, 3),
+            "error_streak": error_streak,
+            "no_progress_turns": no_progress_turns,
+            "resets_since_progress": resets_since_progress,
+            "overload_score": round(overload_score, 3),
+            "updated_at": utc_now().isoformat(),
+        }
+        self._context_health_by_chat[chat_id] = snapshot
+        return snapshot
+
+    async def build_heartbeat_context_hint(self, chat_id: int) -> str:
+        snap = await self.get_context_health_snapshot(chat_id)
+        return (
+            "Context health metrics:\n"
+            f"- context_size_estimate={snap['context_size_estimate']}\n"
+            f"- repetition_score={snap['repetition_score']}\n"
+            f"- error_streak={snap['error_streak']}\n"
+            f"- no_progress_turns={snap['no_progress_turns']}\n"
+            f"- resets_since_progress={snap['resets_since_progress']}\n"
+            f"- overload_score={snap['overload_score']}\n"
+            "If overloaded, you may call `queen_context_reset` with mode='soft' and a concise handoff."
+        )
+
+    def _register_progress(self, chat_id: int, reason: str) -> None:
+        self._no_progress_turns_by_chat[chat_id] = 0
+        self._reset_streak_without_progress_by_chat[chat_id] = 0
+        self._progress_revision_by_chat[chat_id] = int(self._progress_revision_by_chat.get(chat_id, 0)) + 1
+        logger.debug("Registered progress", chat_id=chat_id, reason=reason)
+
+    async def request_context_reset(self, chat_id: int, args: dict[str, Any]) -> dict[str, Any]:
+        mode = str(args.get("mode", "soft") or "soft").strip().lower()
+        if mode not in {"soft", "hard"}:
+            mode = "soft"
+
+        reason = str(args.get("reason", "") or "").strip() or "context overloaded"
+        confidence = _coerce_float(args.get("confidence"), default=0.8)
+        confirm = bool(args.get("confirm", False))
+        health = await self.get_context_health_snapshot(chat_id)
+
+        progress_rev = int(self._progress_revision_by_chat.get(chat_id, 0))
+        last_reset_rev = int(self._last_reset_progress_revision_by_chat.get(chat_id, -1))
+        no_progress_since_last_reset = progress_rev <= last_reset_rev
+        current_streak = int(self._reset_streak_without_progress_by_chat.get(chat_id, 0))
+        proposed_streak = (current_streak + 1) if no_progress_since_last_reset else 1
+
+        requires_confirm_reasons: list[str] = []
+        if mode == "hard":
+            requires_confirm_reasons.append("hard_reset")
+        if confidence < _RESET_CONFIDENCE_MIN:
+            requires_confirm_reasons.append("low_confidence_handoff")
+        if proposed_streak >= _RESET_CONFIRM_THRESHOLD:
+            requires_confirm_reasons.append("repeated_reset_without_progress")
+        if requires_confirm_reasons and not confirm:
+            return {
+                "status": "needs_confirmation",
+                "mode": mode,
+                "reason": reason,
+                "confidence": confidence,
+                "requires_confirmation_for": requires_confirm_reasons,
+                "message": (
+                    "Reset blocked until confirmation. Re-run queen_context_reset with confirm=true "
+                    "to proceed."
+                ),
+                "health": health,
+            }
+
+        handoff = {
+            "chat_id": chat_id,
+            "created_at": utc_now().isoformat(),
+            "mode": mode,
+            "reason": reason,
+            "confidence": confidence,
+            "goal_now": str(args.get("goal_now", "") or "").strip(),
+            "done": _normalize_string_list(args.get("done")),
+            "open_threads": _normalize_string_list(args.get("open_threads")),
+            "critical_constraints": _normalize_string_list(args.get("critical_constraints")),
+            "next_step": str(args.get("next_step", "") or "").strip(),
+            "current_interest": str(args.get("current_interest", "") or "").strip(),
+            "pending_human_input": str(args.get("pending_human_input", "") or "").strip(),
+            "cognitive_state": str(args.get("cognitive_state", "") or "focused").strip().lower(),
+            "health_snapshot": health,
+        }
+        if not handoff["goal_now"]:
+            handoff["goal_now"] = "Continue current task with focused context."
+        if not handoff["next_step"]:
+            handoff["next_step"] = "Review handoff and choose: continue, clarify, or replan."
+
+        workspace_dir = Path(os.getenv("BROODMIND_WORKSPACE_DIR", "workspace")).resolve()
+        file_info = await asyncio.to_thread(_persist_context_reset_files, workspace_dir, handoff)
+
+        deleted_entries = await asyncio.to_thread(
+            self.store.delete_memory_entries_by_chat,
+            chat_id,
+            0,
+        )
+        if mode == "hard":
+            await asyncio.to_thread(self.store.set_chat_bootstrap_hash, chat_id, "", utc_now())
+
+        self._last_reply_norm_by_chat.pop(chat_id, None)
+        self._last_reset_progress_revision_by_chat[chat_id] = progress_rev
+        self._reset_streak_without_progress_by_chat[chat_id] = proposed_streak
+        self._pending_wakeup_by_chat[chat_id] = _build_wakeup_message(handoff, file_info["handoff_md"])
+        self._no_progress_turns_by_chat[chat_id] = 0
+
+        await asyncio.to_thread(
+            self.store.append_audit,
+            AuditEvent(
+                id=str(uuid4()),
+                ts=utc_now(),
+                level="info",
+                event_type="queen.context_reset",
+                data={
+                    "chat_id": chat_id,
+                    "mode": mode,
+                    "reason": reason,
+                    "confidence": confidence,
+                    "deleted_entries": deleted_entries,
+                    "requires_confirmation_for": requires_confirm_reasons,
+                    "health_snapshot": health,
+                    "files": file_info,
+                },
+            ),
+        )
+
+        return {
+            "status": "reset_complete",
+            "mode": mode,
+            "deleted_entries": deleted_entries,
+            "handoff": handoff,
+            "files": file_info,
+            "health_before": health,
+            "requires_confirmation_for": requires_confirm_reasons,
+            "message": "Context reset completed. Wake-up handoff is queued for the next turn.",
+        }
+
     async def handle_message(
         self,
         text: str,
@@ -575,6 +758,14 @@ class Queen:
             )
         logger.info("Queen response ready")
         await self.memory.add_message("assistant", reply_text, {"chat_id": chat_id})
+        reply_norm = _normalize_compact(reply_text)
+        prior_reply = self._last_reply_norm_by_chat.get(chat_id, "")
+        if _is_progress_reply(reply_norm, prior_reply):
+            self._register_progress(chat_id, "assistant_response")
+        else:
+            self._no_progress_turns_by_chat[chat_id] = int(self._no_progress_turns_by_chat.get(chat_id, 0)) + 1
+        self._last_reply_norm_by_chat[chat_id] = reply_norm
+        await self.get_context_health_snapshot(chat_id)
         if bootstrap_context.hash:
             await asyncio.to_thread(
                 self.store.set_chat_bootstrap_hash, chat_id, bootstrap_context.hash, utc_now()
@@ -703,6 +894,8 @@ class Queen:
                             run_id=run_id,
                             worker_status=getattr(worker_record, "status", None),
                         )
+                if worker_record and worker_record.status == "completed":
+                    self._register_progress(chat_id, "worker_completed")
                 await self._emit_progress(
                     chat_id,
                     "completed",
@@ -831,6 +1024,181 @@ class Queen:
             await sender(chat_id, state, text, meta or {})
         except Exception:
             logger.debug("Progress emit failed", exc_info=True)
+
+
+def _normalize_string_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        items = [chunk.strip() for chunk in value.split("\n")]
+    else:
+        return []
+    normalized: list[str] = []
+    for item in items:
+        text = str(item or "").strip()
+        if text:
+            normalized.append(text)
+    return normalized[:20]
+
+
+def _coerce_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _normalize_compact(value: str) -> str:
+    lowered = (value or "").strip().lower()
+    lowered = re.sub(r"\s+", " ", lowered)
+    return lowered
+
+
+def _is_progress_reply(current_norm: str, prior_norm: str) -> bool:
+    if not current_norm:
+        return False
+    if current_norm == prior_norm:
+        return False
+    if len(current_norm) < 24:
+        return False
+    stalled_markers = (
+        "please try again",
+        "i cannot",
+        "i can't",
+        "unable to",
+        "still working on it",
+        "no update",
+    )
+    if any(marker in current_norm for marker in stalled_markers):
+        return False
+    return True
+
+
+def _estimate_repetition_score(entries: list[Any]) -> float:
+    if not entries:
+        return 0.0
+    sample = entries[:40]
+    values = [_normalize_compact(getattr(entry, "content", "")) for entry in sample]
+    values = [v for v in values if v]
+    if not values:
+        return 0.0
+    unique = len(set(values))
+    return max(0.0, min(1.0, 1.0 - (unique / max(1, len(values)))))
+
+
+def _estimate_error_streak(entries: list[Any]) -> int:
+    streak = 0
+    for entry in entries[:20]:
+        text = _normalize_compact(getattr(entry, "content", ""))
+        if not text:
+            continue
+        if any(token in text for token in ("error", "failed", "exception", "unable", "timeout")):
+            streak += 1
+            continue
+        break
+    return streak
+
+
+def _persist_context_reset_files(workspace_dir: Path, handoff: dict[str, Any]) -> dict[str, str]:
+    memory_dir = workspace_dir / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    handoff_json_path = memory_dir / "handoff.json"
+    handoff_md_path = memory_dir / "handoff.md"
+    audit_md_path = memory_dir / "context-audit.md"
+    audit_jsonl_path = memory_dir / "context-audit.jsonl"
+
+    handoff_json_path.write_text(json.dumps(handoff, ensure_ascii=False, indent=2), encoding="utf-8")
+    handoff_md_path.write_text(_render_handoff_markdown(handoff), encoding="utf-8")
+    _append_context_audit_markdown(audit_md_path, handoff)
+    with audit_jsonl_path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(handoff, ensure_ascii=False) + "\n")
+
+    return {
+        "handoff_json": str(handoff_json_path),
+        "handoff_md": str(handoff_md_path),
+        "audit_md": str(audit_md_path),
+        "audit_jsonl": str(audit_jsonl_path),
+    }
+
+
+def _render_handoff_markdown(handoff: dict[str, Any]) -> str:
+    lines = [
+        "# Queen Handoff",
+        "",
+        f"- created_at: {handoff.get('created_at', '')}",
+        f"- mode: {handoff.get('mode', 'soft')}",
+        f"- reason: {handoff.get('reason', '')}",
+        f"- confidence: {handoff.get('confidence', 0.0)}",
+        f"- cognitive_state: {handoff.get('cognitive_state', 'focused')}",
+        "",
+        "## Goal Now",
+        handoff.get("goal_now", "") or "-",
+        "",
+        "## Next Step",
+        handoff.get("next_step", "") or "-",
+        "",
+        "## Current Interest",
+        handoff.get("current_interest", "") or "-",
+        "",
+        "## Pending Human Input",
+        handoff.get("pending_human_input", "") or "-",
+        "",
+        "## Done",
+    ]
+    done = handoff.get("done") or []
+    lines.extend([f"- {item}" for item in done] or ["-"])
+    lines.extend(["", "## Open Threads"])
+    open_threads = handoff.get("open_threads") or []
+    lines.extend([f"- {item}" for item in open_threads] or ["-"])
+    lines.extend(["", "## Critical Constraints"])
+    constraints = handoff.get("critical_constraints") or []
+    lines.extend([f"- {item}" for item in constraints] or ["-"])
+    lines.extend(["", "## Health Snapshot"])
+    health = handoff.get("health_snapshot") or {}
+    for key in (
+        "context_size_estimate",
+        "repetition_score",
+        "error_streak",
+        "no_progress_turns",
+        "resets_since_progress",
+        "overload_score",
+    ):
+        lines.append(f"- {key}: {health.get(key, 0)}")
+    return "\n".join(lines).strip() + "\n"
+
+
+def _append_context_audit_markdown(path: Path, handoff: dict[str, Any]) -> None:
+    timestamp = str(handoff.get("created_at", ""))
+    mode = str(handoff.get("mode", "soft"))
+    reason = str(handoff.get("reason", ""))
+    confidence = str(handoff.get("confidence", ""))
+    health = handoff.get("health_snapshot") or {}
+    section = (
+        f"\n## {timestamp} | mode={mode}\n"
+        f"- reason: {reason}\n"
+        f"- confidence: {confidence}\n"
+        f"- context_size_estimate: {health.get('context_size_estimate', 0)}\n"
+        f"- repetition_score: {health.get('repetition_score', 0)}\n"
+        f"- no_progress_turns: {health.get('no_progress_turns', 0)}\n"
+        f"- overload_score: {health.get('overload_score', 0)}\n"
+    )
+    if path.exists():
+        existing = path.read_text(encoding="utf-8")
+    else:
+        existing = "# Context Reset Audit\n"
+    path.write_text(existing.rstrip() + section + "\n", encoding="utf-8")
+
+
+def _build_wakeup_message(handoff: dict[str, Any], handoff_path: str) -> str:
+    goal_now = str(handoff.get("goal_now", "") or "").strip()
+    next_step = str(handoff.get("next_step", "") or "").strip()
+    return (
+        "You woke up after a context reset.\n"
+        f"Handoff goal: {goal_now}\n"
+        f"Suggested next step: {next_step}\n"
+        f"Handoff file: {handoff_path}\n"
+        "Choose one mode now: continue / clarify / replan."
+    )
 
 
 @dataclass
