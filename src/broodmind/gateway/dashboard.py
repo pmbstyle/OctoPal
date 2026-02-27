@@ -641,7 +641,7 @@ def _dashboard_html() -> str:
 
     function highlightTaskPrefixes(text) {
       const source = String(text || "");
-      const parts = source.split(/(\[[^\]]+\])/g);
+      const parts = source.split(/(\\[[^\\]]+\\])/g);
       return parts.map((part) => {
         if (!part) return "";
         if (part.startsWith("[") && part.endsWith("]")) {
