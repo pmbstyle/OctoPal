@@ -9,9 +9,13 @@ from broodmind.worker_sdk.worker import Worker
 from broodmind.workers.agent_worker import (
     _auto_tune_max_steps,
     _classify_tool_error,
+    _detect_tool_loop,
     _execute_tool,
     _extract_mcp_identity,
+    _hash_tool_call,
+    _hash_tool_outcome,
     _parse_tool_arguments,
+    _tool_no_progress_streak,
 )
 from broodmind.workers.contracts import WorkerSpec
 from broodmind.workers.runtime import _call_mcp_with_name_fallback, _extract_mcp_tool_identity
@@ -179,3 +183,49 @@ def test_tool_error_classification() -> None:
 def test_auto_tune_max_steps_increases_for_web_and_mcp() -> None:
     tuned = _auto_tune_max_steps(8, ["web_search", "mcp_demo_read"], "Research worker")
     assert tuned > 8
+
+
+def test_tool_call_hash_is_stable_for_key_order() -> None:
+    h1 = _hash_tool_call("process", {"action": "poll", "id": 1})
+    h2 = _hash_tool_call("process", {"id": 1, "action": "poll"})
+    assert h1 == h2
+
+
+def test_tool_no_progress_streak_counts_same_outcome() -> None:
+    history = [
+        {"tool_name": "process", "args_hash": "a", "result_hash": "x"},
+        {"tool_name": "process", "args_hash": "a", "result_hash": "x"},
+        {"tool_name": "process", "args_hash": "a", "result_hash": "x"},
+    ]
+    count, latest = _tool_no_progress_streak(history, tool_name="process", args_hash="a")
+    assert count == 3
+    assert latest == "x"
+
+
+def test_detect_tool_loop_warning_and_critical_thresholds() -> None:
+    history_warning = [
+        {"tool_name": "process", "args_hash": "a", "result_hash": "x"} for _ in range(8)
+    ]
+    warning = _detect_tool_loop(history_warning, tool_name="process", args_hash="a")
+    assert warning is not None
+    assert warning["level"] == "warning"
+
+    history_critical = [
+        {"tool_name": "process", "args_hash": "a", "result_hash": "x"} for _ in range(12)
+    ]
+    critical = _detect_tool_loop(history_critical, tool_name="process", args_hash="a")
+    assert critical is not None
+    assert critical["level"] == "critical"
+
+
+def test_detect_tool_loop_global_circuit_breaker() -> None:
+    history = [{"tool_name": "any", "args_hash": str(i), "result_hash": str(i)} for i in range(30)]
+    state = _detect_tool_loop(history, tool_name="any", args_hash="29")
+    assert state is not None
+    assert state["detector"] == "global_circuit_breaker"
+
+
+def test_tool_outcome_hash_changes_on_error_state() -> None:
+    ok_hash = _hash_tool_outcome({"status": "ok"}, {"had_error": False, "timed_out": False})
+    err_hash = _hash_tool_outcome({"status": "ok"}, {"had_error": True, "timed_out": False})
+    assert ok_hash != err_hash

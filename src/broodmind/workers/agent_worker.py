@@ -13,6 +13,7 @@ import asyncio
 import inspect
 import json
 import random
+import hashlib
 import structlog
 import time
 import traceback
@@ -31,6 +32,9 @@ _MAX_TOOL_ITERS = 10
 _MAX_TOOL_RESULT_CHARS = 12_000
 _DEFAULT_TOOL_TIMEOUT_SECONDS = 60
 _DEFAULT_MAX_STEP_CAP = 30
+_TOOL_LOOP_WARNING_THRESHOLD = 8
+_TOOL_LOOP_CRITICAL_THRESHOLD = 12
+_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD = 30
 _TRANSIENT_ERROR_HINTS = (
     "timeout",
     "timed out",
@@ -97,6 +101,85 @@ _QUEEN_PROXY_TOOLS = {
     "update_worker_template",
     "delete_worker_template",
 }
+
+
+def _stable_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":"))
+    except Exception:
+        return repr(value)
+
+
+def _hash_tool_call(tool_name: str, params: Any) -> str:
+    payload = f"{(tool_name or '').strip().lower()}:{_stable_json(params)}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _hash_tool_outcome(result: Any, meta: dict[str, Any]) -> str:
+    payload = {
+        "result": result,
+        "timed_out": bool(meta.get("timed_out")),
+        "had_error": bool(meta.get("had_error")),
+    }
+    return hashlib.sha256(_stable_json(payload).encode("utf-8")).hexdigest()
+
+
+def _tool_no_progress_streak(
+    history: list[dict[str, str]],
+    *,
+    tool_name: str,
+    args_hash: str,
+) -> tuple[int, str | None]:
+    streak = 0
+    latest_result_hash: str | None = None
+    for record in reversed(history):
+        if record.get("tool_name") != tool_name or record.get("args_hash") != args_hash:
+            continue
+        record_result = record.get("result_hash")
+        if not record_result:
+            continue
+        if latest_result_hash is None:
+            latest_result_hash = record_result
+            streak = 1
+            continue
+        if record_result != latest_result_hash:
+            break
+        streak += 1
+    return streak, latest_result_hash
+
+
+def _detect_tool_loop(
+    history: list[dict[str, str]],
+    *,
+    tool_name: str,
+    args_hash: str,
+) -> dict[str, Any] | None:
+    if len(history) >= _TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD:
+        return {
+            "detector": "global_circuit_breaker",
+            "level": "critical",
+            "count": len(history),
+            "message": "Too many tool calls in one run without completion.",
+        }
+
+    streak, result_hash = _tool_no_progress_streak(history, tool_name=tool_name, args_hash=args_hash)
+    if result_hash is None:
+        return None
+    if streak >= _TOOL_LOOP_CRITICAL_THRESHOLD:
+        return {
+            "detector": "known_poll_no_progress",
+            "level": "critical",
+            "count": streak,
+            "message": f"Repeated '{tool_name}' calls with no progress.",
+        }
+    if streak >= _TOOL_LOOP_WARNING_THRESHOLD:
+        return {
+            "detector": "known_poll_no_progress",
+            "level": "warning",
+            "count": streak,
+            "message": f"Potential tool loop detected for '{tool_name}'.",
+        }
+    return None
 
 
 async def run_agent_worker(spec_path: str) -> None:
@@ -232,6 +315,7 @@ If you need clarification from the Queen, include:
     }
     upstream_failures: dict[str, int] = {}
     successful_tool_calls = 0
+    tool_call_history: list[dict[str, str]] = []
 
     for _iteration in range(effective_max_steps):
         thinking_steps += 1
@@ -289,6 +373,54 @@ If you need clarification from the Queen, include:
                 else:
                     successful_tool_calls += 1
                 tools_used.append(tool_name)
+                args_hash = _hash_tool_call(str(tool_name or ""), tool_input)
+                result_hash = _hash_tool_outcome(tool_result, tool_meta)
+                tool_call_history.append(
+                    {
+                        "tool_name": str(tool_name or ""),
+                        "args_hash": args_hash,
+                        "result_hash": result_hash,
+                    }
+                )
+                loop_state = _detect_tool_loop(
+                    tool_call_history,
+                    tool_name=str(tool_name or ""),
+                    args_hash=args_hash,
+                )
+                if loop_state is not None:
+                    if loop_state["level"] == "warning":
+                        await worker.log(
+                            "warning",
+                            (
+                                f"Tool loop warning ({loop_state['detector']}): "
+                                f"{loop_state['message']} count={loop_state['count']}"
+                            ),
+                        )
+                    else:
+                        await worker.log(
+                            "warning",
+                            (
+                                f"Tool loop breaker ({loop_state['detector']}): "
+                                f"{loop_state['message']} count={loop_state['count']}"
+                            ),
+                        )
+                        return WorkerResult(
+                            summary=(
+                                "Task stopped to prevent an infinite tool loop. "
+                                "Please refine the task or provide additional constraints."
+                            ),
+                            output=_attach_telemetry(
+                                {
+                                    "degraded": True,
+                                    "reason": "tool_loop_detected",
+                                    "loop": loop_state,
+                                },
+                                telemetry,
+                            ),
+                            knowledge_proposals=worker.knowledge_proposals,
+                            thinking_steps=thinking_steps,
+                            tools_used=tools_used,
+                        )
 
                 if tool_meta.get("had_error"):
                     error_text = _extract_error_text(tool_result)
