@@ -673,8 +673,7 @@ def _build_service_health(
     gateway_status = "ok" if system_running else "critical"
     gateway_reason = "running" if system_running else "process is not running"
     if system_running and heartbeat_age is not None and heartbeat_age > 300:
-        gateway_status = "warning"
-        gateway_reason = f"heartbeat stale for {int(heartbeat_age)}s"
+        gateway_reason = f"running (idle heartbeat {int(heartbeat_age)}s)"
     out.append(
         {
             "id": "gateway",
@@ -1451,6 +1450,33 @@ def _dashboard_html() -> str:
       gap: 10px;
       margin-bottom: 12px;
     }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin: 4px 0 10px;
+    }
+    .tab-btn {
+      border: 1px solid var(--line);
+      background: rgba(7, 13, 23, 0.82);
+      color: var(--muted);
+      border-radius: 999px;
+      height: 34px;
+      padding: 0 12px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    .tab-btn.active {
+      color: var(--ink);
+      border-color: rgba(45, 212, 191, 0.65);
+      background: linear-gradient(90deg, rgba(15, 118, 110, 0.45), rgba(21, 94, 117, 0.4));
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
     .kpi {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -1746,6 +1772,7 @@ def _dashboard_html() -> str:
       .input { width: 100%; }
       .filter-select { width: 100%; }
       .btn { flex: 1; }
+      .tab-btn { flex: 1; min-width: 110px; }
       .status-strip { grid-template-columns: 1fr; }
       .services-grid { grid-template-columns: 1fr; }
       .slo-grid { grid-template-columns: 1fr; }
@@ -1833,122 +1860,134 @@ def _dashboard_html() -> str:
       </div>
     </section>
 
-    <section class="card" style="margin-bottom: 10px;">
-      <h3>Service Health</h3>
-      <div id="services-grid" class="services-grid">No service data yet.</div>
+    <section class="tabs">
+      <button class="tab-btn active" data-tab="overview">Overview</button>
+      <button class="tab-btn" data-tab="operations">Operations</button>
+      <button class="tab-btn" data-tab="telemetry">Telemetry</button>
     </section>
 
-    <section class="card" style="margin-bottom: 10px;">
-      <h3>Incidents</h3>
-      <div id="incident-summary" class="meta">No incidents.</div>
-      <div id="incidents-list" class="incidents-grid"><div class="meta">No incidents.</div></div>
-    </section>
+    <div class="tab-panel active" data-tab-panel="overview">
+      <section class="card" style="margin-bottom: 10px;">
+        <h3>Service Health</h3>
+        <div id="services-grid" class="services-grid">No service data yet.</div>
+      </section>
 
-    <section class="card" style="margin-bottom: 10px;">
-      <h3>SLO / SLA</h3>
-      <div id="slo-targets" class="meta">targets: n/a</div>
-      <div class="slo-grid">
-        <article class="slo-item">
-          <div class="slo-label">Uptime</div>
-          <div id="slo-uptime" class="slo-value">-</div>
-          <div id="slo-uptime-hint" class="slo-hint">-</div>
-        </article>
-        <article class="slo-item">
-          <div class="slo-label">Burn Rate</div>
-          <div id="slo-burn" class="slo-value">-</div>
-          <div id="slo-burn-hint" class="slo-hint">-</div>
-        </article>
-        <article class="slo-item">
-          <div class="slo-label">Error Budget Left</div>
-          <div id="slo-budget" class="slo-value">-</div>
-          <div id="slo-budget-hint" class="slo-hint">-</div>
-        </article>
-        <article class="slo-item">
-          <div class="slo-label">MTTR</div>
-          <div id="slo-mttr" class="slo-value">-</div>
-          <div id="slo-mttr-hint" class="slo-hint">-</div>
-        </article>
-      </div>
-      <div id="noise-summary" class="meta">noise control: n/a</div>
-    </section>
+      <section class="card" style="margin-bottom: 10px;">
+        <h3>Incidents</h3>
+        <div id="incident-summary" class="meta">No incidents.</div>
+        <div id="incidents-list" class="incidents-grid"><div class="meta">No incidents.</div></div>
+      </section>
+    </div>
 
-    <section class="actions-grid">
-      <article class="card">
-        <h3>Quick Actions</h3>
-        <div class="actions-row" style="margin-bottom: 8px;">
-          <input id="restart-worker-id" class="input worker-id" type="text" placeholder="Worker ID to restart" />
-          <button id="restart-worker-btn" class="btn warn">Restart Worker</button>
-          <button id="retry-failed-btn" class="btn">Retry Latest Failed</button>
-          <button id="clear-queue-btn" class="btn danger">Clear Control Queue</button>
+    <div class="tab-panel" data-tab-panel="operations">
+      <section class="card" style="margin-bottom: 10px;">
+        <h3>SLO / SLA</h3>
+        <div id="slo-targets" class="meta">targets: n/a</div>
+        <div class="slo-grid">
+          <article class="slo-item">
+            <div class="slo-label">Uptime</div>
+            <div id="slo-uptime" class="slo-value">-</div>
+            <div id="slo-uptime-hint" class="slo-hint">-</div>
+          </article>
+          <article class="slo-item">
+            <div class="slo-label">Burn Rate</div>
+            <div id="slo-burn" class="slo-value">-</div>
+            <div id="slo-burn-hint" class="slo-hint">-</div>
+          </article>
+          <article class="slo-item">
+            <div class="slo-label">Error Budget Left</div>
+            <div id="slo-budget" class="slo-value">-</div>
+            <div id="slo-budget-hint" class="slo-hint">-</div>
+          </article>
+          <article class="slo-item">
+            <div class="slo-label">MTTR</div>
+            <div id="slo-mttr" class="slo-value">-</div>
+            <div id="slo-mttr-hint" class="slo-hint">-</div>
+          </article>
         </div>
-        <div class="meta" id="action-result">No actions yet.</div>
-      </article>
-      <article class="card">
-        <h3>Action History</h3>
-        <div id="action-history" class="action-history"><div class="meta">No actions yet.</div></div>
-      </article>
-    </section>
+        <div id="noise-summary" class="meta">noise control: n/a</div>
+      </section>
 
-    <section class="layout desktop-heavy">
-      <div class="card">
-        <h3>Worker Throughput (rolling)</h3>
-        <div class="chart-wrap"><canvas id="activity-chart"></canvas></div>
-      </div>
-      <div class="card">
-        <h3>Recent Events</h3>
-        <div id="logs" class="logs">
-          <div class="skeleton-wrap">
-            <div class="skeleton-line sm"></div>
-            <div class="skeleton-line lg"></div>
-            <div class="skeleton-line md"></div>
-            <div class="skeleton-line lg"></div>
+      <section class="actions-grid">
+        <article class="card">
+          <h3>Quick Actions</h3>
+          <div class="actions-row" style="margin-bottom: 8px;">
+            <input id="restart-worker-id" class="input worker-id" type="text" placeholder="Worker ID to restart" />
+            <button id="restart-worker-btn" class="btn warn">Restart Worker</button>
+            <button id="retry-failed-btn" class="btn">Retry Latest Failed</button>
+            <button id="clear-queue-btn" class="btn danger">Clear Control Queue</button>
+          </div>
+          <div class="meta" id="action-result">No actions yet.</div>
+        </article>
+        <article class="card">
+          <h3>Action History</h3>
+          <div id="action-history" class="action-history"><div class="meta">No actions yet.</div></div>
+        </article>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab-panel="telemetry">
+      <section class="layout desktop-heavy">
+        <div class="card">
+          <h3>Worker Throughput (rolling)</h3>
+          <div class="chart-wrap"><canvas id="activity-chart"></canvas></div>
+        </div>
+        <div class="card">
+          <h3>Recent Events</h3>
+          <div id="logs" class="logs">
+            <div class="skeleton-wrap">
+              <div class="skeleton-line sm"></div>
+              <div class="skeleton-line lg"></div>
+              <div class="skeleton-line md"></div>
+              <div class="skeleton-line lg"></div>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="layout mcp-topology desktop-heavy" style="margin-top: 10px;">
-      <div class="card">
-        <h3>MCP Connectivity</h3>
-        <div id="mcp-status">
-          <div class="skeleton-wrap">
-            <div class="skeleton-line md"></div>
-            <div class="skeleton-line lg"></div>
-            <div class="skeleton-line sm"></div>
+      <section class="layout mcp-topology desktop-heavy" style="margin-top: 10px;">
+        <div class="card">
+          <h3>MCP Connectivity</h3>
+          <div id="mcp-status">
+            <div class="skeleton-wrap">
+              <div class="skeleton-line md"></div>
+              <div class="skeleton-line lg"></div>
+              <div class="skeleton-line sm"></div>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="card">
-        <h3>Live Worker Topology</h3>
-        <div id="worker-topology" class="topology">
-          <div class="skeleton-wrap">
-            <div class="skeleton-line lg"></div>
-            <div class="skeleton-line md"></div>
-            <div class="skeleton-line lg"></div>
+        <div class="card">
+          <h3>Live Worker Topology</h3>
+          <div id="worker-topology" class="topology">
+            <div class="skeleton-wrap">
+              <div class="skeleton-line lg"></div>
+              <div class="skeleton-line md"></div>
+              <div class="skeleton-line lg"></div>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="card desktop-heavy" style="margin-top: 10px;">
-      <h3>Recent Workers</h3>
-      <div class="workers">
-        <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Status</th>
-              <th>Task</th>
-              <th>Last Tool</th>
-              <th>Updated</th>
-            </tr>
-          </thead>
-          <tbody id="workers-table">
-            <tr><td colspan="5"><div class="skeleton-wrap"><div class="skeleton-line lg"></div><div class="skeleton-line md"></div><div class="skeleton-line lg"></div></div></td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+      <section class="card desktop-heavy" style="margin-top: 10px;">
+        <h3>Recent Workers</h3>
+        <div class="workers">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Status</th>
+                <th>Task</th>
+                <th>Last Tool</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody id="workers-table">
+              <tr><td colspan="5"><div class="skeleton-wrap"><div class="skeleton-line lg"></div><div class="skeleton-line md"></div><div class="skeleton-line lg"></div></div></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
 
     <div class="meta" id="meta">Last refresh: never</div>
     <div class="err" id="error"></div>
@@ -1976,6 +2015,7 @@ def _dashboard_html() -> str:
     const mobileClearQueueBtn = document.getElementById("mobile-clear-queue-btn");
     const tokenKey = "broodmind.dashboard.token";
     const filterKey = "broodmind.dashboard.filters";
+    const tabKey = "broodmind.dashboard.tab";
     tokenInput.value = localStorage.getItem(tokenKey) || "";
     const savedFilters = (() => {
       try {
@@ -1987,6 +2027,29 @@ def _dashboard_html() -> str:
     filterWindowInput.value = String(savedFilters.window_minutes || filterWindowInput.value || "60");
     filterServiceInput.value = String(savedFilters.service || filterServiceInput.value || "all");
     filterEnvInput.value = String(savedFilters.environment || filterEnvInput.value || "all");
+    const tabButtons = Array.from(document.querySelectorAll("[data-tab]"));
+    const tabPanels = Array.from(document.querySelectorAll("[data-tab-panel]"));
+
+    function setActiveTab(tabId) {
+      const target = String(tabId || "overview");
+      tabButtons.forEach((btn) => {
+        const isActive = String(btn.getAttribute("data-tab") || "") === target;
+        btn.classList.toggle("active", isActive);
+      });
+      tabPanels.forEach((panel) => {
+        const isActive = String(panel.getAttribute("data-tab-panel") || "") === target;
+        panel.classList.toggle("active", isActive);
+      });
+      localStorage.setItem(tabKey, target);
+    }
+
+    tabButtons.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const tabId = String(btn.getAttribute("data-tab") || "overview");
+        setActiveTab(tabId);
+      });
+    });
+    setActiveTab(localStorage.getItem(tabKey) || "overview");
 
     const historySize = 30;
     const history = [];
