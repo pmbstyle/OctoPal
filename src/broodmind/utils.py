@@ -71,12 +71,27 @@ def has_no_user_response_suffix(text: str) -> bool:
     return normalized.endswith("NOUSERRESPONSE")
 
 
+def has_heartbeat_ok_edge(text: str) -> bool:
+    """Return True when text starts or ends with HEARTBEAT_OK (spacing/underscore/punctuation tolerant)."""
+    value = (text or "").strip()
+    if not value:
+        return False
+    trimmed = re.sub(r"^[.!?,:;\"'`\[\(\{<]+", "", value)
+    trimmed = re.sub(r"[.!?,:;\"'`\]\)\}>]+$", "", trimmed).strip()
+    if not trimmed:
+        return False
+    normalized = re.sub(r"[\s_-]+", "", trimmed).upper()
+    return normalized.startswith("HEARTBEATOK") or normalized.endswith("HEARTBEATOK")
+
+
 def should_suppress_user_delivery(text: str) -> bool:
     """Guard rail for outbound channels: suppress control/system-only payloads."""
     value = (text or "").strip()
     if not value:
         return True
     if is_control_response(value):
+        return True
+    if has_heartbeat_ok_edge(value):
         return True
     if has_no_user_response_suffix(value):
         return True
