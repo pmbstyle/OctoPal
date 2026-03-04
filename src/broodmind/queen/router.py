@@ -24,6 +24,17 @@ from broodmind.workers.contracts import WorkerResult
 logger = structlog.get_logger(__name__)
 _MAX_PLAN_STEPS = 10
 _MAX_VERIFY_CONTEXT_CHARS = 20000
+_DEFAULT_MAX_TOOL_COUNT = 64
+_MIN_TOOL_COUNT_ON_OVERFLOW = 12
+_PRIORITY_TOOL_NAMES = {
+    "queen_context_reset",
+    "queen_context_health",
+    "check_schedule",
+    "spawn_worker",
+    "get_worker_result",
+    "get_worker_output_path",
+    "manage_canon",
+}
 
 
 async def route_or_reply(
@@ -102,7 +113,8 @@ async def route_or_reply(
         tool_capable = getattr(provider, "complete_with_tools", None)
         
         if callable(tool_capable):
-            tools = [spec.to_openai_tool() for spec in queen_tools]
+            active_tool_specs = list(queen_tools)
+            tools = [spec.to_openai_tool() for spec in active_tool_specs]
             last_error: str | None = None
             had_tool_calls = False
             max_attempts = 10
@@ -160,8 +172,18 @@ async def route_or_reply(
                         except Exception as fallback_exc:
                             logger.error("Fallback save-and-retry failed", error=str(fallback_exc))
                             return "I see you sent an image, but I am unable to process it. My current model configuration might not support vision, and I could not save it for tool analysis."
+                    if _is_context_overflow_error(e) and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW:
+                        prior_count = len(active_tool_specs)
+                        active_tool_specs = _shrink_tool_specs_for_retry(active_tool_specs)
+                        tools = [spec.to_openai_tool() for spec in active_tool_specs]
+                        logger.warning(
+                            "Retrying completion with fewer tools after context overflow",
+                            previous_tool_count=prior_count,
+                            reduced_tool_count=len(active_tool_specs),
+                        )
+                        continue
                     raise e
-                
+
                 content_raw = result.get("content", "")
                 tool_calls = result.get("tool_calls") or []
                 
@@ -173,7 +195,7 @@ async def route_or_reply(
                     messages.append(assistant_msg)
                     
                     for call in tool_calls:
-                        tool_result = await _handle_queen_tool_call(call, queen_tools, ctx)
+                        tool_result = await _handle_queen_tool_call(call, active_tool_specs, ctx)
                         tool_result_text = (
                             tool_result
                             if isinstance(tool_result, str)
@@ -380,7 +402,52 @@ def _get_queen_tools(queen: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str
         permissions=perms,
         policy_pipeline_steps=policy_steps,
     )
+    max_tools = _env_int("BROODMIND_QUEEN_MAX_TOOL_COUNT", _DEFAULT_MAX_TOOL_COUNT, minimum=8)
+    tool_specs = _budget_tool_specs(tool_specs, max_count=max_tools)
     return tool_specs, ctx
+
+
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return max(minimum, value)
+
+
+def _is_context_overflow_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "maximum context length",
+            "input tokens exceeds",
+            "context length",
+            "too many tokens",
+        )
+    )
+
+
+def _tool_priority(spec: ToolSpec) -> tuple[int, str]:
+    name = str(getattr(spec, "name", "") or "")
+    return (0 if name in _PRIORITY_TOOL_NAMES else 1, name)
+
+
+def _budget_tool_specs(tool_specs: list[ToolSpec], *, max_count: int) -> list[ToolSpec]:
+    if len(tool_specs) <= max_count:
+        return tool_specs
+    prioritized = sorted(tool_specs, key=_tool_priority)
+    return prioritized[:max_count]
+
+
+def _shrink_tool_specs_for_retry(tool_specs: list[ToolSpec]) -> list[ToolSpec]:
+    if len(tool_specs) <= _MIN_TOOL_COUNT_ON_OVERFLOW:
+        return tool_specs
+    reduced = max(_MIN_TOOL_COUNT_ON_OVERFLOW, int(len(tool_specs) * 0.7))
+    return _budget_tool_specs(tool_specs, max_count=reduced)
 
 
 async def _handle_queen_tool_call(call: dict, tools: list[ToolSpec], ctx: dict[str, object]) -> str:
