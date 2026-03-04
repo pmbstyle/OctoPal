@@ -1009,16 +1009,16 @@ async def _tool_queen_context_health(args, ctx) -> str:
         if hasattr(queen, "get_context_thresholds")
         else {
             "watch": {
-                "context_size_estimate": 90000,
-                "repetition_score": 0.70,
-                "error_streak": 4,
-                "no_progress_turns": 6,
+                "context_size_estimate": 60000,
+                "repetition_score": 0.65,
+                "error_streak": 3,
+                "no_progress_turns": 4,
             },
             "reset_soon": {
-                "context_size_estimate": 150000,
-                "repetition_score": 0.82,
-                "error_streak": 7,
-                "no_progress_turns": 10,
+                "context_size_estimate": 100000,
+                "repetition_score": 0.75,
+                "error_streak": 5,
+                "no_progress_turns": 7,
             },
         }
     )
@@ -1114,5 +1114,3 @@ async def _tool_queen_self_queue_update(args, ctx) -> str:
         return json.dumps({"status": "error", "message": "queen self queue is unavailable"}, ensure_ascii=False)
     payload = await queen.update_self_queue_item(chat_id, args or {})
     return json.dumps(payload, ensure_ascii=False)
-
-

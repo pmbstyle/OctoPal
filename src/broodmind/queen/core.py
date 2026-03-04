@@ -48,18 +48,6 @@ _INTERNAL_TASKS: dict[int, asyncio.Task] = {}
 _QUEUE_IDLE_TIMEOUT_SECONDS = 300.0
 _RESET_CONFIRM_THRESHOLD = 2
 _RESET_CONFIDENCE_MIN = 0.7
-_WATCH_THRESHOLDS = {
-    "context_size_estimate": 90000,
-    "repetition_score": 0.70,
-    "error_streak": 4,
-    "no_progress_turns": 6,
-}
-_RESET_SOON_THRESHOLDS = {
-    "context_size_estimate": 150000,
-    "repetition_score": 0.82,
-    "error_streak": 7,
-    "no_progress_turns": 10,
-}
 
 
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
@@ -71,6 +59,49 @@ def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
     except (TypeError, ValueError):
         return default
     return max(minimum, value)
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.0, maximum: float = 1.0) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return min(maximum, max(minimum, value))
+
+
+_WATCH_THRESHOLDS = {
+    "context_size_estimate": _env_int("BROODMIND_CONTEXT_WATCH_SIZE", 60000, minimum=5000),
+    "repetition_score": _env_float("BROODMIND_CONTEXT_WATCH_REPETITION", 0.65, minimum=0.0, maximum=1.0),
+    "error_streak": _env_int("BROODMIND_CONTEXT_WATCH_ERROR_STREAK", 3, minimum=1),
+    "no_progress_turns": _env_int("BROODMIND_CONTEXT_WATCH_NO_PROGRESS", 4, minimum=1),
+}
+_RESET_SOON_THRESHOLDS = {
+    "context_size_estimate": _env_int("BROODMIND_CONTEXT_RESET_SOON_SIZE", 100000, minimum=5000),
+    "repetition_score": _env_float("BROODMIND_CONTEXT_RESET_SOON_REPETITION", 0.75, minimum=0.0, maximum=1.0),
+    "error_streak": _env_int("BROODMIND_CONTEXT_RESET_SOON_ERROR_STREAK", 5, minimum=1),
+    "no_progress_turns": _env_int("BROODMIND_CONTEXT_RESET_SOON_NO_PROGRESS", 7, minimum=1),
+}
+
+# Keep RESET_SOON at or above WATCH thresholds, even with custom env values.
+_RESET_SOON_THRESHOLDS["context_size_estimate"] = max(
+    int(_RESET_SOON_THRESHOLDS["context_size_estimate"]),
+    int(_WATCH_THRESHOLDS["context_size_estimate"]),
+)
+_RESET_SOON_THRESHOLDS["repetition_score"] = max(
+    float(_RESET_SOON_THRESHOLDS["repetition_score"]),
+    float(_WATCH_THRESHOLDS["repetition_score"]),
+)
+_RESET_SOON_THRESHOLDS["error_streak"] = max(
+    int(_RESET_SOON_THRESHOLDS["error_streak"]),
+    int(_WATCH_THRESHOLDS["error_streak"]),
+)
+_RESET_SOON_THRESHOLDS["no_progress_turns"] = max(
+    int(_RESET_SOON_THRESHOLDS["no_progress_turns"]),
+    int(_WATCH_THRESHOLDS["no_progress_turns"]),
+)
 
 
 def _publish_runtime_metrics(thinking_count: int = 0) -> None:
