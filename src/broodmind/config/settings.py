@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from pydantic import Field
@@ -94,11 +95,34 @@ class Settings(BaseSettings):
     telegram_parse_mode: str = Field("MarkdownV2", alias="BROODMIND_TELEGRAM_PARSE_MODE")
 
 
-def load_settings() -> Settings:
-    settings = Settings()
-    if not settings.zai_api_key:
-        import os
+def _resolve_env_file() -> Path | None:
+    explicit = os.getenv("BROODMIND_ENV_FILE", "").strip()
+    if explicit:
+        candidate = Path(explicit).expanduser()
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        if candidate.exists():
+            return candidate
+        return None
 
+    cwd_env = Path.cwd() / ".env"
+    if cwd_env.exists():
+        return cwd_env
+
+    project_root_env = Path(__file__).resolve().parents[3] / ".env"
+    if project_root_env.exists():
+        return project_root_env
+
+    return None
+
+
+def load_settings() -> Settings:
+    env_file = _resolve_env_file()
+    if env_file is not None:
+        settings = Settings(_env_file=env_file)
+    else:
+        settings = Settings()
+    if not settings.zai_api_key:
         legacy = os.getenv("Z_AI_API_KEY")
         if legacy:
             settings = settings.model_copy(update={"zai_api_key": legacy})

@@ -489,11 +489,14 @@ def _get_store(app: FastAPI, settings: Settings) -> SQLiteStore:
 
 
 def _resolve_webapp_dist_dir(settings: Settings) -> Path | None:
+    project_root = Path(__file__).resolve().parents[3]
     explicit = settings.webapp_dist_dir
     if explicit is not None:
         candidate = Path(explicit)
+        if not candidate.is_absolute():
+            candidate = project_root / candidate
     else:
-        candidate = Path("webapp") / "dist"
+        candidate = project_root / "webapp" / "dist"
     if candidate.is_dir():
         return candidate
     return None
@@ -1729,7 +1732,11 @@ def _uptime_human(started_at: str | None) -> str:
 
 def _dashboard_unavailable_html(settings: Settings) -> str:
     webapp_dist = _resolve_webapp_dist_dir(settings)
-    dist_hint = str((settings.webapp_dist_dir or Path('webapp') / 'dist'))
+    project_root = Path(__file__).resolve().parents[3]
+    dist_hint_path = Path(settings.webapp_dist_dir) if settings.webapp_dist_dir is not None else (project_root / "webapp" / "dist")
+    if not dist_hint_path.is_absolute():
+        dist_hint_path = project_root / dist_hint_path
+    dist_hint = str(dist_hint_path)
     dist_status = 'found' if webapp_dist is not None else 'not found'
     enabled = 'enabled' if settings.webapp_enabled else 'disabled'
     return f"""<!doctype html>

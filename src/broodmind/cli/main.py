@@ -358,7 +358,8 @@ def _start_background() -> None:
                     stderr=err_file,
                     stdin=subprocess.DEVNULL,
                     close_fds=False, # close_fds=True can cause issues with handles on Windows sometimes
-                    env=env
+                    env=env,
+                    cwd=str(project_root),
                 )
             else:
                 # Simple nohup-like behavior
@@ -368,7 +369,8 @@ def _start_background() -> None:
                     stderr=err_file,
                     stdin=subprocess.DEVNULL,
                     start_new_session=True,
-                    env=env
+                    env=env,
+                    cwd=str(project_root),
                 )
 
             # Give it a moment to initialize and write the PID file
