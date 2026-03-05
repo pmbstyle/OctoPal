@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
+import subprocess
 import time
 from collections import deque
 from datetime import UTC, datetime
@@ -63,8 +65,6 @@ def _init_logging(settings: Settings) -> None:
 
 
 def _maybe_enable_tailscale_serve(settings: Settings) -> None:
-    import subprocess
-
     if not settings.tailscale_auto_serve:
         return
 
@@ -155,6 +155,102 @@ def _maybe_enable_tailscale_serve(settings: Settings) -> None:
         )
 
 
+def _resolve_webapp_paths(settings: Settings) -> tuple[Path, Path]:
+    project_root = Path(__file__).resolve().parents[3]
+    webapp_dir = project_root / "webapp"
+    if settings.webapp_dist_dir is not None:
+        dist_dir = Path(settings.webapp_dist_dir)
+        if not dist_dir.is_absolute():
+            dist_dir = project_root / dist_dir
+    else:
+        dist_dir = webapp_dir / "dist"
+    return webapp_dir, dist_dir
+
+
+def _latest_mtime(paths: list[Path]) -> float:
+    latest = 0.0
+    for path in paths:
+        if not path.exists():
+            continue
+        if path.is_file():
+            latest = max(latest, path.stat().st_mtime)
+            continue
+        for file_path in path.rglob("*"):
+            if file_path.is_file():
+                latest = max(latest, file_path.stat().st_mtime)
+    return latest
+
+
+def _is_webapp_build_stale(webapp_dir: Path, dist_dir: Path) -> bool:
+    index_html = dist_dir / "index.html"
+    if not index_html.exists():
+        return True
+
+    source_paths = [
+        webapp_dir / "index.html",
+        webapp_dir / "package.json",
+        webapp_dir / "package-lock.json",
+        webapp_dir / "vite.config.ts",
+        webapp_dir / "tsconfig.json",
+        webapp_dir / "src",
+    ]
+    dist_paths = [dist_dir]
+    latest_source = _latest_mtime(source_paths)
+    latest_dist = _latest_mtime(dist_paths)
+    return latest_source > latest_dist
+
+
+def _run_webapp_command(cmd: list[str], *, cwd: Path) -> None:
+    proc = subprocess.run(
+        cmd,
+        cwd=str(cwd),
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode == 0:
+        return
+    detail = (proc.stderr or proc.stdout or "").strip()
+    message = f"Webapp command failed: {' '.join(cmd)}"
+    if detail:
+        message = f"{message}\n{detail}"
+    raise RuntimeError(message)
+
+
+def _ensure_webapp_built(settings: Settings) -> None:
+    if not settings.webapp_enabled:
+        return
+
+    webapp_dir, dist_dir = _resolve_webapp_paths(settings)
+    if not webapp_dir.exists():
+        console.print("[bold red]Webapp directory not found:[/bold red] " + str(webapp_dir))
+        raise typer.Exit(code=1)
+
+    npm_path = shutil.which("npm")
+    if not npm_path:
+        console.print("[bold red]npm is required to build dashboard assets but was not found.[/bold red]")
+        raise typer.Exit(code=1)
+
+    build_needed = _is_webapp_build_stale(webapp_dir, dist_dir)
+    if not build_needed:
+        console.print("[dim]Web dashboard assets are up to date.[/dim]")
+        return
+
+    console.print("[bold cyan]Preparing web dashboard assets...[/bold cyan]")
+    node_modules_dir = webapp_dir / "node_modules"
+    try:
+        if not node_modules_dir.exists():
+            _run_webapp_command([npm_path, "install", "--no-audit", "--no-fund"], cwd=webapp_dir)
+        _run_webapp_command([npm_path, "run", "build"], cwd=webapp_dir)
+    except RuntimeError as exc:
+        console.print(f"[bold red]Failed to build web dashboard:[/bold red]\n{exc}")
+        raise typer.Exit(code=1) from None
+
+    if not (dist_dir / "index.html").exists():
+        console.print("[bold red]Web dashboard build completed but dist/index.html is missing.[/bold red]")
+        raise typer.Exit(code=1)
+    console.print("[bold green][V] Web dashboard assets built.[/bold green]")
+
+
 @app.command()
 def start(
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground mode (showing logs)"),
@@ -186,6 +282,7 @@ def start(
         return
 
     _init_logging(settings)
+    _ensure_webapp_built(settings)
     _maybe_enable_tailscale_serve(settings)
 
     with console.status("[bold green]Initializing BroodMind Queen...[/bold green]", spinner="dots"):

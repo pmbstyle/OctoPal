@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import asyncio
 from uuid import uuid4
 from collections import deque
 from dataclasses import dataclass
@@ -11,7 +12,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict
 
 from broodmind.config.settings import Settings
 from broodmind.runtime_metrics import read_metrics_snapshot
@@ -21,6 +23,7 @@ from broodmind.store.models import AuditEvent, WorkerRecord
 
 _WINDOW_CHOICES = {15, 60, 240, 1440}
 _SERVICE_CHOICES = {"all", "gateway", "queen", "telegram", "exec_run", "mcp", "workers"}
+_STREAM_TOPICS = {"overview", "incidents", "queen", "workers", "system", "actions", "snapshot"}
 
 
 @dataclass(frozen=True)
@@ -30,10 +33,76 @@ class DashboardFilters:
     environment: str
 
 
+class DashboardV2Envelope(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    contract_version: str
+    generated_at: str
+    filters: dict[str, Any]
+
+
+class DashboardOverviewV2(DashboardV2Envelope):
+    health: dict[str, Any]
+    kpis: dict[str, Any]
+    services: list[dict[str, Any]]
+    system: dict[str, Any]
+    incidents_summary: dict[str, int]
+
+
+class DashboardIncidentsV2(DashboardV2Envelope):
+    incidents: dict[str, Any]
+
+
+class DashboardQueenV2(DashboardV2Envelope):
+    queen: dict[str, Any]
+    queues: dict[str, Any]
+    control: dict[str, Any]
+    health: dict[str, Any]
+
+
+class DashboardWorkersV2(DashboardV2Envelope):
+    workers: dict[str, Any]
+
+
+class DashboardSystemV2(DashboardV2Envelope):
+    system: dict[str, Any]
+    services: list[dict[str, Any]]
+    connectivity: dict[str, Any]
+    logs: list[dict[str, Any]]
+
+
+class DashboardActionsV2(DashboardV2Envelope):
+    actions: dict[str, Any]
+
+
 def register_dashboard_routes(app: FastAPI) -> None:
     @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard_page() -> str:
-        return _dashboard_html()
+    async def dashboard_page():
+        settings = _get_settings(app)
+        webapp_index = _resolve_webapp_index(settings)
+        if settings.webapp_enabled and webapp_index is not None:
+            return FileResponse(webapp_index)
+        return HTMLResponse(_dashboard_unavailable_html(settings), status_code=503)
+
+    @app.get("/dashboard/{asset_path:path}")
+    async def dashboard_assets(asset_path: str):
+        settings = _get_settings(app)
+        webapp_dist = _resolve_webapp_dist_dir(settings)
+        if not settings.webapp_enabled or webapp_dist is None:
+            raise HTTPException(status_code=404, detail="Dashboard asset not found")
+
+        normalized = asset_path.strip().replace("\\", "/")
+        candidate = (webapp_dist / normalized).resolve()
+        if not str(candidate).startswith(str(webapp_dist.resolve())):
+            raise HTTPException(status_code=404, detail="Dashboard asset not found")
+
+        if candidate.is_file():
+            return FileResponse(candidate)
+
+        index_path = webapp_dist / "index.html"
+        if index_path.is_file():
+            return FileResponse(index_path)
+        raise HTTPException(status_code=404, detail="Dashboard asset not found")
 
     @app.get("/api/dashboard/snapshot")
     async def dashboard_snapshot(
@@ -131,6 +200,277 @@ def register_dashboard_routes(app: FastAPI) -> None:
         store = _get_store(app, settings)
         return {"count": min(limit, 100), "entries": _list_dashboard_action_history(store, limit=limit)}
 
+    @app.get("/api/dashboard/v2/overview", response_model=DashboardOverviewV2)
+    async def dashboard_v2_overview(
+        request: Request,
+        last: int = Query(8, ge=1, le=50),
+        window_minutes: int = Query(60, ge=1, le=1440),
+        service: str = Query("all"),
+        environment: str = Query("all"),
+    ) -> DashboardOverviewV2:
+        snapshot = _build_dashboard_v2_snapshot(
+            app=app,
+            request=request,
+            last=last,
+            window_minutes=window_minutes,
+            service=service,
+            environment=environment,
+        )
+        incidents = snapshot.get("incidents", {})
+        summary = incidents.get("summary", {}) if isinstance(incidents, dict) else {}
+        return DashboardOverviewV2(
+            contract_version="dashboard.v2.overview",
+            generated_at=str(snapshot.get("generated_at", "")),
+            filters=dict(snapshot.get("filters", {})),
+            health=dict(snapshot.get("health", {})),
+            kpis=dict(snapshot.get("kpis", {})),
+            services=list(snapshot.get("services", [])),
+            system=dict(snapshot.get("system", {})),
+            incidents_summary={
+                "open": int(summary.get("open", 0) or 0),
+                "critical": int(summary.get("critical", 0) or 0),
+                "warning": int(summary.get("warning", 0) or 0),
+            },
+        )
+
+    @app.get("/api/dashboard/v2/incidents", response_model=DashboardIncidentsV2)
+    async def dashboard_v2_incidents(
+        request: Request,
+        last: int = Query(8, ge=1, le=50),
+        window_minutes: int = Query(60, ge=1, le=1440),
+        service: str = Query("all"),
+        environment: str = Query("all"),
+    ) -> DashboardIncidentsV2:
+        snapshot = _build_dashboard_v2_snapshot(
+            app=app,
+            request=request,
+            last=last,
+            window_minutes=window_minutes,
+            service=service,
+            environment=environment,
+        )
+        return DashboardIncidentsV2(
+            contract_version="dashboard.v2.incidents",
+            generated_at=str(snapshot.get("generated_at", "")),
+            filters=dict(snapshot.get("filters", {})),
+            incidents=dict(snapshot.get("incidents", {})),
+        )
+
+    @app.get("/api/dashboard/v2/queen", response_model=DashboardQueenV2)
+    async def dashboard_v2_queen(
+        request: Request,
+        last: int = Query(8, ge=1, le=50),
+        window_minutes: int = Query(60, ge=1, le=1440),
+        service: str = Query("all"),
+        environment: str = Query("all"),
+    ) -> DashboardQueenV2:
+        snapshot = _build_dashboard_v2_snapshot(
+            app=app,
+            request=request,
+            last=last,
+            window_minutes=window_minutes,
+            service=service,
+            environment=environment,
+        )
+        return DashboardQueenV2(
+            contract_version="dashboard.v2.queen",
+            generated_at=str(snapshot.get("generated_at", "")),
+            filters=dict(snapshot.get("filters", {})),
+            queen=dict(snapshot.get("queen", {})),
+            queues=dict(snapshot.get("queues", {})),
+            control=dict(snapshot.get("control", {})),
+            health=dict(snapshot.get("health", {})),
+        )
+
+    @app.get("/api/dashboard/v2/workers", response_model=DashboardWorkersV2)
+    async def dashboard_v2_workers(
+        request: Request,
+        last: int = Query(8, ge=1, le=50),
+        window_minutes: int = Query(60, ge=1, le=1440),
+        service: str = Query("all"),
+        environment: str = Query("all"),
+    ) -> DashboardWorkersV2:
+        snapshot = _build_dashboard_v2_snapshot(
+            app=app,
+            request=request,
+            last=last,
+            window_minutes=window_minutes,
+            service=service,
+            environment=environment,
+        )
+        return DashboardWorkersV2(
+            contract_version="dashboard.v2.workers",
+            generated_at=str(snapshot.get("generated_at", "")),
+            filters=dict(snapshot.get("filters", {})),
+            workers=dict(snapshot.get("workers", {})),
+        )
+
+    @app.get("/api/dashboard/v2/system", response_model=DashboardSystemV2)
+    async def dashboard_v2_system(
+        request: Request,
+        last: int = Query(8, ge=1, le=50),
+        window_minutes: int = Query(60, ge=1, le=1440),
+        service: str = Query("all"),
+        environment: str = Query("all"),
+    ) -> DashboardSystemV2:
+        snapshot = _build_dashboard_v2_snapshot(
+            app=app,
+            request=request,
+            last=last,
+            window_minutes=window_minutes,
+            service=service,
+            environment=environment,
+        )
+        return DashboardSystemV2(
+            contract_version="dashboard.v2.system",
+            generated_at=str(snapshot.get("generated_at", "")),
+            filters=dict(snapshot.get("filters", {})),
+            system=dict(snapshot.get("system", {})),
+            services=list(snapshot.get("services", [])),
+            connectivity=dict(snapshot.get("connectivity", {})),
+            logs=list(snapshot.get("logs", [])),
+        )
+
+    @app.get("/api/dashboard/v2/actions", response_model=DashboardActionsV2)
+    async def dashboard_v2_actions(
+        request: Request,
+        last: int = Query(8, ge=1, le=50),
+        window_minutes: int = Query(60, ge=1, le=1440),
+        service: str = Query("all"),
+        environment: str = Query("all"),
+    ) -> DashboardActionsV2:
+        snapshot = _build_dashboard_v2_snapshot(
+            app=app,
+            request=request,
+            last=last,
+            window_minutes=window_minutes,
+            service=service,
+            environment=environment,
+        )
+        return DashboardActionsV2(
+            contract_version="dashboard.v2.actions",
+            generated_at=str(snapshot.get("generated_at", "")),
+            filters=dict(snapshot.get("filters", {})),
+            actions=dict(snapshot.get("actions", {})),
+        )
+
+    @app.get("/api/dashboard/v2/stream")
+    async def dashboard_v2_stream(
+        request: Request,
+        topic: str = Query("overview"),
+        last: int = Query(8, ge=1, le=50),
+        window_minutes: int = Query(60, ge=1, le=1440),
+        service: str = Query("all"),
+        environment: str = Query("all"),
+        interval_seconds: float = Query(2.0, ge=0.2, le=10.0),
+    ) -> StreamingResponse:
+        normalized_topic = topic.strip().lower()
+        if normalized_topic not in _STREAM_TOPICS:
+            normalized_topic = "overview"
+
+        settings = _get_settings(app)
+        _verify_dashboard_token(request, settings)
+        store = _get_store(app, settings)
+        filters = _build_filters(settings, window_minutes=window_minutes, service=service, environment=environment)
+
+        async def _event_generator():
+            while True:
+                if await request.is_disconnected():
+                    break
+                snapshot = _build_snapshot(settings, store, last, filters)
+                payload = _dashboard_v2_projection(snapshot, topic=normalized_topic)
+                body = json.dumps(payload, ensure_ascii=False)
+                yield f"event: {normalized_topic}\n"
+                yield f"data: {body}\n\n"
+                await asyncio.sleep(interval_seconds)
+
+        headers = {
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+        return StreamingResponse(_event_generator(), media_type="text/event-stream", headers=headers)
+
+
+def _build_dashboard_v2_snapshot(
+    *,
+    app: FastAPI,
+    request: Request,
+    last: int,
+    window_minutes: int,
+    service: str,
+    environment: str,
+) -> dict[str, Any]:
+    settings = _get_settings(app)
+    _verify_dashboard_token(request, settings)
+    store = _get_store(app, settings)
+    filters = _build_filters(settings, window_minutes=window_minutes, service=service, environment=environment)
+    return _build_snapshot(settings, store, last, filters)
+
+
+def _dashboard_v2_projection(snapshot: dict[str, Any], *, topic: str) -> dict[str, Any]:
+    generated_at = str(snapshot.get("generated_at", ""))
+    filters = dict(snapshot.get("filters", {}))
+    if topic == "snapshot":
+        return snapshot
+    if topic == "incidents":
+        return {
+            "contract_version": "dashboard.v2.incidents",
+            "generated_at": generated_at,
+            "filters": filters,
+            "incidents": dict(snapshot.get("incidents", {})),
+        }
+    if topic == "queen":
+        return {
+            "contract_version": "dashboard.v2.queen",
+            "generated_at": generated_at,
+            "filters": filters,
+            "queen": dict(snapshot.get("queen", {})),
+            "queues": dict(snapshot.get("queues", {})),
+            "control": dict(snapshot.get("control", {})),
+            "health": dict(snapshot.get("health", {})),
+        }
+    if topic == "workers":
+        return {
+            "contract_version": "dashboard.v2.workers",
+            "generated_at": generated_at,
+            "filters": filters,
+            "workers": dict(snapshot.get("workers", {})),
+        }
+    if topic == "system":
+        return {
+            "contract_version": "dashboard.v2.system",
+            "generated_at": generated_at,
+            "filters": filters,
+            "system": dict(snapshot.get("system", {})),
+            "services": list(snapshot.get("services", [])),
+            "connectivity": dict(snapshot.get("connectivity", {})),
+            "logs": list(snapshot.get("logs", [])),
+        }
+    if topic == "actions":
+        return {
+            "contract_version": "dashboard.v2.actions",
+            "generated_at": generated_at,
+            "filters": filters,
+            "actions": dict(snapshot.get("actions", {})),
+        }
+    incidents = dict(snapshot.get("incidents", {}))
+    summary = incidents.get("summary", {}) if isinstance(incidents, dict) else {}
+    return {
+        "contract_version": "dashboard.v2.overview",
+        "generated_at": generated_at,
+        "filters": filters,
+        "health": dict(snapshot.get("health", {})),
+        "kpis": dict(snapshot.get("kpis", {})),
+        "services": list(snapshot.get("services", [])),
+        "system": dict(snapshot.get("system", {})),
+        "incidents_summary": {
+            "open": int(summary.get("open", 0) or 0),
+            "critical": int(summary.get("critical", 0) or 0),
+            "warning": int(summary.get("warning", 0) or 0),
+        },
+    }
+
 
 def _get_settings(app: FastAPI) -> Settings:
     settings = getattr(app.state, "settings", None)
@@ -146,6 +486,27 @@ def _get_store(app: FastAPI, settings: Settings) -> SQLiteStore:
     store = SQLiteStore(settings)
     app.state.dashboard_store = store
     return store
+
+
+def _resolve_webapp_dist_dir(settings: Settings) -> Path | None:
+    explicit = settings.webapp_dist_dir
+    if explicit is not None:
+        candidate = Path(explicit)
+    else:
+        candidate = Path("webapp") / "dist"
+    if candidate.is_dir():
+        return candidate
+    return None
+
+
+def _resolve_webapp_index(settings: Settings) -> Path | None:
+    dist_dir = _resolve_webapp_dist_dir(settings)
+    if dist_dir is None:
+        return None
+    index_path = dist_dir / "index.html"
+    if index_path.is_file():
+        return index_path
+    return None
 
 
 def _build_filters(settings: Settings, *, window_minutes: int, service: str, environment: str) -> DashboardFilters:
@@ -1365,1318 +1726,35 @@ def _uptime_human(started_at: str | None) -> str:
     return f"{hours:02}:{minutes:02}:{seconds:02}"
 
 
-def _dashboard_html() -> str:
-    return """<!doctype html>
-<html lang="en">
+
+def _dashboard_unavailable_html(settings: Settings) -> str:
+    webapp_dist = _resolve_webapp_dist_dir(settings)
+    dist_hint = str((settings.webapp_dist_dir or Path('webapp') / 'dist'))
+    dist_status = 'found' if webapp_dist is not None else 'not found'
+    enabled = 'enabled' if settings.webapp_enabled else 'disabled'
+    return f"""<!doctype html>
+<html lang=\"en\">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BroodMind Control Deck</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
+  <title>BroodMind Dashboard Unavailable</title>
   <style>
-    :root {
-      --ink: #e5e7eb;
-      --muted: #98a4b8;
-      --paper: #0a0f1b;
-      --panel: rgba(16, 24, 43, 0.78);
-      --line: #25324d;
-      --teal: #2dd4bf;
-      --amber: #f59e0b;
-      --rose: #fb7185;
-      --mint: #34d399;
-      --sky: #38bdf8;
-    }
-    * { box-sizing: border-box; }
-    html, body { margin: 0; min-height: 100%; }
-    body {
-      color: var(--ink);
-      font-family: "Space Grotesk", sans-serif;
-      background:
-        radial-gradient(1000px 600px at 5% -5%, rgba(56, 189, 248, 0.18), transparent 60%),
-        radial-gradient(900px 700px at 100% 0%, rgba(251, 113, 133, 0.14), transparent 55%),
-        linear-gradient(170deg, #070b14, #0a1220 48%, #0b1526);
-    }
-    .noise::before {
-      content: "";
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      opacity: 0.06;
-      background-image: radial-gradient(#fff 0.4px, transparent 0.5px);
-      background-size: 3px 3px;
-    }
-    .wrap { width: min(1280px, 96vw); margin: 24px auto 40px; }
-    .topbar {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 14px;
-    }
-    .headline { display: flex; gap: 12px; align-items: baseline; }
-    .title {
-      margin: 0;
-      font-size: clamp(24px, 3.4vw, 38px);
-      line-height: 1;
-      letter-spacing: 0.02em;
-    }
-    .subtitle { color: var(--muted); font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; }
-    .controls { display: flex; gap: 8px; flex-wrap: wrap; }
-    .input, .btn {
-      border: 1px solid var(--line);
-      background: rgba(7, 13, 23, 0.85);
-      color: var(--ink);
-      border-radius: 12px;
-      height: 40px;
-      padding: 0 12px;
-      font-family: inherit;
-    }
-    .input { width: 260px; }
-    .filter-select { width: 146px; }
-    .btn {
-      cursor: pointer;
-      font-weight: 600;
-      transition: transform 120ms ease, border-color 120ms ease, background-color 120ms ease;
-    }
-    .btn:hover { transform: translateY(-1px); border-color: var(--sky); }
-    .btn.primary { background: linear-gradient(90deg, #0f766e, #155e75); border-color: transparent; }
-    .status-strip {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(160px, 1fr));
-      gap: 10px;
-      margin-bottom: 12px;
-    }
-    .tabs {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      margin: 4px 0 10px;
-    }
-    .tab-btn {
-      border: 1px solid var(--line);
-      background: rgba(7, 13, 23, 0.82);
-      color: var(--muted);
-      border-radius: 999px;
-      height: 34px;
-      padding: 0 12px;
-      font-family: inherit;
-      font-size: 12px;
-      font-weight: 600;
-      cursor: pointer;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-    }
-    .tab-btn.active {
-      color: var(--ink);
-      border-color: rgba(45, 212, 191, 0.65);
-      background: linear-gradient(90deg, rgba(15, 118, 110, 0.45), rgba(21, 94, 117, 0.4));
-    }
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
-    .kpi {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 12px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
-      transform: translateY(8px);
-      opacity: 0;
-      animation: lift 420ms ease forwards;
-    }
-    .kpi:nth-child(2) { animation-delay: 80ms; }
-    .kpi:nth-child(3) { animation-delay: 120ms; }
-    .kpi:nth-child(4) { animation-delay: 180ms; }
-    .kpi:nth-child(5) { animation-delay: 240ms; }
-    .kpi-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
-    .kpi-value { margin-top: 6px; font-size: 28px; font-weight: 700; line-height: 1.1; }
-    .chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      margin-top: 8px;
-      padding: 3px 10px;
-      border-radius: 999px;
-      border: 1px solid var(--line);
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .ok { color: var(--mint); }
-    .warn { color: var(--amber); }
-    .bad { color: var(--rose); }
-    .layout {
-      display: grid;
-      grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-      gap: 10px;
-    }
-    .services-grid {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(180px, 1fr));
-      gap: 10px;
-      margin-bottom: 12px;
-    }
-    .service {
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      padding: 10px;
-      background: rgba(9, 15, 28, 0.72);
-    }
-    .service-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 6px;
-    }
-    .service-name {
-      font-size: 12px;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-      color: var(--muted);
-    }
-    .service-status {
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-    .service-reason {
-      font-size: 13px;
-      line-height: 1.35;
-      min-height: 2.4em;
-    }
-    .service-updated {
-      margin-top: 6px;
-      font-size: 11px;
-      color: var(--muted);
-      font-family: "JetBrains Mono", monospace;
-    }
-    .drilldown-btn {
-      margin-top: 8px;
-      width: 100%;
-      height: 30px;
-      border-radius: 10px;
-      border: 1px solid var(--line);
-      background: rgba(16, 24, 43, 0.9);
-      color: var(--ink);
-      cursor: pointer;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .drilldown-btn:hover {
-      border-color: var(--sky);
-      transform: translateY(-1px);
-    }
-    .actions-grid {
-      display: grid;
-      grid-template-columns: 1.3fr 1fr;
-      gap: 10px;
-      margin-bottom: 10px;
-    }
-    .actions-row {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-    .input.worker-id { width: 220px; }
-    .btn.warn { background: linear-gradient(90deg, #7c2d12, #9a3412); border-color: transparent; }
-    .btn.danger { background: linear-gradient(90deg, #7f1d1d, #b91c1c); border-color: transparent; }
-    .action-history {
-      max-height: 180px;
-      overflow: auto;
-      display: grid;
-      gap: 6px;
-    }
-    .action-item {
-      border: 1px solid rgba(37, 50, 77, 0.75);
-      border-radius: 10px;
-      padding: 8px;
-      background: rgba(9, 15, 28, 0.75);
-      font-size: 12px;
-      line-height: 1.35;
-    }
-    .incidents-grid {
-      display: grid;
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-    .incident-item {
-      border: 1px solid rgba(37, 50, 77, 0.75);
-      border-radius: 12px;
-      padding: 10px;
-      background: rgba(9, 15, 28, 0.78);
-    }
-    .incident-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-      margin-bottom: 6px;
-    }
-    .incident-title { font-size: 14px; font-weight: 700; margin-bottom: 3px; }
-    .incident-meta {
-      font-size: 11px;
-      color: var(--muted);
-      font-family: "JetBrains Mono", monospace;
-      margin-top: 5px;
-    }
-    .slo-grid {
-      display: grid;
-      grid-template-columns: repeat(4, minmax(150px, 1fr));
-      gap: 8px;
-      margin-bottom: 10px;
-    }
-    .slo-item {
-      border: 1px solid rgba(37, 50, 77, 0.75);
-      border-radius: 12px;
-      padding: 10px;
-      background: rgba(9, 15, 28, 0.78);
-    }
-    .slo-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.08em; }
-    .slo-value { margin-top: 6px; font-size: 22px; font-weight: 700; }
-    .slo-hint { margin-top: 4px; font-size: 11px; color: var(--muted); }
-    .mobile-only { display: none; }
-    .mobile-oncall {
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: rgba(9, 15, 28, 0.82);
-      padding: 12px;
-      margin-bottom: 10px;
-    }
-    .mobile-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 8px;
-      margin-bottom: 8px;
-    }
-    .mobile-title { font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
-    .mobile-health { font-size: 20px; font-weight: 700; }
-    .mobile-incidents { display: grid; gap: 6px; margin-bottom: 8px; }
-    .mobile-incident {
-      border: 1px solid rgba(37, 50, 77, 0.75);
-      border-radius: 10px;
-      padding: 8px;
-      font-size: 12px;
-      background: rgba(11, 18, 31, 0.85);
-    }
-    .mobile-actions { display: grid; gap: 8px; }
-    .mobile-actions .btn { width: 100%; }
-    .layout > * { min-width: 0; }
-    .layout.mcp-topology {
-      grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
-      align-items: start;
-    }
-    .card {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      padding: 14px;
-      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.2);
-      overflow: hidden;
-    }
-    .card h3 { margin: 0 0 10px; font-size: 15px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); }
-    .chart-wrap { height: 230px; }
-    .skeleton-wrap { display: grid; gap: 8px; }
-    .skeleton-line {
-      height: 12px;
-      border-radius: 999px;
-      background: linear-gradient(90deg, rgba(37, 50, 77, 0.35), rgba(56, 189, 248, 0.26), rgba(37, 50, 77, 0.35));
-      background-size: 200% 100%;
-      animation: shimmer 1.2s ease-in-out infinite;
-    }
-    .skeleton-line.sm { width: 34%; }
-    .skeleton-line.md { width: 62%; }
-    .skeleton-line.lg { width: 88%; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    th, td { text-align: left; padding: 9px 6px; border-bottom: 1px solid rgba(37, 50, 77, 0.75); vertical-align: top; }
-    th { color: var(--muted); font-weight: 600; }
-    td strong { font-size: 12px; }
-    .mono { font-family: "JetBrains Mono", monospace; }
-    .task-prefix { color: var(--amber); font-weight: 700; }
-    .task-prefix-sched { color: var(--mint); font-weight: 700; }
-    .workers { max-height: 310px; overflow: auto; }
-    .logs { max-height: 270px; overflow: auto; }
-    .log-line { border-bottom: 1px dashed rgba(37, 50, 77, 0.75); padding: 8px 2px; font-size: 13px; line-height: 1.35; }
-    .topology { max-height: 190px; overflow: auto; display: grid; gap: 8px; }
-    .topo-row {
-      border: 1px solid rgba(37, 50, 77, 0.75);
-      border-radius: 12px;
-      padding: 8px 10px;
-      background: rgba(9, 15, 28, 0.75);
-    }
-    .topo-head { display: flex; gap: 8px; align-items: center; justify-content: space-between; font-size: 12px; }
-    .topo-id { font-family: "JetBrains Mono", monospace; color: #c7d2fe; }
-    .topo-task {
-      margin-top: 6px;
-      font-size: 12px;
-      color: var(--ink);
-      white-space: normal;
-      word-break: break-word;
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
-    .topo-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      border-radius: 999px;
-      padding: 2px 8px;
-      border: 1px solid var(--line);
-      font-size: 11px;
-      color: var(--muted);
-    }
-    .pulse {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--mint);
-      box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.8);
-      animation: pulse 1.4s infinite;
-    }
-    .meta { margin-top: 10px; color: var(--muted); font-size: 12px; font-family: "JetBrains Mono", monospace; }
-    .err { color: var(--rose); margin-top: 8px; font-size: 13px; min-height: 1.1em; }
-    .workers table { table-layout: fixed; }
-    .workers th:nth-child(1), .workers td:nth-child(1) { width: 14%; }
-    .workers th:nth-child(2), .workers td:nth-child(2) { width: 8%; }
-    .workers th:nth-child(3), .workers td:nth-child(3) { width: 46%; word-break: break-word; }
-    .workers th:nth-child(4), .workers td:nth-child(4) { width: 12%; }
-    .workers th:nth-child(5), .workers td:nth-child(5) { width: 20%; word-break: break-word; }
-    @keyframes lift { to { transform: translateY(0); opacity: 1; } }
-    @keyframes shimmer {
-      0% { background-position: 180% 0; }
-      100% { background-position: -40% 0; }
-    }
-    @keyframes pulse {
-      0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.8); }
-      70% { box-shadow: 0 0 0 8px rgba(52, 211, 153, 0); }
-      100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
-    }
-    @media (max-width: 1060px) {
-      .status-strip { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
-      .services-grid { grid-template-columns: repeat(2, minmax(150px, 1fr)); }
-      .layout { grid-template-columns: 1fr; }
-      .actions-grid { grid-template-columns: 1fr; }
-      .slo-grid { grid-template-columns: repeat(2, minmax(130px, 1fr)); }
-    }
-    @media (max-width: 580px) {
-      .wrap { width: min(1280px, 94vw); }
-      .controls { width: 100%; }
-      .input { width: 100%; }
-      .filter-select { width: 100%; }
-      .btn { flex: 1; }
-      .tab-btn { flex: 1; min-width: 110px; }
-      .status-strip { grid-template-columns: 1fr; }
-      .services-grid { grid-template-columns: 1fr; }
-      .slo-grid { grid-template-columns: 1fr; }
-      .desktop-heavy { display: none; }
-      .mobile-only { display: block; }
-    }
+    body {{ font-family: Segoe UI, Tahoma, sans-serif; margin: 32px; color: #1f2937; }}
+    .card {{ max-width: 820px; border: 1px solid #d0d5dd; border-radius: 12px; padding: 20px; background: #fff; }}
+    code {{ background: #f2f4f7; padding: 2px 6px; border-radius: 6px; }}
   </style>
 </head>
-<body class="noise">
-  <div class="wrap">
-    <div class="topbar">
-      <div class="headline">
-        <h1 class="title">BroodMind Control Deck</h1>
-        <span class="subtitle">private tailnet telemetry</span>
-      </div>
-      <div class="controls">
-        <input id="token" class="input" type="password" placeholder="Dashboard token" />
-        <select id="filter-window" class="input filter-select">
-          <option value="15">15m</option>
-          <option value="60" selected>1h</option>
-          <option value="240">4h</option>
-          <option value="1440">24h</option>
-        </select>
-        <select id="filter-service" class="input filter-select">
-          <option value="all" selected>All services</option>
-          <option value="gateway">Gateway</option>
-          <option value="queen">Queen</option>
-          <option value="telegram">Telegram</option>
-          <option value="exec_run">Exec Run</option>
-          <option value="mcp">MCP</option>
-          <option value="workers">Workers</option>
-        </select>
-        <select id="filter-env" class="input filter-select">
-          <option value="all" selected>All envs</option>
-          <option value="local">local</option>
-          <option value="dev">dev</option>
-          <option value="staging">staging</option>
-          <option value="prod">prod</option>
-        </select>
-        <button id="save-token" class="btn">Save Token</button>
-        <button id="refresh" class="btn primary">Refresh</button>
-      </div>
-    </div>
-
-    <section class="status-strip">
-      <article class="kpi">
-        <div class="kpi-label">Overall Health</div>
-        <div id="health-status" class="kpi-value">-</div>
-        <div id="chip-health" class="chip">No summary</div>
-      </article>
-      <article class="kpi">
-        <div class="kpi-label">Latency p95</div>
-        <div id="kpi-latency" class="kpi-value">-</div>
-        <div id="chip-latency" class="chip">Control ack latency</div>
-      </article>
-      <article class="kpi">
-        <div class="kpi-label">Error Rate</div>
-        <div id="kpi-error-rate" class="kpi-value">0%</div>
-        <div id="chip-errors" class="chip">errors - / events - (window)</div>
-      </article>
-      <article class="kpi">
-        <div class="kpi-label">Queue Depth</div>
-        <div id="kpi-queue-depth" class="kpi-value">0</div>
-        <div id="chip-queues" class="chip">followup - | internal - | telegram -</div>
-      </article>
-      <article class="kpi">
-        <div class="kpi-label">Active Workers</div>
-        <div id="kpi-active-workers" class="kpi-value">0</div>
-        <div id="chip-workers" class="chip">failed - | completed -</div>
-      </article>
-    </section>
-
-    <section class="mobile-only">
-      <div class="mobile-oncall">
-        <div class="mobile-head">
-          <div class="mobile-title">On-Call View</div>
-          <div id="mobile-health" class="mobile-health">-</div>
-        </div>
-        <div id="mobile-summary" class="meta">No summary yet.</div>
-        <div id="mobile-incidents" class="mobile-incidents"><div class="meta">No incidents.</div></div>
-        <div class="mobile-actions">
-          <button id="mobile-retry-failed-btn" class="btn">Retry Latest Failed</button>
-          <button id="mobile-clear-queue-btn" class="btn danger">Clear Control Queue</button>
-        </div>
-      </div>
-    </section>
-
-    <section class="tabs">
-      <button class="tab-btn active" data-tab="overview">Overview</button>
-      <button class="tab-btn" data-tab="operations">Operations</button>
-      <button class="tab-btn" data-tab="telemetry">Telemetry</button>
-    </section>
-
-    <div class="tab-panel active" data-tab-panel="overview">
-      <section class="card" style="margin-bottom: 10px;">
-        <h3>Service Health</h3>
-        <div id="services-grid" class="services-grid">No service data yet.</div>
-      </section>
-
-      <section class="card" style="margin-bottom: 10px;">
-        <h3>Incidents</h3>
-        <div id="incident-summary" class="meta">No incidents.</div>
-        <div id="incidents-list" class="incidents-grid"><div class="meta">No incidents.</div></div>
-      </section>
-    </div>
-
-    <div class="tab-panel" data-tab-panel="operations">
-      <section class="card" style="margin-bottom: 10px;">
-        <h3>SLO / SLA</h3>
-        <div id="slo-targets" class="meta">targets: n/a</div>
-        <div class="slo-grid">
-          <article class="slo-item">
-            <div class="slo-label">Uptime</div>
-            <div id="slo-uptime" class="slo-value">-</div>
-            <div id="slo-uptime-hint" class="slo-hint">-</div>
-          </article>
-          <article class="slo-item">
-            <div class="slo-label">Burn Rate</div>
-            <div id="slo-burn" class="slo-value">-</div>
-            <div id="slo-burn-hint" class="slo-hint">-</div>
-          </article>
-          <article class="slo-item">
-            <div class="slo-label">Error Budget Left</div>
-            <div id="slo-budget" class="slo-value">-</div>
-            <div id="slo-budget-hint" class="slo-hint">-</div>
-          </article>
-          <article class="slo-item">
-            <div class="slo-label">MTTR</div>
-            <div id="slo-mttr" class="slo-value">-</div>
-            <div id="slo-mttr-hint" class="slo-hint">-</div>
-          </article>
-        </div>
-        <div id="noise-summary" class="meta">noise control: n/a</div>
-      </section>
-
-      <section class="actions-grid">
-        <article class="card">
-          <h3>Quick Actions</h3>
-          <div class="actions-row" style="margin-bottom: 8px;">
-            <input id="restart-worker-id" class="input worker-id" type="text" placeholder="Worker ID to restart" />
-            <button id="restart-worker-btn" class="btn warn">Restart Worker</button>
-            <button id="retry-failed-btn" class="btn">Retry Latest Failed</button>
-            <button id="clear-queue-btn" class="btn danger">Clear Control Queue</button>
-          </div>
-          <div class="meta" id="action-result">No actions yet.</div>
-        </article>
-        <article class="card">
-          <h3>Action History</h3>
-          <div id="action-history" class="action-history"><div class="meta">No actions yet.</div></div>
-        </article>
-      </section>
-    </div>
-
-    <div class="tab-panel" data-tab-panel="telemetry">
-      <section class="layout desktop-heavy">
-        <div class="card">
-          <h3>Worker Throughput (rolling)</h3>
-          <div class="chart-wrap"><canvas id="activity-chart"></canvas></div>
-        </div>
-        <div class="card">
-          <h3>Recent Events</h3>
-          <div id="logs" class="logs">
-            <div class="skeleton-wrap">
-              <div class="skeleton-line sm"></div>
-              <div class="skeleton-line lg"></div>
-              <div class="skeleton-line md"></div>
-              <div class="skeleton-line lg"></div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="layout mcp-topology desktop-heavy" style="margin-top: 10px;">
-        <div class="card">
-          <h3>MCP Connectivity</h3>
-          <div id="mcp-status">
-            <div class="skeleton-wrap">
-              <div class="skeleton-line md"></div>
-              <div class="skeleton-line lg"></div>
-              <div class="skeleton-line sm"></div>
-            </div>
-          </div>
-        </div>
-        <div class="card">
-          <h3>Live Worker Topology</h3>
-          <div id="worker-topology" class="topology">
-            <div class="skeleton-wrap">
-              <div class="skeleton-line lg"></div>
-              <div class="skeleton-line md"></div>
-              <div class="skeleton-line lg"></div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section class="card desktop-heavy" style="margin-top: 10px;">
-        <h3>Recent Workers</h3>
-        <div class="workers">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Status</th>
-                <th>Task</th>
-                <th>Last Tool</th>
-                <th>Updated</th>
-              </tr>
-            </thead>
-            <tbody id="workers-table">
-              <tr><td colspan="5"><div class="skeleton-wrap"><div class="skeleton-line lg"></div><div class="skeleton-line md"></div><div class="skeleton-line lg"></div></div></td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
-    </div>
-
-    <div class="meta" id="meta">Last refresh: never</div>
-    <div class="err" id="error"></div>
+<body>
+  <div class=\"card\">
+    <h1>Dashboard Is Unavailable</h1>
+    <p>The legacy inline dashboard has been removed. Build and enable the new web app.</p>
+    <p>Flag status: <code>BROODMIND_WEBAPP_ENABLED={enabled}</code></p>
+    <p>Dist status: <code>{dist_status}</code> at <code>{dist_hint}</code></p>
+    <ol>
+      <li>Build frontend: <code>cd webapp && npm run build</code></li>
+      <li>Enable flag: <code>BROODMIND_WEBAPP_ENABLED=true</code></li>
+      <li>Optional dist override: <code>BROODMIND_WEBAPP_DIST_DIR=.../webapp/dist</code></li>
+    </ol>
   </div>
-
-  <script>
-    const tokenInput = document.getElementById("token");
-    const filterWindowInput = document.getElementById("filter-window");
-    const filterServiceInput = document.getElementById("filter-service");
-    const filterEnvInput = document.getElementById("filter-env");
-    const saveBtn = document.getElementById("save-token");
-    const refreshBtn = document.getElementById("refresh");
-    const servicesGridEl = document.getElementById("services-grid");
-    const restartWorkerInput = document.getElementById("restart-worker-id");
-    const restartWorkerBtn = document.getElementById("restart-worker-btn");
-    const retryFailedBtn = document.getElementById("retry-failed-btn");
-    const clearQueueBtn = document.getElementById("clear-queue-btn");
-    const actionResultEl = document.getElementById("action-result");
-    const actionHistoryEl = document.getElementById("action-history");
-    const incidentsListEl = document.getElementById("incidents-list");
-    const mobileHealthEl = document.getElementById("mobile-health");
-    const mobileSummaryEl = document.getElementById("mobile-summary");
-    const mobileIncidentsEl = document.getElementById("mobile-incidents");
-    const mobileRetryFailedBtn = document.getElementById("mobile-retry-failed-btn");
-    const mobileClearQueueBtn = document.getElementById("mobile-clear-queue-btn");
-    const tokenKey = "broodmind.dashboard.token";
-    const filterKey = "broodmind.dashboard.filters";
-    const tabKey = "broodmind.dashboard.tab";
-    tokenInput.value = localStorage.getItem(tokenKey) || "";
-    const savedFilters = (() => {
-      try {
-        return JSON.parse(localStorage.getItem(filterKey) || "{}");
-      } catch (_err) {
-        return {};
-      }
-    })();
-    filterWindowInput.value = String(savedFilters.window_minutes || filterWindowInput.value || "60");
-    filterServiceInput.value = String(savedFilters.service || filterServiceInput.value || "all");
-    filterEnvInput.value = String(savedFilters.environment || filterEnvInput.value || "all");
-    const tabButtons = Array.from(document.querySelectorAll("[data-tab]"));
-    const tabPanels = Array.from(document.querySelectorAll("[data-tab-panel]"));
-
-    function setActiveTab(tabId) {
-      const target = String(tabId || "overview");
-      tabButtons.forEach((btn) => {
-        const isActive = String(btn.getAttribute("data-tab") || "") === target;
-        btn.classList.toggle("active", isActive);
-      });
-      tabPanels.forEach((panel) => {
-        const isActive = String(panel.getAttribute("data-tab-panel") || "") === target;
-        panel.classList.toggle("active", isActive);
-      });
-      localStorage.setItem(tabKey, target);
-    }
-
-    tabButtons.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const tabId = String(btn.getAttribute("data-tab") || "overview");
-        setActiveTab(tabId);
-      });
-    });
-    setActiveTab(localStorage.getItem(tabKey) || "overview");
-
-    const historySize = 30;
-    const history = [];
-    let chart = null;
-    let refreshTick = 0;
-    let hasSuccessfulLoad = false;
-    const browserTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
-    const dateTimeFormatter = new Intl.DateTimeFormat(undefined, {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "numeric",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: true,
-      timeZone: browserTimeZone
-    });
-    const timeFormatter = new Intl.DateTimeFormat(undefined, {
-      hour: "numeric",
-      minute: "2-digit",
-      second: "2-digit",
-      hour12: true,
-      timeZone: browserTimeZone
-    });
-
-    saveBtn.addEventListener("click", () => {
-      localStorage.setItem(tokenKey, tokenInput.value || "");
-      runOnce();
-    });
-    refreshBtn.addEventListener("click", runOnce);
-    filterWindowInput.addEventListener("change", () => { persistFilters(); runOnce(); });
-    filterServiceInput.addEventListener("change", () => { persistFilters(); runOnce(); });
-    filterEnvInput.addEventListener("change", () => { persistFilters(); runOnce(); });
-    servicesGridEl.addEventListener("click", (event) => {
-      const target = event.target;
-      const button = target && target.closest ? target.closest("[data-drill-service]") : null;
-      if (!button) return;
-      const service = String(button.getAttribute("data-drill-service") || "all");
-      filterServiceInput.value = service;
-      persistFilters();
-      runOnce(true);
-    });
-    incidentsListEl.addEventListener("click", (event) => {
-      const target = event.target;
-      const button = target && target.closest ? target.closest("[data-incident-service]") : null;
-      if (!button) return;
-      const service = String(button.getAttribute("data-incident-service") || "all");
-      filterServiceInput.value = service;
-      persistFilters();
-      runOnce(true);
-    });
-    restartWorkerBtn.addEventListener("click", async () => {
-      const workerId = String(restartWorkerInput.value || "").trim();
-      if (!workerId) {
-        actionResultEl.textContent = "Enter a worker ID first.";
-        return;
-      }
-      const ok = window.confirm("Restart worker " + workerId + "? This will stop and relaunch the worker.");
-      if (!ok) return;
-      await runAction("restart_worker", { worker_id: workerId, confirm: true });
-    });
-    retryFailedBtn.addEventListener("click", async () => {
-      await runAction("retry_failed", {});
-    });
-    clearQueueBtn.addEventListener("click", async () => {
-      const ok = window.confirm("Clear all pending control requests?");
-      if (!ok) return;
-      await runAction("clear_control_queue", { confirm: true });
-    });
-    mobileRetryFailedBtn.addEventListener("click", async () => {
-      await runAction("retry_failed", {});
-    });
-    mobileClearQueueBtn.addEventListener("click", async () => {
-      const ok = window.confirm("Clear all pending control requests?");
-      if (!ok) return;
-      await runAction("clear_control_queue", { confirm: true });
-    });
-
-    function headers() {
-      const token = tokenInput.value || "";
-      return token ? { "x-broodmind-token": token } : {};
-    }
-
-    function currentFilters() {
-      return {
-        window_minutes: Number(filterWindowInput.value || 60),
-        service: String(filterServiceInput.value || "all"),
-        environment: String(filterEnvInput.value || "all")
-      };
-    }
-
-    function persistFilters() {
-      localStorage.setItem(filterKey, JSON.stringify(currentFilters()));
-    }
-
-    function filtersToQuery(filters) {
-      const params = new URLSearchParams();
-      params.set("window_minutes", String(filters.window_minutes || 60));
-      params.set("service", String(filters.service || "all"));
-      params.set("environment", String(filters.environment || "all"));
-      return params.toString();
-    }
-
-    function esc(v) {
-      return String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-    }
-
-    function statusClass(value) {
-      const v = String(value || "").toLowerCase();
-      if (["running", "idle", "thinking", "connected", "ok", "completed"].includes(v)) return "ok";
-      if (["warning", "stopped"].includes(v)) return "warn";
-      return "bad";
-    }
-
-    function kpiStatusClass(status) {
-      const s = String(status || "").toLowerCase();
-      if (s === "ok") return "ok";
-      if (s === "warning") return "warn";
-      return "bad";
-    }
-
-    function highlightTaskPrefixes(text) {
-      const source = String(text || "");
-      const parts = source.split(/(\\[[^\\]]+\\])/g);
-      return parts.map((part) => {
-        if (!part) return "";
-        if (part.startsWith("[") && part.endsWith("]")) {
-          const cls = part.toLowerCase().includes("schedul") ? "task-prefix-sched" : "task-prefix";
-          return "<span class='" + cls + "'>" + esc(part) + "</span>";
-        }
-        return esc(part);
-      }).join("");
-    }
-
-    function setKpi(id, text, cls) {
-      const el = document.getElementById(id);
-      el.textContent = text;
-      el.className = "kpi-value " + (cls || "");
-    }
-
-    function setChip(id, text) {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.textContent = text;
-    }
-
-    function formatKpiValue(kpi, fallback) {
-      if (!kpi || kpi.value === null || kpi.value === undefined) return fallback;
-      const value = kpi.value;
-      const unit = String(kpi.unit || "");
-      if (unit === "%") return String(value) + "%";
-      if (unit === "ms") return String(value) + " ms";
-      return String(value);
-    }
-
-    function formatTimestampLocal(value) {
-      if (value === null || value === undefined || value === "") return "never";
-      const raw = String(value).trim();
-      const d = value instanceof Date ? value : new Date(raw);
-      if (Number.isNaN(d.getTime())) return raw;
-      return dateTimeFormatter.format(d);
-    }
-
-    function formatTimeLocal(value) {
-      if (value === null || value === undefined || value === "") return "never";
-      const d = value instanceof Date ? value : new Date(String(value).trim());
-      if (Number.isNaN(d.getTime())) return String(value);
-      return timeFormatter.format(d);
-    }
-
-    function applyFilterOptions(filtersPayload) {
-      if (!filtersPayload || !filtersPayload.options) return;
-      const options = filtersPayload.options;
-      const setSelectOptions = (selectEl, values) => {
-        if (!selectEl || !Array.isArray(values) || !values.length) return;
-        const selected = String(selectEl.value || "");
-        const html = values.map((value) => "<option value='" + esc(value) + "'>" + esc(value) + "</option>");
-        selectEl.innerHTML = html.join("");
-        if (values.map(String).includes(selected)) {
-          selectEl.value = selected;
-        }
-      };
-      setSelectOptions(filterWindowInput, options.window_minutes);
-      setSelectOptions(filterServiceInput, options.service);
-      setSelectOptions(filterEnvInput, options.environment);
-      if (typeof filtersPayload.window_minutes !== "undefined") {
-        filterWindowInput.value = String(filtersPayload.window_minutes);
-      }
-      if (typeof filtersPayload.service !== "undefined") {
-        filterServiceInput.value = String(filtersPayload.service);
-      }
-      if (typeof filtersPayload.environment !== "undefined") {
-        filterEnvInput.value = String(filtersPayload.environment);
-      }
-    }
-
-    function ensureChart() {
-      if (chart) return chart;
-      const ctx = document.getElementById("activity-chart");
-      chart = new Chart(ctx, {
-        type: "line",
-        data: {
-          labels: [],
-          datasets: [
-            {
-              label: "Running workers",
-              data: [],
-              borderColor: "#34d399",
-              backgroundColor: "rgba(52, 211, 153, 0.20)",
-              fill: true,
-              tension: 0.3,
-              pointRadius: 0
-            },
-            {
-              label: "Queue pressure",
-              data: [],
-              borderColor: "#f59e0b",
-              backgroundColor: "rgba(245, 158, 11, 0.14)",
-              fill: true,
-              tension: 0.3,
-              pointRadius: 0
-            }
-          ]
-        },
-        options: {
-          animation: false,
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { labels: { color: "#98a4b8", boxWidth: 12 } }
-          },
-          scales: {
-            x: { ticks: { color: "#98a4b8", maxTicksLimit: 6 }, grid: { color: "rgba(37, 50, 77, 0.42)" } },
-            y: { ticks: { color: "#98a4b8" }, grid: { color: "rgba(37, 50, 77, 0.42)" }, beginAtZero: true }
-          }
-        }
-      });
-      return chart;
-    }
-
-    function updateChartPoint(data) {
-      const queuePressure = Number(data.queen.followup_queues || 0) + Number(data.queen.internal_queues || 0);
-      history.push({
-        t: formatTimeLocal(new Date()),
-        workers: Number(data.workers.running || 0),
-        queues: queuePressure
-      });
-      while (history.length > historySize) history.shift();
-      const c = ensureChart();
-      c.data.labels = history.map((h) => h.t);
-      c.data.datasets[0].data = history.map((h) => h.workers);
-      c.data.datasets[1].data = history.map((h) => h.queues);
-      const peak = Math.max(
-        0,
-        ...history.map((h) => Math.max(Number(h.workers || 0), Number(h.queues || 0)))
-      );
-      const paddedMax = peak <= 2 ? 4 : Math.max(4, Math.ceil(peak * 1.35));
-      c.options.scales.y.max = paddedMax;
-      c.options.scales.y.suggestedMax = paddedMax;
-      c.update();
-    }
-
-    function renderWorkers(workers) {
-      const rows = (workers || []).map((w) => {
-        const lastTool = (Array.isArray(w.tools_used) && w.tools_used.length > 0) ? w.tools_used[w.tools_used.length - 1] : "-";
-        const taskRaw = String(w.task || "");
-        const taskShort = taskRaw.length > 220 ? (taskRaw.slice(0, 217) + "...") : taskRaw;
-        const fullId = String(w.id || "");
-        const shortId = fullId.includes("-") ? fullId.split("-")[0] : fullId.slice(0, 8);
-        const workerName = String(w.template_name || "").trim();
-        const workerDisplay = workerName ? (workerName + " (" + shortId + ")") : shortId;
-        return "<tr>" +
-          "<td class='mono' title='" + esc(fullId) + "'>" + esc(workerDisplay) + "</td>" +
-          "<td class='" + statusClass(w.status) + "'><strong>" + esc(w.status) + "</strong></td>" +
-          "<td title='" + esc(taskRaw) + "'>" + highlightTaskPrefixes(taskShort) + "</td>" +
-          "<td class='mono'>" + esc(lastTool) + "</td>" +
-          "<td class='mono'>" + esc(formatTimestampLocal(w.updated_at)) + "</td>" +
-          "</tr>";
-      });
-      document.getElementById("workers-table").innerHTML = rows.length ? rows.join("") : "<tr><td colspan='5'>No workers</td></tr>";
-    }
-
-    function renderWorkersIfNeeded(workers, force) {
-      const shouldRender = force || !hasSuccessfulLoad || (refreshTick % 2 === 0);
-      if (shouldRender) renderWorkers(workers);
-    }
-
-    function renderLogs(logs) {
-      const el = document.getElementById("logs");
-      const html = (logs || []).map((l) => {
-        const level = String(l.level || "info").toLowerCase();
-        const cls = level === "error" ? "bad" : (level === "warning" ? "warn" : "ok");
-        const service = String(l.service || "gateway");
-        const when = l.timestamp ? formatTimeLocal(l.timestamp) : "-";
-        return "<div class='log-line'>" +
-          "<span class='" + cls + "'>" + esc(level.toUpperCase()) + "</span> " +
-          "<span class='mono'>" + esc(when) + "</span> " +
-          "<span class='mono'>[" + esc(service) + "]</span> " +
-          esc(l.event || "") +
-          "</div>";
-      });
-      el.innerHTML = html.length ? html.join("") : "No logs.";
-      el.scrollTop = el.scrollHeight;
-    }
-
-    function renderMcp(servers) {
-      const mcp = servers || {};
-      const keys = Object.keys(mcp);
-      if (!keys.length) {
-        document.getElementById("mcp-status").innerHTML = "<div class='meta'>No MCP servers configured.</div>";
-        return;
-      }
-      const rows = keys.map((k) => {
-        const item = mcp[k] || {};
-        const name = item.name || k;
-        const status = String(item.status || "unknown").toLowerCase();
-        const toolCount = Number(item.tool_count || 0);
-        const cls = status === "connected" ? "ok" : (status === "error" ? "bad" : "warn");
-        return "<div class='log-line'>" +
-          "<strong>" + esc(name) + "</strong> " +
-          "<span class='" + cls + "'>" + esc(status.toUpperCase()) + "</span> " +
-          "<span class='mono'>(" + toolCount + " tools)</span>" +
-          "</div>";
-      });
-      document.getElementById("mcp-status").innerHTML = rows.join("");
-    }
-
-    function renderMcpIfNeeded(servers, force) {
-      const shouldRender = force || !hasSuccessfulLoad || (refreshTick % 5 === 0);
-      if (shouldRender) renderMcp(servers);
-    }
-
-    function renderTopology(nodes) {
-      const items = Array.isArray(nodes) ? nodes.slice() : [];
-      items.sort((a, b) => {
-        const depthA = Number(a.spawn_depth || 0);
-        const depthB = Number(b.spawn_depth || 0);
-        if (depthA !== depthB) return depthA - depthB;
-        return String(a.updated_at || "").localeCompare(String(b.updated_at || ""));
-      });
-      if (!items.length) {
-        document.getElementById("worker-topology").innerHTML = "No running workers.";
-        return;
-      }
-      const html = items.map((w) => {
-        const depth = Math.max(0, Number(w.spawn_depth || 0));
-        const left = Math.min(depth * 16, 64);
-        const parent = w.parent_worker_id ? ("child of " + String(w.parent_worker_id).slice(0, 8)) : "root worker";
-        const wid = String(w.id || "");
-        const shortId = wid.includes("-") ? wid.split("-")[0] : wid.slice(0, 8);
-        const workerName = String(w.template_name || "").trim();
-        const workerLabel = workerName ? (workerName + " (" + shortId + ")") : shortId;
-        return "<div class='topo-row' style='margin-left:" + left + "px'>" +
-          "<div class='topo-head'>" +
-          "<span class='topo-id' title='" + esc(wid) + "'>" + esc(workerLabel) + "</span>" +
-          "<span class='topo-badge'><span class='pulse'></span>" + esc(parent) + "</span>" +
-          "</div>" +
-          "<div class='topo-task'>" + highlightTaskPrefixes(w.task || "") + "</div>" +
-          "</div>";
-      });
-      document.getElementById("worker-topology").innerHTML = html.join("");
-    }
-
-    function renderTopologyIfNeeded(nodes, force) {
-      const shouldRender = force || !hasSuccessfulLoad || (refreshTick % 2 === 0);
-      if (shouldRender) renderTopology(nodes);
-    }
-
-    function renderServices(services) {
-      const list = Array.isArray(services) ? services : [];
-      if (!list.length) {
-        document.getElementById("services-grid").innerHTML = "<div class='meta'>No service data yet.</div>";
-        return;
-      }
-      const html = list.map((service) => {
-        const status = String(service.status || "unknown").toLowerCase();
-        const cls = status === "ok" ? "ok" : (status === "warning" ? "warn" : "bad");
-        const updated = service.updated_at ? formatTimestampLocal(service.updated_at) : "n/a";
-        return "<article class='service'>" +
-          "<div class='service-head'>" +
-          "<span class='service-name'>" + esc(service.name || service.id || "service") + "</span>" +
-          "<span class='service-status " + cls + "'>" + esc(status) + "</span>" +
-          "</div>" +
-          "<div class='service-reason'>" + esc(service.reason || "-") + "</div>" +
-          "<div class='service-updated'>updated " + esc(updated) + "</div>" +
-          "<button class='drilldown-btn' data-drill-service='" + esc(service.id || "all") + "'>View Logs</button>" +
-          "</article>";
-      });
-      document.getElementById("services-grid").innerHTML = html.join("");
-    }
-
-    async function fetchFilteredLogs(filters, lines = 80) {
-      const query = filtersToQuery(filters) + "&lines=" + String(lines);
-      const rsp = await fetch("/api/dashboard/logs?" + query, { headers: headers() });
-      if (!rsp.ok) throw new Error("LOG API " + rsp.status);
-      return await rsp.json();
-    }
-
-    async function runAction(action, payload) {
-      try {
-        const body = {
-          action: action,
-          reason: "triggered from dashboard",
-          requested_by: "dashboard",
-          ...payload
-        };
-        const rsp = await fetch("/api/dashboard/actions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", ...headers() },
-          body: JSON.stringify(body)
-        });
-        if (!rsp.ok) {
-          const text = await rsp.text();
-          throw new Error("ACTION API " + rsp.status + " " + text);
-        }
-        const data = await rsp.json();
-        actionResultEl.textContent = String(data.message || (data.status + ": " + action));
-      } catch (err) {
-        actionResultEl.textContent = "Action failed: " + String(err);
-      }
-      await runOnce(false);
-    }
-
-    function renderActionHistory(entries) {
-      const list = Array.isArray(entries) ? entries : [];
-      if (!list.length) {
-        actionHistoryEl.innerHTML = "<div class='meta'>No actions yet.</div>";
-        return;
-      }
-      const html = list.map((entry) => {
-        const status = String((entry.result || {}).status || "unknown");
-        const cls = status === "ok" ? "ok" : "warn";
-        const at = formatTimestampLocal(entry.timestamp);
-        const workerId = entry.worker_id ? (" | worker " + entry.worker_id) : "";
-        const message = String((entry.result || {}).message || "");
-        return "<div class='action-item'>" +
-          "<div><span class='" + cls + "'>" + esc(status.toUpperCase()) + "</span> " + esc(entry.action || "") + workerId + "</div>" +
-          "<div class='mono'>" + esc(at) + " by " + esc(entry.requested_by || "dashboard") + "</div>" +
-          "<div>" + esc(message || "-") + "</div>" +
-          "</div>";
-      });
-      actionHistoryEl.innerHTML = html.join("");
-    }
-
-    function renderIncidents(incidents) {
-      const payload = incidents || {};
-      const summary = payload.summary || {};
-      const items = Array.isArray(payload.items) ? payload.items : [];
-      const summaryText =
-        "Open " + String(summary.open || 0) +
-        " | critical " + String(summary.critical || 0) +
-        " | warning " + String(summary.warning || 0);
-      document.getElementById("incident-summary").textContent = summaryText;
-      if (!items.length) {
-        incidentsListEl.innerHTML = "<div class='meta'>No active incidents in selected window.</div>";
-        return;
-      }
-      const html = items.map((item) => {
-        const sev = String(item.severity || "warning").toLowerCase();
-        const cls = sev === "critical" ? "bad" : "warn";
-        const latest = item.latest_at ? formatTimestampLocal(item.latest_at) : "n/a";
-        return "<article class='incident-item'>" +
-          "<div class='incident-head'>" +
-          "<span class='" + cls + "'>" + esc(sev.toUpperCase()) + "</span>" +
-          "<span class='mono'>impact " + esc(item.impact || 0) + "</span>" +
-          "</div>" +
-          "<div class='incident-title'>" + esc(item.title || "Incident") + "</div>" +
-          "<div>" + esc(item.summary || "-") + "</div>" +
-          "<div class='incident-meta'>service=" + esc(item.service || "gateway") +
-          " | count=" + esc(item.count || 0) +
-          " | latest=" + esc(latest) + "</div>" +
-          "<button class='drilldown-btn' data-incident-service='" + esc(item.service || "all") + "'>View Logs</button>" +
-          "</article>";
-      });
-      incidentsListEl.innerHTML = html.join("");
-    }
-
-    function renderMobileOnCall(health, incidents) {
-      const h = health || {};
-      const status = String(h.status || "unknown").toUpperCase();
-      mobileHealthEl.textContent = status;
-      mobileHealthEl.className = "mobile-health " + kpiStatusClass(h.status);
-      mobileSummaryEl.textContent = String(h.summary || "No summary.");
-
-      const items = Array.isArray((incidents || {}).items) ? incidents.items : [];
-      if (!items.length) {
-        mobileIncidentsEl.innerHTML = "<div class='meta'>No active incidents.</div>";
-        return;
-      }
-      const top = items.slice(0, 3);
-      const html = top.map((item) => {
-        const sev = String(item.severity || "warning");
-        const cls = sev === "critical" ? "bad" : "warn";
-        return "<div class='mobile-incident'>" +
-          "<span class='" + cls + "'>" + esc(sev.toUpperCase()) + "</span> " +
-          "<strong>" + esc(item.title || "Incident") + "</strong><br/>" +
-          esc(item.summary || "-") +
-          "</div>";
-      });
-      mobileIncidentsEl.innerHTML = html.join("");
-    }
-
-    function renderSlo(slo, noise) {
-      const payload = slo || {};
-      const objectives = payload.objectives || {};
-      const uptime = payload.uptime_pct || {};
-      const burn = payload.burn_rate || {};
-      const budget = payload.error_budget_remaining_pct || {};
-      const mttr = payload.mttr_minutes || {};
-      const fmt = (value, suffix, fallback = "n/a") => {
-        if (value === null || value === undefined) return fallback;
-        return String(value) + suffix;
-      };
-      const setSlo = (id, value, status) => {
-        const el = document.getElementById(id);
-        el.textContent = value;
-        el.className = "slo-value " + kpiStatusClass(status);
-      };
-      setSlo("slo-uptime", fmt(uptime.value, "%"), uptime.status);
-      setSlo("slo-burn", fmt(burn.value, "x"), burn.status);
-      setSlo("slo-budget", fmt(budget.value, "%"), burn.status);
-      setSlo("slo-mttr", mttr.value === null || mttr.value === undefined ? "n/a" : fmt(mttr.value, "m"), mttr.status);
-
-      document.getElementById("slo-targets").textContent =
-        "targets: availability " + String(objectives.availability_target_pct || 99) +
-        "% | error budget " + String(objectives.error_budget_pct || 1) + "%";
-      document.getElementById("slo-uptime-hint").textContent = "service availability score";
-      document.getElementById("slo-burn-hint").textContent = "consumption rate vs budget";
-      document.getElementById("slo-budget-hint").textContent = "estimated remaining budget";
-      document.getElementById("slo-mttr-hint").textContent = "mean time to recovery";
-
-      const n = noise || {};
-      const top = Array.isArray(n.top_groups) ? n.top_groups : [];
-      const topText = top.length
-        ? top.map((g) => g.service + ":" + g.category + " x" + g.count).join(" | ")
-        : "no noisy groups";
-      document.getElementById("noise-summary").textContent =
-        "noise control: raw " + String(n.raw_alerts || 0) +
-        " -> dedup " + String(n.deduped_alerts || 0) +
-        " | reduced " + String(n.reduction_pct || 0) + "%" +
-        " | top " + topText;
-    }
-
-    async function runOnce(focusLogs = false) {
-      const errorEl = document.getElementById("error");
-      errorEl.textContent = "";
-      const startedAt = performance.now();
-      try {
-        const filters = currentFilters();
-        const query = "last=14&" + filtersToQuery(filters);
-        const rsp = await fetch("/api/dashboard/snapshot?" + query, { headers: headers() });
-        if (!rsp.ok) throw new Error("API " + rsp.status);
-        const data = await rsp.json();
-        const health = data.health || {};
-        const kpis = data.kpis || {};
-        const filterPayload = data.filters || filters;
-
-        setKpi("health-status", String(health.status || "unknown").toUpperCase(), kpiStatusClass(health.status));
-        setKpi("kpi-latency", formatKpiValue(kpis.latency_ms_p95, "n/a"), kpiStatusClass((kpis.latency_ms_p95 || {}).status));
-        setKpi("kpi-error-rate", formatKpiValue(kpis.error_rate_5m, "0%"), kpiStatusClass((kpis.error_rate_5m || {}).status));
-        setKpi("kpi-queue-depth", formatKpiValue(kpis.queue_depth, "0"), kpiStatusClass((kpis.queue_depth || {}).status));
-        setKpi("kpi-active-workers", formatKpiValue(kpis.active_workers, "0"), kpiStatusClass((kpis.active_workers || {}).status));
-
-        setChip("chip-health", String(health.summary || "No summary"));
-        setChip("chip-latency", "channel " + String(data.system.active_channel || "-") + " | uptime " + String(data.system.uptime || "N/A"));
-        setChip(
-          "chip-errors",
-          "errors " + String(kpis.error_count_5m || 0) +
-          " / events " + String(kpis.event_count_5m || 0) +
-          " (" + String(currentFilters().window_minutes) + "m)"
-        );
-        setChip(
-          "chip-queues",
-          "followup " + String(data.queen.followup_queues || 0) +
-          " | internal " + String(data.queen.internal_queues || 0) +
-          " | telegram " + String(data.queues.telegram_queues || 0)
-        );
-        setChip("chip-workers", "failed " + String(data.workers.failed || 0) + " | completed " + String(data.workers.completed || 0));
-
-        applyFilterOptions(filterPayload);
-        persistFilters();
-
-        renderWorkersIfNeeded(data.workers.recent || [], focusLogs);
-        renderServices(data.services || []);
-        renderIncidents(data.incidents || {});
-        renderMobileOnCall(data.health || {}, data.incidents || {});
-        renderSlo(data.slo || {}, data.noise_control || {});
-        renderActionHistory((data.actions || {}).history || []);
-        renderMcpIfNeeded((data.connectivity || {}).mcp_servers || {}, focusLogs);
-        renderTopologyIfNeeded(data.workers.topology || [], focusLogs);
-        updateChartPoint(data);
-        try {
-          const shouldRefreshLogs = focusLogs || !hasSuccessfulLoad || (refreshTick % 3 === 0);
-          if (shouldRefreshLogs) {
-            const logsRsp = await fetchFilteredLogs(currentFilters(), focusLogs ? 140 : 80);
-            renderLogs(logsRsp.entries || []);
-          }
-        } catch (logErr) {
-          renderLogs(data.logs || []);
-          console.error(logErr);
-        }
-
-        const renderMs = Math.round(performance.now() - startedAt);
-        const nowTick = refreshTick;
-        refreshTick += 1;
-        hasSuccessfulLoad = true;
-        document.getElementById("meta").textContent =
-          "Last refresh " + formatTimestampLocal(new Date()) +
-          " | heartbeat " + formatTimestampLocal(data.system.last_heartbeat) +
-          " | window " + String(currentFilters().window_minutes) + "m" +
-          " | service " + String(currentFilters().service) +
-          " | env " + String(currentFilters().environment) +
-          " | render " + String(renderMs) + "ms" +
-          " | tick " + String(nowTick) +
-          " | tz " + (browserTimeZone || "local") +
-          " | pid " + (data.system.pid || "N/A");
-        if (focusLogs) {
-          document.getElementById("logs").scrollIntoView({ behavior: "smooth", block: "start" });
-        }
-      } catch (err) {
-        errorEl.textContent = "Dashboard request failed: " + err;
-      }
-    }
-
-    runOnce();
-    setInterval(runOnce, 2000);
-  </script>
 </body>
-</html>
-"""
+</html>"""

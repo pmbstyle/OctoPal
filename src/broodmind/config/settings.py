@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     tailscale_ips: str = Field("", alias="BROODMIND_TAILSCALE_IPS")
     dashboard_token: str = Field("", alias="BROODMIND_DASHBOARD_TOKEN")
     tailscale_auto_serve: bool = Field(True, alias="BROODMIND_TAILSCALE_AUTO_SERVE")
+    webapp_enabled: bool = Field(False, alias="BROODMIND_WEBAPP_ENABLED")
+    webapp_dist_dir: Path | None = Field(default=None, alias="BROODMIND_WEBAPP_DIST_DIR")
 
     worker_launcher: str = Field("same_env", alias="BROODMIND_WORKER_LAUNCHER")
     worker_docker_image: str = Field("broodmind-worker:latest", alias="BROODMIND_WORKER_DOCKER_IMAGE")

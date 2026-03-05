@@ -121,12 +121,21 @@ Main config is loaded from `.env`.
 | `BROODMIND_WORKSPACE_DIR` | No | Workspace root (default `workspace`) |
 | `BROODMIND_STATE_DIR` | No | Runtime state dir (default `data`) |
 | `BROODMIND_DASHBOARD_TOKEN` | Recommended | Protect `/api/dashboard/*` |
+| `BROODMIND_WEBAPP_ENABLED` | No | Serve new dashboard from built web app assets |
+| `BROODMIND_WEBAPP_DIST_DIR` | No | Override web app dist path (default `webapp/dist`) |
 
 Useful optional keys:
 
 - `BRAVE_API_KEY` for `web_search`
 - `FIRECRAWL_API_KEY` for richer `web_fetch`
 - `OPENAI_API_KEY` for embedding-based semantic memory
+
+Dashboard note:
+
+- Legacy inline `/dashboard` UI was removed.
+- Build frontend via `cd webapp && npm run build`.
+- Enable dashboard serving with `BROODMIND_WEBAPP_ENABLED=true`.
+- `broodmind start` now auto-builds webapp assets when needed (if the flag is enabled).
 
 ## Architecture (Simple View)
 
