@@ -23,9 +23,12 @@ def test_dashboard_returns_legacy_html_when_webapp_flag_disabled(tmp_path) -> No
 
 def test_dashboard_serves_webapp_when_flag_enabled(tmp_path) -> None:
     dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True, exist_ok=True)
     dist.mkdir(parents=True, exist_ok=True)
     (dist / "index.html").write_text("<html><body>webapp-shell</body></html>", encoding="utf-8")
     (dist / "asset.js").write_text("console.log('ok');", encoding="utf-8")
+    (dist / "assets" / "bundle.js").write_text("console.log('bundle');", encoding="utf-8")
+    (dist / "vite.svg").write_text("<svg></svg>", encoding="utf-8")
 
     settings = Settings(
         TELEGRAM_BOT_TOKEN="123:abc",
@@ -44,3 +47,11 @@ def test_dashboard_serves_webapp_when_flag_enabled(tmp_path) -> None:
     asset = client.get("/dashboard/asset.js")
     assert asset.status_code == 200
     assert "console.log('ok')" in asset.text
+
+    root_asset = client.get("/assets/bundle.js")
+    assert root_asset.status_code == 200
+    assert "console.log('bundle')" in root_asset.text
+
+    vite_icon = client.get("/vite.svg")
+    assert vite_icon.status_code == 200
+    assert "<svg>" in vite_icon.text

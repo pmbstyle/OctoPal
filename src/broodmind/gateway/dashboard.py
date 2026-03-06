@@ -86,23 +86,16 @@ def register_dashboard_routes(app: FastAPI) -> None:
 
     @app.get("/dashboard/{asset_path:path}")
     async def dashboard_assets(asset_path: str):
-        settings = _get_settings(app)
-        webapp_dist = _resolve_webapp_dist_dir(settings)
-        if not settings.webapp_enabled or webapp_dist is None:
-            raise HTTPException(status_code=404, detail="Dashboard asset not found")
+        return _serve_dashboard_asset(app, asset_path, spa_fallback=True)
 
-        normalized = asset_path.strip().replace("\\", "/")
-        candidate = (webapp_dist / normalized).resolve()
-        if not str(candidate).startswith(str(webapp_dist.resolve())):
-            raise HTTPException(status_code=404, detail="Dashboard asset not found")
+    @app.get("/assets/{asset_path:path}")
+    async def dashboard_root_assets(asset_path: str):
+        # Vite build outputs absolute /assets/* URLs by default.
+        return _serve_dashboard_asset(app, f"assets/{asset_path}", spa_fallback=False)
 
-        if candidate.is_file():
-            return FileResponse(candidate)
-
-        index_path = webapp_dist / "index.html"
-        if index_path.is_file():
-            return FileResponse(index_path)
-        raise HTTPException(status_code=404, detail="Dashboard asset not found")
+    @app.get("/vite.svg")
+    async def dashboard_vite_icon():
+        return _serve_dashboard_asset(app, "vite.svg", spa_fallback=False)
 
     @app.get("/api/dashboard/snapshot")
     async def dashboard_snapshot(
@@ -477,6 +470,28 @@ def _get_settings(app: FastAPI) -> Settings:
     if not isinstance(settings, Settings):
         raise HTTPException(status_code=500, detail="Settings not initialized")
     return settings
+
+
+def _serve_dashboard_asset(app: FastAPI, asset_path: str, *, spa_fallback: bool) -> FileResponse:
+    settings = _get_settings(app)
+    webapp_dist = _resolve_webapp_dist_dir(settings)
+    if not settings.webapp_enabled or webapp_dist is None:
+        raise HTTPException(status_code=404, detail="Dashboard asset not found")
+
+    normalized = asset_path.strip().replace("\\", "/")
+    candidate = (webapp_dist / normalized).resolve()
+    resolved_dist = webapp_dist.resolve()
+    if not str(candidate).startswith(str(resolved_dist)):
+        raise HTTPException(status_code=404, detail="Dashboard asset not found")
+
+    if candidate.is_file():
+        return FileResponse(candidate)
+
+    if spa_fallback:
+        index_path = webapp_dist / "index.html"
+        if index_path.is_file():
+            return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="Dashboard asset not found")
 
 
 def _get_store(app: FastAPI, settings: Settings) -> SQLiteStore:
