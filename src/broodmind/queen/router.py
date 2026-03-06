@@ -30,10 +30,30 @@ _PRIORITY_TOOL_NAMES = {
     "queen_context_reset",
     "queen_context_health",
     "check_schedule",
-    "spawn_worker",
+    "start_worker",
     "get_worker_result",
     "get_worker_output_path",
     "manage_canon",
+}
+_ALWAYS_INCLUDE_TOOL_NAMES = {
+    # Queen self-control baseline
+    "queen_context_reset",
+    "queen_context_health",
+    "check_schedule",
+    # Scheduler control loop
+    "list_schedule",
+    "schedule_task",
+    "remove_task",
+    # Worker lifecycle essentials
+    "list_workers",
+    "start_worker",
+    "start_child_worker",
+    "start_workers_parallel",
+    "get_worker_status",
+    "list_active_workers",
+    "get_worker_result",
+    "get_worker_output_path",
+    "stop_worker",
 }
 
 
@@ -515,7 +535,23 @@ def _budget_tool_specs(tool_specs: list[ToolSpec], *, max_count: int) -> list[To
     if len(tool_specs) <= max_count:
         return tool_specs
     prioritized = sorted(tool_specs, key=_tool_priority)
-    return prioritized[:max_count]
+    always = [spec for spec in prioritized if str(getattr(spec, "name", "")) in _ALWAYS_INCLUDE_TOOL_NAMES]
+
+    selected: list[ToolSpec] = list(always)
+    selected_names = {str(getattr(spec, "name", "")) for spec in selected}
+    remaining_budget = max_count - len(selected)
+
+    if remaining_budget > 0:
+        for spec in prioritized:
+            name = str(getattr(spec, "name", ""))
+            if name in selected_names:
+                continue
+            selected.append(spec)
+            selected_names.add(name)
+            if len(selected) >= max_count:
+                break
+
+    return selected
 
 
 def _shrink_tool_specs_for_retry(tool_specs: list[ToolSpec]) -> list[ToolSpec]:

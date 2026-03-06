@@ -114,7 +114,9 @@ def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
         ]
     )
     scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
-    payload = json.loads(_tool_check_schedule({}, {"queen": SimpleNamespace(scheduler=scheduler)}))
+    payload = json.loads(
+        asyncio.run(_tool_check_schedule({}, {"queen": SimpleNamespace(scheduler=scheduler)}))
+    )
     assert payload["due_count"] == 1
     assert payload["due_tasks"][0]["task_id"] == "daily_digest"
     assert payload["due_tasks"][0]["inputs"] == {"section": "news", "max_items": 5}
