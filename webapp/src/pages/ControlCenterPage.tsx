@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchOverview, fetchQueen, fetchWorkers } from "../api/dashboardClient";
+import { fetchOverview, fetchQueen, fetchSystem, fetchWorkers } from "../api/dashboardClient";
 import type { components } from "../api/types";
 import type { DashboardFilters } from "../ui/GlobalFiltersBar";
 
 type OverviewPayload = components["schemas"]["DashboardOverviewV2"];
 type WorkersPayload = components["schemas"]["DashboardWorkersV2"];
 type QueenPayload = components["schemas"]["DashboardQueenV2"];
+type SystemPayload = components["schemas"]["DashboardSystemV2"];
 
 type WorkerRow = {
   id?: string;
@@ -14,6 +15,8 @@ type WorkerRow = {
   status?: string;
   task?: string;
   updated_at?: string;
+  summary?: string;
+  error?: string;
   parent_worker_id?: string | null;
   spawn_depth?: number;
 };
@@ -29,6 +32,7 @@ type SnapshotBundle = {
   overview: OverviewPayload;
   workers: WorkersPayload;
   queen: QueenPayload;
+  system: SystemPayload;
 };
 
 type WorkerTooltip = {
@@ -110,6 +114,28 @@ function workerRowTone(status?: string): string {
     return "bg-amber-500/[0.06]";
   }
   return "bg-rose-500/[0.08]";
+}
+
+function workerIssue(worker: WorkerRow): string | null {
+  const errorText = String(worker.error ?? "").trim();
+  if (errorText) {
+    return errorText;
+  }
+  const summaryText = String(worker.summary ?? "").trim();
+  if (!summaryText) {
+    return null;
+  }
+  const lowered = summaryText.toLowerCase();
+  if (
+    lowered.includes("failed") ||
+    lowered.includes("error") ||
+    lowered.includes("permission denied") ||
+    lowered.includes("упал") ||
+    lowered.includes("ошиб")
+  ) {
+    return summaryText;
+  }
+  return null;
 }
 
 function prettyTime(value?: string): string {
@@ -280,7 +306,7 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
 
     const refresh = async () => {
       try {
-        const [overview, workers, queen] = await Promise.all([
+        const [overview, workers, queen, system] = await Promise.all([
           fetchOverview({
             windowMinutes: filters.windowMinutes,
             service: filters.service,
@@ -299,6 +325,12 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
             environment: filters.environment,
             token: filters.token || undefined,
           }),
+          fetchSystem({
+            windowMinutes: filters.windowMinutes,
+            service: filters.service,
+            environment: filters.environment,
+            token: filters.token || undefined,
+          }),
         ]);
 
         if (!active) {
@@ -310,7 +342,7 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
         const queenNode = queen.queen as Record<string, unknown>;
         const queenQueue = asNumber(queenNode?.followup_queues) + asNumber(queenNode?.internal_queues);
 
-        setBundle({ overview, workers, queen });
+        setBundle({ overview, workers, queen, system });
         setHistory((prev) =>
           [...prev, { at: Date.now(), activeWorkers, queueDepth, queenQueue }].slice(-32),
         );
@@ -344,6 +376,25 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
   const kpis = (bundle?.overview.kpis as Record<string, { value?: unknown }>) ?? {};
   const incidents = bundle?.overview.incidents_summary ?? { open: 0, critical: 0, warning: 0 };
   const queen = (bundle?.queen.queen as Record<string, unknown>) ?? {};
+  const logs = (bundle?.system.logs as Array<{ event?: string; level?: string; timestamp?: string; service?: string }>) ?? [];
+  const queenNotes = logs
+    .filter((entry) => {
+      const event = String(entry.event ?? "").toLowerCase();
+      const service = String(entry.service ?? "").toLowerCase();
+      const level = String(entry.level ?? "").toLowerCase();
+      if (service.includes("queen")) {
+        return true;
+      }
+      return (
+        level === "error" ||
+        level === "critical" ||
+        event.includes("permission denied") ||
+        event.includes("worker") ||
+        event.includes("failed") ||
+        event.includes("упал")
+      );
+    })
+    .slice(0, 5);
 
   const metricCards = useMemo(
     () => [
@@ -421,28 +472,45 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
         <div className="xl:col-span-2">
           <RealtimeGraph points={history} />
         </div>
+        <div className="grid gap-4">
+          <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Incidents</h3>
+            <div className="mt-4 space-y-3 text-sm">
+              <div className="flex items-center justify-between rounded-lg bg-slate-950/70 px-3 py-2">
+                <span className="text-slate-400">Open</span>
+                <span className="font-semibold text-slate-100">{incidents.open}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-slate-950/70 px-3 py-2">
+                <span className="text-slate-400">Critical</span>
+                <span className="font-semibold text-rose-300">{incidents.critical}</span>
+              </div>
+              <div className="flex items-center justify-between rounded-lg bg-slate-950/70 px-3 py-2">
+                <span className="text-slate-400">Warning</span>
+                <span className="font-semibold text-amber-300">{incidents.warning}</span>
+              </div>
+              <div className="rounded-lg bg-slate-950/70 px-3 py-2">
+                <p className="text-xs uppercase tracking-wider text-slate-500">Last update</p>
+                <p className="mt-1 text-sm text-slate-300">{prettyTime(bundle?.overview.generated_at)} (local)</p>
+              </div>
+            </div>
+          </section>
 
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Incidents</h3>
-          <div className="mt-4 space-y-3 text-sm">
-            <div className="flex items-center justify-between rounded-lg bg-slate-950/70 px-3 py-2">
-              <span className="text-slate-400">Open</span>
-              <span className="font-semibold text-slate-100">{incidents.open}</span>
+          <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Queen Notes</h3>
+            <div className="mt-3 space-y-2">
+              {queenNotes.length === 0 ? (
+                <p className="rounded-lg bg-slate-950/70 px-3 py-2 text-xs text-slate-400">No notable notes in current window.</p>
+              ) : (
+                queenNotes.map((note, index) => (
+                  <article key={`${note.timestamp}-${index}`} className="rounded-lg bg-slate-950/70 px-3 py-2">
+                    <p className="text-[11px] text-slate-500">{prettyTime(note.timestamp)} (local)</p>
+                    <p className="mt-1 text-xs text-slate-200">{String(note.event ?? "").slice(0, 140)}</p>
+                  </article>
+                ))
+              )}
             </div>
-            <div className="flex items-center justify-between rounded-lg bg-slate-950/70 px-3 py-2">
-              <span className="text-slate-400">Critical</span>
-              <span className="font-semibold text-rose-300">{incidents.critical}</span>
-            </div>
-            <div className="flex items-center justify-between rounded-lg bg-slate-950/70 px-3 py-2">
-              <span className="text-slate-400">Warning</span>
-              <span className="font-semibold text-amber-300">{incidents.warning}</span>
-            </div>
-            <div className="rounded-lg bg-slate-950/70 px-3 py-2">
-              <p className="text-xs uppercase tracking-wider text-slate-500">Last update</p>
-              <p className="mt-1 text-sm text-slate-300">{prettyTime(bundle?.overview.generated_at)} (local)</p>
-            </div>
-          </div>
-        </section>
+          </section>
+        </div>
       </div>
 
       <section className="relative rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
@@ -472,10 +540,11 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
                 workers.map((worker) => {
                   const hierarchy = hierarchyLabel(worker);
                   const status = statusMeta(worker.status);
+                  const issue = workerIssue(worker);
                   return (
                   <tr
                     key={`${worker.id}-${worker.updated_at}`}
-                    className={`rounded-lg bg-slate-950/70 ${workerRowTone(worker.status)}`}
+                    className={`rounded-lg bg-slate-950/70 ${issue ? "bg-rose-500/[0.12]" : workerRowTone(worker.status)}`}
                   >
                     <td className="rounded-l-lg px-3 py-3 font-mono text-xs text-cyan-300">
                       <span className="cursor-help underline decoration-dotted underline-offset-4">
@@ -539,6 +608,7 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
                               "",
                               `ID: ${worker.id ?? "n/a"}`,
                               `Template: ${worker.template_name ?? "n/a"}`,
+                              issue ? `Issue: ${issue}` : "Issue: none",
                             ],
                             wide: true,
                           })
@@ -552,6 +622,7 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
                               "",
                               `ID: ${worker.id ?? "n/a"}`,
                               `Template: ${worker.template_name ?? "n/a"}`,
+                              issue ? `Issue: ${issue}` : "Issue: none",
                             ],
                             wide: true,
                           })
@@ -559,6 +630,11 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
                       >
                         {worker.task ?? "n/a"}
                       </button>
+                      {issue ? (
+                        <p className="mt-1 truncate text-[11px] text-rose-300">
+                          Issue: {issue}
+                        </p>
+                      ) : null}
                     </td>
                     <td className="rounded-r-lg px-3 py-3 text-slate-400">{prettyTime(worker.updated_at)}</td>
                   </tr>
