@@ -31,6 +31,9 @@ type SnapshotBundle = {
   queen: QueenPayload;
 };
 
+const GRAPH_TOP_PAD = 28;
+const GRAPH_BOTTOM_PAD = 16;
+
 function asNumber(value: unknown): number {
   const n = Number(value);
   if (Number.isFinite(n)) {
@@ -88,18 +91,16 @@ function buildLine(points: number[], width: number, height: number, max: number)
   if (points.length === 0) {
     return "";
   }
-  const topPad = 28;
-  const bottomPad = 16;
-  const plotHeight = Math.max(1, height - topPad - bottomPad);
+  const plotHeight = Math.max(1, height - GRAPH_TOP_PAD - GRAPH_BOTTOM_PAD);
   if (points.length === 1) {
-    const y = topPad + plotHeight - (points[0] / max) * plotHeight;
+    const y = GRAPH_TOP_PAD + plotHeight - (points[0] / max) * plotHeight;
     return `M 0 ${y.toFixed(2)} L ${width} ${y.toFixed(2)}`;
   }
   const step = width / (points.length - 1);
   return points
     .map((value, index) => {
       const x = index * step;
-      const y = topPad + plotHeight - (value / max) * plotHeight;
+      const y = GRAPH_TOP_PAD + plotHeight - (value / max) * plotHeight;
       return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
     })
     .join(" ");
@@ -113,7 +114,10 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
   const queueDepth = points.map((point) => point.queueDepth);
   const queenQueue = points.map((point) => point.queenQueue);
   const rawMaxValue = Math.max(1, ...workers, ...queueDepth, ...queenQueue);
-  const yAxisMax = Number((rawMaxValue + Math.max(0.5, rawMaxValue * 0.2)).toFixed(1));
+  const yStep = Math.max(1, Math.ceil(rawMaxValue / 3));
+  const yAxisMax = yStep * 3;
+  const yTicks = [yStep, yStep * 2, yAxisMax];
+  const plotHeight = Math.max(1, height - GRAPH_TOP_PAD - GRAPH_BOTTOM_PAD);
   const workerLine = buildLine(workers, width, height, yAxisMax);
   const queueLine = buildLine(queueDepth, width, height, yAxisMax);
   const queenLine = buildLine(queenQueue, width, height, yAxisMax);
@@ -138,7 +142,7 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
         <span className="text-xs text-slate-400">Last {points.length} samples</span>
       </div>
       <p className="mb-2 text-xs text-slate-500">
-        Y-axis = shared metric count scale (0 to {yAxisMax}). X-axis = local browser time.
+        Y-axis = shared metric count scale (integer counts, 0 to {yAxisMax}). X-axis = local browser time.
       </p>
       <svg
         viewBox={`0 0 ${width} ${height}`}
@@ -156,29 +160,33 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
         }}
         onMouseLeave={() => setHoverIndex(null)}
       >
-        {[0.25, 0.5, 0.75].map((fraction) => (
+        {yTicks.map((tick) => {
+          const y = GRAPH_TOP_PAD + plotHeight - (tick / yAxisMax) * plotHeight;
+          return (
           <line
-            key={fraction}
+            key={tick}
             x1={0}
             x2={width}
-            y1={height * fraction}
-            y2={height * fraction}
+            y1={y}
+            y2={y}
             stroke="#1e293b"
             strokeWidth={1}
           />
-        ))}
-        {[0.25, 0.5, 0.75].map((fraction) => (
+        )})}
+        {yTicks.map((tick) => {
+          const y = GRAPH_TOP_PAD + plotHeight - (tick / yAxisMax) * plotHeight;
+          return (
           <text
-            key={`label-${fraction}`}
+            key={`label-${tick}`}
             x={width - 8}
-            y={height * fraction - 4}
+            y={y - 4}
             fill="#64748b"
             fontSize="10"
             textAnchor="end"
           >
-            {(yAxisMax * (1 - fraction)).toFixed(1)}
+            {tick}
           </text>
-        ))}
+        )})}
         <text x={width - 8} y={height - 4} fill="#64748b" fontSize="10" textAnchor="end">
           0
         </text>
