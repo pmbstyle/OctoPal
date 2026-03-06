@@ -76,6 +76,20 @@ function statusPill(status?: string): string {
   return "bg-rose-500/15 text-rose-300 ring-1 ring-inset ring-rose-300/30";
 }
 
+function statusMeta(status?: string): { icon: string; color: string; title: string } {
+  const v = String(status ?? "").toLowerCase();
+  if (v === "completed") {
+    return { icon: "✓", color: "text-emerald-300", title: "completed" };
+  }
+  if (v === "running" || v === "started" || v === "ok" || v === "thinking") {
+    return { icon: "●", color: "text-cyan-300", title: v || "active" };
+  }
+  if (v === "warning" || v === "stopped") {
+    return { icon: "!", color: "text-amber-300", title: v || "warning" };
+  }
+  return { icon: "×", color: "text-rose-300", title: v || "failed" };
+}
+
 function prettyTime(value?: string): string {
   if (!value) {
     return "n/a";
@@ -394,13 +408,12 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
           <p className="text-xs text-slate-500">Top 12 by recency, timestamps in local browser time</p>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[720px] border-separate border-spacing-y-2 text-left text-sm">
+          <table className="w-full min-w-[760px] border-separate border-spacing-y-2 text-left text-sm">
             <thead className="text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-3 py-2">ID</th>
                 <th className="px-3 py-2">Hierarchy</th>
                 <th className="px-3 py-2">Status</th>
-                <th className="px-3 py-2">Template</th>
                 <th className="px-3 py-2">Task</th>
                 <th className="px-3 py-2">Updated</th>
               </tr>
@@ -408,34 +421,57 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
             <tbody>
               {workers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-3 py-4 text-slate-400">
+                  <td colSpan={5} className="px-3 py-4 text-slate-400">
                     No active workers in current filter window.
                   </td>
                 </tr>
               ) : (
                 workers.map((worker) => {
                   const hierarchy = hierarchyLabel(worker);
+                  const status = statusMeta(worker.status);
                   return (
                   <tr key={`${worker.id}-${worker.updated_at}`} className="rounded-lg bg-slate-950/70">
-                    <td className="rounded-l-lg px-3 py-3 font-mono text-xs text-cyan-300">{shortWorkerId(worker.id)}</td>
+                    <td className="group relative rounded-l-lg px-3 py-3 font-mono text-xs text-cyan-300">
+                      <span className="cursor-help underline decoration-dotted underline-offset-4">
+                        {shortWorkerId(worker.id)}
+                      </span>
+                      <div className="pointer-events-none absolute left-3 top-full z-20 mt-2 hidden w-72 rounded-lg border border-slate-700 bg-slate-950/95 p-3 text-xs text-slate-200 shadow-xl group-hover:block">
+                        <p className="mb-1 text-[11px] uppercase tracking-wide text-slate-400">Worker details</p>
+                        <p><span className="text-slate-400">ID:</span> {worker.id ?? "n/a"}</p>
+                        <p><span className="text-slate-400">Template:</span> {worker.template_name ?? "n/a"}</p>
+                        <p><span className="text-slate-400">Status:</span> {String(worker.status ?? "unknown")}</p>
+                        <p><span className="text-slate-400">Updated:</span> {prettyTime(worker.updated_at)} (local)</p>
+                      </div>
+                    </td>
                     <td className="px-3 py-3 text-xs text-slate-300">
                       <div
                         className="inline-flex items-center gap-1"
                         style={{ paddingLeft: `${Math.min(28, hierarchy.depth * 8)}px` }}
-                        title={hierarchy.text}
                       >
-                        {hierarchy.isChild ? <span className="text-cyan-400">↳</span> : <span className="text-slate-500">•</span>}
+                        {hierarchy.isChild ? <span className="text-cyan-400">↳</span> : <span className="text-slate-500">◇</span>}
                         <span>{hierarchy.text}</span>
                       </div>
                     </td>
                     <td className="px-3 py-3">
-                      <span className={`rounded-full px-2 py-1 text-xs font-semibold uppercase ${statusPill(worker.status)}`}>
-                        {String(worker.status ?? "unknown")}
+                      <span
+                        className={`inline-flex h-7 w-7 items-center justify-center rounded-full text-sm font-bold ${statusPill(worker.status)} ${status.color}`}
+                        title={status.title}
+                      >
+                        {status.icon}
                       </span>
                     </td>
-                    <td className="px-3 py-3 text-slate-300">{worker.template_name ?? "n/a"}</td>
-                    <td className="max-w-[420px] truncate px-3 py-3 text-slate-300" title={worker.task ?? ""}>
-                      {worker.task ?? "n/a"}
+                    <td className="group relative max-w-[520px] truncate px-3 py-3 text-slate-300">
+                      <span className="cursor-help underline decoration-dotted underline-offset-4">
+                        {worker.task ?? "n/a"}
+                      </span>
+                      <div className="pointer-events-none absolute left-3 top-full z-20 mt-2 hidden w-[32rem] max-w-[80vw] rounded-lg border border-slate-700 bg-slate-950/95 p-3 text-xs text-slate-200 shadow-xl group-hover:block">
+                        <p className="mb-1 text-[11px] uppercase tracking-wide text-slate-400">Task prompt</p>
+                        <p className="whitespace-pre-wrap break-words">{worker.task ?? "n/a"}</p>
+                        <div className="mt-2 border-t border-slate-800 pt-2 text-[11px] text-slate-400">
+                          <p>ID: {worker.id ?? "n/a"}</p>
+                          <p>Template: {worker.template_name ?? "n/a"}</p>
+                        </div>
+                      </div>
                     </td>
                     <td className="rounded-r-lg px-3 py-3 text-slate-400">{prettyTime(worker.updated_at)}</td>
                   </tr>
