@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 
 from broodmind.config.settings import load_settings
+from broodmind.providers.profile_resolver import resolve_litellm_profile
 from broodmind.jsonl_guard import read_jsonl_dicts
 
 
@@ -342,10 +343,14 @@ def config_audit(args: dict[str, Any], ctx: dict[str, Any]) -> str:
 
     try:
         settings = load_settings()
+        resolved_profile = resolve_litellm_profile(settings)
         present = {
             "TELEGRAM_BOT_TOKEN": bool(settings.telegram_bot_token),
             "BROODMIND_LLM_PROVIDER": bool(settings.llm_provider),
             "ALLOWED_TELEGRAM_CHAT_IDS": bool(settings.allowed_telegram_chat_ids),
+            "BROODMIND_LITELLM_PROVIDER_ID": bool(settings.litellm_provider_id or resolved_profile.provider_id),
+            "BROODMIND_LITELLM_API_KEY": bool(resolved_profile.api_key),
+            "BROODMIND_LITELLM_MODEL": bool(resolved_profile.raw_model),
             "OPENROUTER_API_KEY": bool(settings.openrouter_api_key),
             "ZAI_API_KEY": bool(settings.zai_api_key),
             "OPENAI_API_KEY": bool(settings.openai_api_key),
@@ -360,6 +365,9 @@ def config_audit(args: dict[str, Any], ctx: dict[str, Any]) -> str:
         present.setdefault("OPENROUTER_API_KEY", False)
         present.setdefault("ZAI_API_KEY", False)
         present.setdefault("OPENAI_API_KEY", False)
+        present.setdefault("BROODMIND_LITELLM_PROVIDER_ID", False)
+        present.setdefault("BROODMIND_LITELLM_API_KEY", False)
+        present.setdefault("BROODMIND_LITELLM_MODEL", False)
 
     missing = [k for k in required if not present.get(k, False)]
     return _json(
@@ -368,6 +376,9 @@ def config_audit(args: dict[str, Any], ctx: dict[str, Any]) -> str:
             "env_exists": env_file.exists(),
             "config_error": config_error,
             "missing_required": missing,
+            "has_litellm_provider_id": bool(present.get("BROODMIND_LITELLM_PROVIDER_ID", False)),
+            "has_litellm_key": bool(present.get("BROODMIND_LITELLM_API_KEY", False)),
+            "has_litellm_model": bool(present.get("BROODMIND_LITELLM_MODEL", False)),
             "has_openrouter_key": bool(present.get("OPENROUTER_API_KEY", False)),
             "has_zai_key": bool(present.get("ZAI_API_KEY", False)),
             "has_openai_key": bool(present.get("OPENAI_API_KEY", False)),

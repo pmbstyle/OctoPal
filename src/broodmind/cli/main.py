@@ -24,6 +24,7 @@ from broodmind.cli.branding import print_banner
 from broodmind.config.settings import Settings, load_settings
 from broodmind.gateway.app import build_app
 from broodmind.logging_config import configure_logging
+from broodmind.providers.profile_resolver import resolve_litellm_profile
 from broodmind.runtime_metrics import read_metrics_snapshot
 from broodmind.state import (
     is_pid_running,
@@ -796,6 +797,11 @@ def config_show(reveal_secrets: bool = typer.Option(False, "--reveal-secrets", h
             "Provider",
             {
                 "BROODMIND_LLM_PROVIDER",
+                "BROODMIND_LITELLM_PROVIDER_ID",
+                "BROODMIND_LITELLM_MODEL",
+                "BROODMIND_LITELLM_API_KEY",
+                "BROODMIND_LITELLM_API_BASE",
+                "BROODMIND_LITELLM_MODEL_PREFIX",
                 "OPENROUTER_API_KEY",
                 "OPENROUTER_BASE_URL",
                 "OPENROUTER_MODEL",
@@ -854,10 +860,13 @@ def config_show(reveal_secrets: bool = typer.Option(False, "--reveal-secrets", h
     header = Table.grid(padding=(0, 2))
     header.add_column(style="bold white")
     header.add_column()
+    resolved_profile = resolve_litellm_profile(settings)
     provider = str(getattr(settings, "llm_provider", "litellm"))
     profile_status = "[bright_green]READY[/bright_green]" if settings.telegram_bot_token.strip() else "[bright_red]SETUP NEEDED[/bright_red]"
     header.add_row("Profile", profile_status)
-    header.add_row("Provider", f"[bright_cyan]{provider}[/bright_cyan]")
+    header.add_row("Provider", f"[bright_cyan]{resolved_profile.label}[/bright_cyan] [dim]({resolved_profile.provider_id})[/dim]")
+    header.add_row("Model", f"[bright_cyan]{resolved_profile.model or '(unset)'}[/bright_cyan]")
+    header.add_row("Config Source", f"[dim]{resolved_profile.source}[/dim] via [bright_cyan]{provider}[/bright_cyan]")
     header.add_row("Secrets", "Visible" if reveal_secrets else "Masked")
 
     panels: list[Panel] = [
@@ -896,10 +905,12 @@ def config_show(reveal_secrets: bool = typer.Option(False, "--reveal-secrets", h
         checks.append("[bright_red]Missing TELEGRAM_BOT_TOKEN[/bright_red]")
     if not settings.allowed_telegram_chat_ids.strip():
         checks.append("[yellow]ALLOWED_TELEGRAM_CHAT_IDS is not set[/yellow]")
-    if settings.llm_provider == "openrouter" and not (settings.openrouter_api_key or "").strip():
-        checks.append("[bright_red]OPENROUTER_API_KEY required for openrouter mode[/bright_red]")
-    if settings.llm_provider != "openrouter" and not ((settings.zai_api_key or "").strip() or (settings.openrouter_api_key or "").strip()):
-        checks.append("[bright_red]Set ZAI_API_KEY or OPENROUTER_API_KEY for LLM access[/bright_red]")
+    if resolved_profile.requires_api_key and not (resolved_profile.api_key or "").strip():
+        checks.append(
+            f"[bright_red]Set BROODMIND_LITELLM_API_KEY (or legacy key) for {resolved_profile.label}[/bright_red]"
+        )
+    if not (resolved_profile.model or "").strip():
+        checks.append("[bright_red]BROODMIND_LITELLM_MODEL is not set[/bright_red]")
     if not checks:
         checks.append("[bright_green]Core configuration checks passed[/bright_green]")
     checks_table = Table.grid(padding=(0, 1))

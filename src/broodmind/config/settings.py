@@ -17,12 +17,17 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(..., alias="TELEGRAM_BOT_TOKEN")
 
     # LLM Provider Settings
-    # litellm: Uses LiteLLM which supports both OpenRouter and z.ai
-    # - Set OPENROUTER_API_KEY to use OpenRouter (or set BROODMIND_LLM_PROVIDER=openrouter)
-    # - Set ZAI_API_KEY to use z.ai
-    llm_provider: str = Field("litellm", alias="BROODMIND_LLM_PROVIDER")  # litellm (default, auto-detects) or openrouter
+    # Runtime stays on LiteLLM, while the active upstream provider is chosen via
+    # the BROODMIND_LITELLM_* profile fields. OPENROUTER_* and ZAI_* remain as
+    # legacy fallbacks for existing installations.
+    llm_provider: str = Field("litellm", alias="BROODMIND_LLM_PROVIDER")
+    litellm_provider_id: str | None = Field(default=None, alias="BROODMIND_LITELLM_PROVIDER_ID")
+    litellm_model: str | None = Field(default=None, alias="BROODMIND_LITELLM_MODEL")
+    litellm_api_key: str | None = Field(default=None, alias="BROODMIND_LITELLM_API_KEY")
+    litellm_api_base: str | None = Field(default=None, alias="BROODMIND_LITELLM_API_BASE")
+    litellm_model_prefix: str | None = Field(default=None, alias="BROODMIND_LITELLM_MODEL_PREFIX")
 
-    # LiteLLM Settings (unified provider for both OpenRouter and z.ai)
+    # LiteLLM Settings (unified provider runtime and transport tuning)
     litellm_num_retries: int = Field(3, alias="LITELLM_NUM_RETRIES")
     litellm_timeout: float = Field(120.0, alias="LITELLM_TIMEOUT")
     litellm_fallbacks: str | None = Field(default=None, alias="LITELLM_FALLBACKS")

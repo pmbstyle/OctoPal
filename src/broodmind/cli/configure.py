@@ -14,6 +14,7 @@ from rich.text import Text
 
 from broodmind.cli.branding import print_banner
 from broodmind.config.manager import ConfigManager
+from broodmind.providers.catalog import get_provider_catalog_entry, list_provider_catalog, list_registered_provider_ids
 
 console = Console()
 ACCENT = "bright_cyan"
@@ -74,54 +75,52 @@ def configure_wizard() -> None:
         _set_if_changed(config, changes, "ALLOWED_TELEGRAM_CHAT_IDS", allowed_ids)
 
     console.print(Rule(f"[bold {ACCENT}]Step 3/7  LLM Provider[/bold {ACCENT}]"))
-    current_provider = config.get("BROODMIND_LLM_PROVIDER", "litellm")
-    provider = Prompt.ask(
-        "LLM provider",
-        choices=["litellm", "openrouter"],
-        default=current_provider,
+    provider_choices = list_registered_provider_ids(include_custom=True)
+    current_provider_id = _resolve_configured_provider_id(config)
+    _render_provider_catalog(provider_choices)
+    provider_id = Prompt.ask(
+        "LiteLLM provider",
+        choices=provider_choices,
+        default=current_provider_id,
     )
-    _set_if_changed(config, changes, "BROODMIND_LLM_PROVIDER", provider)
+    provider_entry = get_provider_catalog_entry(provider_id)
+    _set_if_changed(config, changes, "BROODMIND_LLM_PROVIDER", "litellm")
+    _set_if_changed(config, changes, "BROODMIND_LITELLM_PROVIDER_ID", provider_id)
 
-    if provider == "openrouter":
-        console.print("[bold]OpenRouter profile[/bold]")
-        current_or_key = config.get("OPENROUTER_API_KEY", "")
-        or_key = Prompt.ask(
-            "OpenRouter API Key",
-            default=current_or_key,
-            password=bool(current_or_key),
-        )
-        if or_key:
-            _set_if_changed(config, changes, "OPENROUTER_API_KEY", or_key)
+    console.print(f"[bold]{provider_entry.label} profile[/bold]")
+    console.print(f"[dim]{provider_entry.description}[/dim]")
 
-        current_or_model = config.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-4")
-        or_model = Prompt.ask("Default OpenRouter model", default=current_or_model)
-        _set_if_changed(config, changes, "OPENROUTER_MODEL", or_model)
+    current_api_key = _default_profile_value(config, provider_id, "api_key")
+    api_key = Prompt.ask(
+        provider_entry.api_key_label,
+        default=current_api_key,
+        password=bool(current_api_key),
+    )
+    _set_if_changed(config, changes, "BROODMIND_LITELLM_API_KEY", api_key)
 
-        current_or_base = config.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
-        or_base = Prompt.ask("OpenRouter base URL", default=current_or_base)
-        _set_if_changed(config, changes, "OPENROUTER_BASE_URL", or_base)
+    current_model = _default_profile_value(config, provider_id, "model")
+    selected_model = Prompt.ask(provider_entry.model_label, default=current_model)
+    _set_if_changed(config, changes, "BROODMIND_LITELLM_MODEL", selected_model)
 
-        current_or_timeout = str(config.get("OPENROUTER_TIMEOUT", "120"))
-        or_timeout = Prompt.ask("OpenRouter timeout (seconds)", default=current_or_timeout)
-        _set_if_changed(config, changes, "OPENROUTER_TIMEOUT", or_timeout)
+    if provider_entry.supports_custom_base_url:
+        current_api_base = _default_profile_value(config, provider_id, "api_base")
+        api_base = Prompt.ask(provider_entry.base_url_label, default=current_api_base)
+        _set_if_changed(config, changes, "BROODMIND_LITELLM_API_BASE", api_base)
     else:
-        console.print("[bold]LiteLLM / z.ai profile[/bold]")
-        current_zai_key = config.get("ZAI_API_KEY", "")
-        zai_key = Prompt.ask(
-            "Z.ai (or OpenAI-compatible) API Key",
-            default=current_zai_key,
-            password=bool(current_zai_key),
-        )
-        if zai_key:
-            _set_if_changed(config, changes, "ZAI_API_KEY", zai_key)
+        inherited_base = _default_profile_value(config, provider_id, "api_base")
+        if inherited_base:
+            _set_if_changed(config, changes, "BROODMIND_LITELLM_API_BASE", inherited_base)
 
-        current_zai_base = config.get("ZAI_BASE_URL", "https://api.z.ai/api/coding/paas/v4")
-        zai_base = Prompt.ask("Z.ai base URL", default=current_zai_base)
-        _set_if_changed(config, changes, "ZAI_BASE_URL", zai_base)
+    current_prefix = _default_profile_value(config, provider_id, "model_prefix")
+    if provider_entry.supports_model_prefix_override:
+        selected_prefix = Prompt.ask("LiteLLM model prefix", default=current_prefix)
+        _set_if_changed(config, changes, "BROODMIND_LITELLM_MODEL_PREFIX", selected_prefix)
+    elif current_prefix:
+        _set_if_changed(config, changes, "BROODMIND_LITELLM_MODEL_PREFIX", current_prefix)
 
-        current_zai_model = config.get("ZAI_MODEL", "glm-5")
-        zai_model = Prompt.ask("Default model name", default=current_zai_model)
-        _set_if_changed(config, changes, "ZAI_MODEL", zai_model)
+    current_timeout = str(config.get("LITELLM_TIMEOUT", "120") or "120")
+    litellm_timeout = Prompt.ask("LiteLLM timeout (seconds)", default=current_timeout)
+    _set_if_changed(config, changes, "LITELLM_TIMEOUT", litellm_timeout)
 
     console.print(Rule(f"[bold {ACCENT}]Step 4/7  Storage[/bold {ACCENT}]"))
     current_workspace = config.get("BROODMIND_WORKSPACE_DIR", "workspace")
@@ -312,3 +311,80 @@ def _ensure_workspace_bootstrap(workspace_dir: Path) -> dict[str, int | list[str
         "created_files": created_files,
         "skipped_files": skipped_files,
     }
+
+
+def _render_provider_catalog(provider_ids: list[str]) -> None:
+    table = Table(box=box.SIMPLE, show_header=True, header_style=f"bold {ACCENT}", expand=False)
+    table.add_column("ID", style="white", width=16)
+    table.add_column("Provider", style="bold white", width=22)
+    table.add_column("Notes", style="dim", width=54)
+    for provider_id in provider_ids:
+        entry = get_provider_catalog_entry(provider_id)
+        table.add_row(entry.id, entry.label, entry.description)
+    console.print(table)
+
+
+def _resolve_configured_provider_id(config: ConfigManager) -> str:
+    explicit = str(config.get("BROODMIND_LITELLM_PROVIDER_ID", "") or "").strip().lower()
+    if explicit:
+        return explicit
+
+    legacy_provider = str(config.get("BROODMIND_LLM_PROVIDER", "litellm") or "litellm").strip().lower()
+    if legacy_provider == "openrouter":
+        return "openrouter"
+
+    if str(config.get("ZAI_API_KEY", "") or "").strip():
+        return "zai"
+    if str(config.get("OPENROUTER_API_KEY", "") or "").strip():
+        return "openrouter"
+    return "zai"
+
+
+def _default_provider_for_profiles(provider_id: str) -> str:
+    normalized = (provider_id or "").strip().lower()
+    return normalized if normalized in set(list_registered_provider_ids(include_custom=True)) else "custom"
+
+
+def _default_profile_value(config: ConfigManager, provider_id: str, field_name: str) -> str:
+    entry = get_provider_catalog_entry(provider_id)
+    normalized_provider = _default_provider_for_profiles(provider_id)
+
+    unified_keys = {
+        "api_key": "BROODMIND_LITELLM_API_KEY",
+        "api_base": "BROODMIND_LITELLM_API_BASE",
+        "model": "BROODMIND_LITELLM_MODEL",
+        "model_prefix": "BROODMIND_LITELLM_MODEL_PREFIX",
+    }
+    explicit_value = str(config.get(unified_keys[field_name], "") or "").strip()
+    if explicit_value:
+        return explicit_value
+
+    if normalized_provider == "openrouter":
+        legacy_map = {
+            "api_key": "OPENROUTER_API_KEY",
+            "api_base": "OPENROUTER_BASE_URL",
+            "model": "OPENROUTER_MODEL",
+            "model_prefix": "BROODMIND_LITELLM_MODEL_PREFIX",
+        }
+        legacy_value = str(config.get(legacy_map[field_name], "") or "").strip()
+        if legacy_value:
+            return legacy_value
+
+    if normalized_provider == "zai":
+        legacy_map = {
+            "api_key": "ZAI_API_KEY",
+            "api_base": "ZAI_BASE_URL",
+            "model": "ZAI_MODEL",
+            "model_prefix": "BROODMIND_LITELLM_MODEL_PREFIX",
+        }
+        legacy_value = str(config.get(legacy_map[field_name], "") or "").strip()
+        if legacy_value:
+            return legacy_value
+
+    defaults = {
+        "api_key": "",
+        "api_base": entry.default_api_base or "",
+        "model": entry.default_model,
+        "model_prefix": entry.model_prefix or "",
+    }
+    return defaults[field_name]

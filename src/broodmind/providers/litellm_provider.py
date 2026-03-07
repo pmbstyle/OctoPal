@@ -15,6 +15,7 @@ from litellm import acompletion
 
 from broodmind.config.settings import Settings
 from broodmind.providers.base import Message
+from broodmind.providers.profile_resolver import resolve_litellm_profile
 
 logger = logging.getLogger(__name__)
 
@@ -30,36 +31,18 @@ class LiteLLMProvider:
 
     def __init__(self, settings: Settings, model: str | None = None) -> None:
         self._settings = settings
+        self._profile = resolve_litellm_profile(settings, model_override=model)
+        self._model = self._profile.model
+        self._api_base = (self._profile.api_base or "").rstrip("/") or None
+        self._api_key = self._profile.api_key
 
-        # Auto-detect which provider to use based on settings
-        # Priority: 1) llm_provider setting, 2) API key presence
-        use_openrouter = settings.llm_provider == "openrouter" or (
-            settings.openrouter_api_key and not settings.zai_api_key
+        logger.info(
+            "LiteLLM configured: provider=%s source=%s model=%s base_url=%s",
+            self._profile.provider_id,
+            self._profile.source,
+            self._model,
+            self._api_base or "<default>",
         )
-
-        if use_openrouter:
-            # Use OpenRouter via LiteLLM
-            model_name = model or settings.openrouter_model
-            # If the provided model already has the provider prefix, use it as is
-            if model_name.startswith("openrouter/"):
-                self._model = model_name
-            else:
-                self._model = f"openrouter/{model_name}"
-            self._api_base = settings.openrouter_base_url.rstrip("/")
-            self._api_key = settings.openrouter_api_key
-            logger.info("LiteLLM configured for OpenRouter: model=%s, base_url=%s", self._model, self._api_base)
-        else:
-            # Use z.ai (custom OpenAI-compatible endpoint)
-            model_name = model or settings.zai_model
-            # If the provided model already has a prefix, use it as is
-            if "/" in model_name:
-                self._model = model_name
-            else:
-                # Default to openai/ prefix for compatibility with LiteLLM's custom endpoints
-                self._model = f"openai/{model_name}"
-            self._api_base = settings.zai_base_url.rstrip("/")
-            self._api_key = settings.zai_api_key
-            logger.info("LiteLLM configured for z.ai: model=%s, base_url=%s", self._model, self._api_base)
 
         # Parse fallbacks from JSON string if provided
         self._fallbacks: list[dict[str, Any]] | None = None
@@ -95,8 +78,11 @@ class LiteLLMProvider:
 
     async def complete(self, messages: list[Message | dict], **kwargs: object) -> str:
         """Complete a chat request without tools."""
-        if not self._api_key:
-            raise RuntimeError("API key is not configured. Set OPENROUTER_API_KEY or ZAI_API_KEY.")
+        if self._profile.requires_api_key and not self._api_key:
+            raise RuntimeError(
+                "API key is not configured for the active LiteLLM provider. "
+                "Set BROODMIND_LITELLM_API_KEY or configure a provider-specific legacy key."
+            )
 
         serialized_messages = _normalize_plain_messages([_serialize_message(m) for m in messages])
         payload_str = json.dumps({"messages": serialized_messages}, ensure_ascii=False)
@@ -168,8 +154,11 @@ class LiteLLMProvider:
         **kwargs: object,
     ) -> str:
         """Complete a chat request with streamed partial text callbacks."""
-        if not self._api_key:
-            raise RuntimeError("API key is not configured. Set OPENROUTER_API_KEY or ZAI_API_KEY.")
+        if self._profile.requires_api_key and not self._api_key:
+            raise RuntimeError(
+                "API key is not configured for the active LiteLLM provider. "
+                "Set BROODMIND_LITELLM_API_KEY or configure a provider-specific legacy key."
+            )
 
         serialized_messages = _normalize_plain_messages([_serialize_message(m) for m in messages])
         payload_str = json.dumps({"messages": serialized_messages, "stream": True}, ensure_ascii=False)
@@ -231,8 +220,11 @@ class LiteLLMProvider:
         **kwargs: object,
     ) -> dict:
         """Complete a chat request with tool/function calling."""
-        if not self._api_key:
-            raise RuntimeError("API key is not configured. Set OPENROUTER_API_KEY or ZAI_API_KEY.")
+        if self._profile.requires_api_key and not self._api_key:
+            raise RuntimeError(
+                "API key is not configured for the active LiteLLM provider. "
+                "Set BROODMIND_LITELLM_API_KEY or configure a provider-specific legacy key."
+            )
 
         serialized_messages = [_serialize_message(m) for m in messages]
         payload_str = json.dumps(

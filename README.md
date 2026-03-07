@@ -24,8 +24,8 @@ It is designed for long-running assistant workflows (Telegram-first), with memor
 - `uv` (recommended)
 - Telegram bot token from [@BotFather](https://t.me/botfather)
 - At least one LLM API key:
-  - `ZAI_API_KEY` (default LiteLLM path), or
-  - `OPENROUTER_API_KEY` (OpenRouter provider)
+  - `BROODMIND_LITELLM_API_KEY` for the provider you select in `broodmind configure`, or
+  - legacy `ZAI_API_KEY` / `OPENROUTER_API_KEY` if you are upgrading an existing setup
 
 Install `uv` if needed:
 
@@ -115,9 +115,11 @@ Main config is loaded from `.env`.
 |---|---|---|
 | `TELEGRAM_BOT_TOKEN` | Yes | Telegram bot token |
 | `ALLOWED_TELEGRAM_CHAT_IDS` | Recommended | Allowed chat IDs list |
-| `BROODMIND_LLM_PROVIDER` | No | `litellm` (default) or `openrouter` |
-| `ZAI_API_KEY` | Conditional | Required for LiteLLM default path |
-| `OPENROUTER_API_KEY` | Conditional | Required for OpenRouter |
+| `BROODMIND_LLM_PROVIDER` | No | Runtime adapter selection (`litellm` by default) |
+| `BROODMIND_LITELLM_PROVIDER_ID` | Conditional | Active LiteLLM provider profile (`zai`, `openrouter`, `openai`, etc.) |
+| `BROODMIND_LITELLM_API_KEY` | Conditional | API key for the active LiteLLM provider |
+| `BROODMIND_LITELLM_MODEL` | Conditional | Default model for the active LiteLLM provider |
+| `BROODMIND_LITELLM_API_BASE` | No | Override base URL for the active LiteLLM provider |
 | `BROODMIND_WORKSPACE_DIR` | No | Workspace root (default `workspace`) |
 | `BROODMIND_STATE_DIR` | No | Runtime state dir (default `data`) |
 | `BROODMIND_DASHBOARD_TOKEN` | Recommended | Protect `/api/dashboard/*` |
@@ -204,8 +206,9 @@ uv run pytest -q
 
 ### LLM errors
 
-- For LiteLLM path: set `ZAI_API_KEY`
-- For OpenRouter path: set `BROODMIND_LLM_PROVIDER=openrouter` + `OPENROUTER_API_KEY`
+- Run `uv run broodmind configure` and pick the provider you want to use.
+- For unified LiteLLM config: set `BROODMIND_LITELLM_PROVIDER_ID`, `BROODMIND_LITELLM_MODEL`, and `BROODMIND_LITELLM_API_KEY`.
+- Existing `ZAI_*` and `OPENROUTER_*` variables still work as legacy fallbacks.
 
 ### Web search/fetch issues
 
