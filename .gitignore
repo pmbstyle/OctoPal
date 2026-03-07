@@ -26,3 +26,5 @@
 /src/broodmind/channels/__pycache__
 /src/broodmind/whatsapp/__pycache__
 /scripts/whatsapp_bridge/node_modules
+scripts/whatsapp_bridge/package-lock.json
+HEARTBEAT.md

@@ -16,6 +16,7 @@ from broodmind.channels import normalize_user_channel, user_channel_label
 from broodmind.cli.branding import print_banner
 from broodmind.config.manager import ConfigManager
 from broodmind.providers.catalog import get_provider_catalog_entry, list_registered_provider_ids
+from broodmind.whatsapp.ids import normalize_whatsapp_number, parse_allowed_whatsapp_numbers
 
 console = Console()
 ACCENT = "bright_cyan"
@@ -142,12 +143,33 @@ def _configure_user_channel_access(
     _set_if_changed(config, staged, "BROODMIND_USER_CHANNEL", channel)
 
     if channel == "whatsapp":
-        console.print("Use WhatsApp Web with a gateway-owned linked session and allowlisted sender numbers.")
-        current_numbers = _effective_value(config, staged, "ALLOWED_WHATSAPP_NUMBERS", "")
-        allowed_numbers = Prompt.ask(
-            "Allowed WhatsApp numbers (comma-separated, e.g. +15551234567)",
-            default=current_numbers,
+        current_mode = _effective_value(config, staged, "BROODMIND_WHATSAPP_MODE", "separate").strip().lower() or "separate"
+        if current_mode not in {"personal", "separate"}:
+            current_mode = "separate"
+        console.print("Use WhatsApp Web with a linked session. You can use your own number or a separate BroodMind number.")
+        whatsapp_mode = Prompt.ask(
+            "WhatsApp setup mode",
+            choices=["personal", "separate"],
+            default=current_mode,
         )
+        _set_if_changed(config, staged, "BROODMIND_WHATSAPP_MODE", whatsapp_mode)
+        current_numbers = _effective_value(config, staged, "ALLOWED_WHATSAPP_NUMBERS", "")
+        allowed_numbers = current_numbers
+        if whatsapp_mode == "personal":
+            existing_personal = parse_allowed_whatsapp_numbers(current_numbers)
+            default_personal = existing_personal[0] if existing_personal else ""
+            console.print("Personal mode lets you message BroodMind from the same WhatsApp account you linked.")
+            personal_number = Prompt.ask(
+                "Your personal WhatsApp number (the phone you will message from, e.g. +15551234567)",
+                default=default_personal,
+            )
+            normalized_personal = normalize_whatsapp_number(personal_number)
+            allowed_numbers = normalized_personal or personal_number.strip()
+        else:
+            allowed_numbers = Prompt.ask(
+                "Allowed WhatsApp numbers (comma-separated, e.g. +15551234567)",
+                default=current_numbers,
+            )
         if allowed_numbers:
             _set_if_changed(config, staged, "ALLOWED_WHATSAPP_NUMBERS", allowed_numbers)
         current_auth_dir = _effective_value(config, staged, "BROODMIND_WHATSAPP_AUTH_DIR", "data/whatsapp-auth")
@@ -162,6 +184,7 @@ def _configure_user_channel_access(
             _set_if_changed(config, staged, "BROODMIND_WHATSAPP_BRIDGE_PORT", bridge_port)
         return {
             "channel": user_channel_label(channel),
+            "mode": whatsapp_mode.capitalize(),
             "recipients": allowed_numbers or "[configure later]",
             "session_dir": auth_dir,
         }

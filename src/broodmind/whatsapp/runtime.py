@@ -12,7 +12,7 @@ from broodmind.runtime_metrics import update_component_gauges
 from broodmind.state import update_last_message
 from broodmind.utils import should_suppress_user_delivery
 from broodmind.whatsapp.bridge import WhatsAppBridgeController
-from broodmind.whatsapp.ids import parse_allowed_whatsapp_numbers, whatsapp_chat_id
+from broodmind.whatsapp.ids import normalize_whatsapp_number, parse_allowed_whatsapp_numbers, whatsapp_chat_id
 
 logger = structlog.get_logger(__name__)
 
@@ -81,16 +81,35 @@ class WhatsAppRuntime:
 
     async def handle_inbound(self, payload: dict[str, Any]) -> dict[str, Any]:
         sender = str(payload.get("sender", "")).strip()
+        conversation = str(payload.get("conversation", "")).strip() or sender
+        self_number = normalize_whatsapp_number(str(payload.get("self", "")).strip())
+        from_me = bool(payload.get("fromMe"))
+        self_chat = bool(payload.get("selfChat"))
         text = str(payload.get("text", "") or "").strip()
         if not sender or not text:
             return {"accepted": False, "reason": "missing_sender_or_text"}
+        if from_me and not self._is_personal_mode():
+            logger.debug("Ignoring WhatsApp fromMe message outside personal mode", sender=sender, conversation=conversation)
+            return {"accepted": False, "reason": "from_me_ignored"}
+        if from_me and not self_chat:
+            logger.debug("Ignoring WhatsApp fromMe message outside self chat", sender=sender, conversation=conversation)
+            return {"accepted": False, "reason": "not_self_chat"}
         allowed = parse_allowed_whatsapp_numbers(self.settings.allowed_whatsapp_numbers)
         if allowed and sender not in allowed:
             logger.warning("Rejected WhatsApp message from unauthorized sender", sender=sender)
             return {"accepted": False, "reason": "unauthorized"}
 
-        chat_id = whatsapp_chat_id(sender)
-        self._number_by_chat_id[chat_id] = sender
+        if self_chat and self_number and sender != self_number:
+            logger.warning(
+                "Rejected WhatsApp self-chat payload with mismatched sender",
+                sender=sender,
+                self_number=self_number,
+            )
+            return {"accepted": False, "reason": "invalid_self_chat_sender"}
+
+        chat_number = normalize_whatsapp_number(conversation) or conversation
+        chat_id = whatsapp_chat_id(chat_number)
+        self._number_by_chat_id[chat_id] = chat_number
         lock = self._lock_by_chat_id.setdefault(chat_id, asyncio.Lock())
 
         async with lock:
@@ -116,6 +135,9 @@ class WhatsAppRuntime:
         if last_sender:
             gauges["last_sender"] = last_sender
         update_component_gauges("whatsapp", gauges)
+
+    def _is_personal_mode(self) -> bool:
+        return str(getattr(self.settings, "whatsapp_mode", "separate") or "separate").strip().lower() == "personal"
 
 
 def _chunk_text(text: str, limit: int) -> list[str]:

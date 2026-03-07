@@ -101,6 +101,7 @@ class Settings(BaseSettings):
     # Get your chat ID by messaging @userinfobot on Telegram
     allowed_telegram_chat_ids: str = Field("", alias="ALLOWED_TELEGRAM_CHAT_IDS")
     telegram_parse_mode: str = Field("MarkdownV2", alias="BROODMIND_TELEGRAM_PARSE_MODE")
+    whatsapp_mode: str = Field("separate", alias="BROODMIND_WHATSAPP_MODE")
     allowed_whatsapp_numbers: str = Field("", alias="ALLOWED_WHATSAPP_NUMBERS")
     whatsapp_auth_dir: Path | None = Field(default=None, alias="BROODMIND_WHATSAPP_AUTH_DIR")
     whatsapp_bridge_host: str = Field("127.0.0.1", alias="BROODMIND_WHATSAPP_BRIDGE_HOST")

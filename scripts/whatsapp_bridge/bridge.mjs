@@ -40,6 +40,7 @@ let connected = false;
 let linked = false;
 let selfId = "";
 let reconnectTimer = null;
+const outboundMessageIds = new Set();
 
 async function ensureAuthDir() {
   await fs.mkdir(authDir, { recursive: true });
@@ -66,6 +67,16 @@ function normalizeDirectJid(raw) {
 function senderFromJid(jid) {
   const digits = String(jid || "").split("@", 1)[0].replace(/\D+/g, "");
   return digits ? `+${digits}` : "";
+}
+
+function rememberOutboundMessageId(id) {
+  const key = String(id || "").trim();
+  if (!key) return;
+  outboundMessageIds.add(key);
+  const timer = setTimeout(() => outboundMessageIds.delete(key), 60_000);
+  if (typeof timer.unref === "function") {
+    timer.unref();
+  }
 }
 
 async function postInbound(payload) {
@@ -147,18 +158,34 @@ async function bootstrapSocket() {
 
   sock.ev.on("messages.upsert", async ({ messages }) => {
     for (const item of messages || []) {
-      if (!item?.message || item?.key?.fromMe) continue;
+      if (!item?.message) continue;
       const remoteJid = item?.key?.remoteJid || "";
       if (remoteJid.includes("@g.us") || remoteJid.includes("@broadcast") || remoteJid === "status@broadcast") {
         continue;
       }
+      const fromMe = Boolean(item?.key?.fromMe);
+      const messageId = String(item?.key?.id || "").trim();
+      if (fromMe && messageId && outboundMessageIds.has(messageId)) {
+        outboundMessageIds.delete(messageId);
+        continue;
+      }
+      const selfNumber = senderFromJid(selfId);
+      const senderJid = fromMe ? (selfId || sock.user?.id || "") : remoteJid;
       const sender = senderFromJid(remoteJid);
+      const actualSender = senderFromJid(senderJid);
+      const conversation = sender;
       const text = extractText(item.message).trim();
-      if (!sender || !text) continue;
+      const selfChat = Boolean(fromMe && selfNumber && conversation && selfNumber === conversation);
+      if (!actualSender || !conversation || !text) continue;
       await postInbound({
-        sender,
+        sender: actualSender,
+        conversation,
+        fromMe,
+        self: selfNumber,
+        selfChat,
+        remoteJid,
         text,
-        messageId: item?.key?.id || "",
+        messageId,
       });
     }
   });
@@ -220,7 +247,8 @@ const server = http.createServer(async (req, res) => {
     if (!sock || !to || !text) {
       return await jsonResponse(res, 400, { ok: false, error: "missing_to_or_text" });
     }
-    await sock.sendMessage(to, { text });
+    const result = await sock.sendMessage(to, { text });
+    rememberOutboundMessageId(result?.key?.id);
     return await jsonResponse(res, 200, { ok: true, to, length: text.length });
   }
   if (req.method === "POST" && url.pathname === "/logout") {

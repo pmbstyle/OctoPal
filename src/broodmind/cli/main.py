@@ -821,6 +821,7 @@ def config_show(reveal_secrets: bool = typer.Option(False, "--reveal-secrets", h
                 "TELEGRAM_BOT_TOKEN",
                 "ALLOWED_TELEGRAM_CHAT_IDS",
                 "BROODMIND_TELEGRAM_PARSE_MODE",
+                "BROODMIND_WHATSAPP_MODE",
                 "ALLOWED_WHATSAPP_NUMBERS",
                 "BROODMIND_WHATSAPP_AUTH_DIR",
                 "BROODMIND_WHATSAPP_BRIDGE_HOST",
