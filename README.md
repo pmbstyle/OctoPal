@@ -1,15 +1,17 @@
-# BroodMind
+<img width="950" height="259" alt="image" src="https://github.com/user-attachments/assets/f112f1ca-31f1-47c4-8bd6-bf96f7ff5624" />
+
+
 
 BroodMind is an AI orchestration system built around a **Queen + Workers** model.
 
-- **Queen** talks to the user, plans work, tracks context, and chooses tools.
+- **Queen** talks to the user, plans work, tracks context, chooses tools, and orchestrates its workers.
 - **Workers** run focused tasks with bounded permissions and time limits.
 
-It is designed for long-running assistant workflows (Telegram-first), with memory, scheduling, and operational guardrails.
+It is designed for long-running assistant workflows, with memory, scheduling, and operational guardrails.
 
 ## What It Can Do
 
-- Handle Telegram conversations with planning + execution flow
+- Handle user channel conversations with planning + execution flow
 - Delegate tasks to specialized workers
 - Run filesystem/web/exec tools under policy controls
 - Keep persistent memory and canon files in `workspace/memory/canon/`
