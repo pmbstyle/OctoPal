@@ -23,3 +23,4 @@
 /tmp
 /src/broodmind/mcp/__pycache__
 /src/broodmind/scheduler/__pycache__
+/scripts/whatsapp_bridge/node_modules

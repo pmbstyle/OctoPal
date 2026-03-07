@@ -644,14 +644,14 @@ class Queen:
         )
         original_send = self.internal_send
         chat_ids = allowed_chat_ids or []
-        if chat_ids and bot:
+        if chat_ids and (bot or callable(original_send)):
             logger.info("Queen will send initialization message", count=len(chat_ids))
             logger.debug("Allowed chat_ids", chat_ids=chat_ids)
             async def send_to_allowed_chats(chat_id, text):
                 for target_chat_id in chat_ids:
                     try:
                         if callable(original_send):
-                            # Reuse Telegram send pipeline (chunking, parse_mode, escaping).
+                            # Reuse the active channel send pipeline when one is attached.
                             await original_send(target_chat_id, text)
                         else:
                             await bot.send_message(chat_id=target_chat_id, text=text)
@@ -660,7 +660,7 @@ class Queen:
                         logger.warning("Failed to send to chat_id", chat_id=target_chat_id, error=e)
             self.internal_send = send_to_allowed_chats
         else:
-            logger.warning("No ALLOWED_TELEGRAM_CHAT_IDS configured; queen will not send ready message.")
+            logger.warning("No allowed user channel recipients configured; queen will not send ready message.")
             self.internal_send = None
         try:
             bootstrap_context = await build_bootstrap_context_prompt(self.store, system_chat_id)

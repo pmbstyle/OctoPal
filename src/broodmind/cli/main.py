@@ -20,6 +20,7 @@ from rich.panel import Panel
 from rich.prompt import Confirm
 from rich.table import Table
 
+from broodmind.channels import normalize_user_channel, user_channel_label
 from broodmind.cli.branding import print_banner
 from broodmind.config.settings import Settings, load_settings
 from broodmind.gateway.app import build_app
@@ -34,6 +35,9 @@ from broodmind.state import (
     write_start_status,
 )
 from broodmind.store.sqlite import SQLiteStore
+from broodmind.whatsapp.bridge import WhatsAppBridgeController, WhatsAppBridgeError
+from broodmind.whatsapp.ids import parse_allowed_whatsapp_numbers
+from broodmind.whatsapp.runtime import WhatsAppRuntime
 from broodmind.workers.templates import sync_default_templates
 from aiogram import Bot
 
@@ -42,6 +46,7 @@ workers_app = typer.Typer(add_completion=False)
 audit_app = typer.Typer(add_completion=False)
 memory_app = typer.Typer(add_completion=False)
 config_app = typer.Typer(add_completion=False)
+whatsapp_app = typer.Typer(add_completion=False)
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -334,23 +339,31 @@ def start(
     console.print("[dim]Press Ctrl+C to stop (if in foreground).[/dim]\n")
 
     async def run_all():
-        bot_instance = Bot(token=settings.telegram_bot_token)
-        dp, queen = build_dispatcher(settings, bot_instance)
-        
-        # Build and run Gateway alongside bot
-        gateway_app = build_app(settings, queen)
+        selected_channel = normalize_user_channel(settings.user_channel)
+        if selected_channel == "whatsapp":
+            whatsapp_runtime = WhatsAppRuntime(settings)
+            queen = await whatsapp_runtime.start()
+            gateway_app = build_app(settings, queen)
+            gateway_app.state.whatsapp_runtime = whatsapp_runtime
+        else:
+            bot_instance = Bot(token=settings.telegram_bot_token)
+            _dp, queen = build_dispatcher(settings, bot_instance)
+            gateway_app = build_app(settings, queen)
         import uvicorn
         config = uvicorn.Config(gateway_app, host=settings.gateway_host, port=settings.gateway_port, log_level="info")
         server = uvicorn.Server(config)
-        
-        # Background task for uvicorn
         gateway_task = asyncio.create_task(server.serve())
-        
         try:
-            await run_bot(settings, existing_queen=queen)
+            if selected_channel == "whatsapp":
+                await asyncio.Event().wait()
+            else:
+                await run_bot(settings, existing_queen=queen)
         finally:
             server.should_exit = True
             await gateway_task
+            runtime = getattr(gateway_app.state, "whatsapp_runtime", None)
+            if isinstance(runtime, WhatsAppRuntime):
+                await runtime.stop()
 
     try:
         asyncio.run(run_all())
@@ -573,7 +586,7 @@ def status() -> None:
     grid.add_column(style="white")
 
     grid.add_row("System Status", f"[{status_color}]{status_text}[/{status_color}]")
-    grid.add_row("Active Channel", f"[bold]{status_data.get('active_channel', 'Telegram')}[/bold]")
+    grid.add_row("Active Channel", f"[bold]{status_data.get('active_channel', user_channel_label(settings.user_channel))}[/bold]")
     grid.add_row("Process ID", f"[bold]{pid}[/bold]" if pid else "[dim]N/A[/dim]")
     grid.add_row("Last Heartbeat", str(last_message) if last_message else "[dim]Never[/dim]")
     grid.add_row("Configuration", "[bright_green]Valid[/bright_green]" if config_ok else "[bright_red]Invalid[/bright_red]")
@@ -581,11 +594,20 @@ def status() -> None:
     metrics = read_metrics_snapshot(settings.state_dir)
     queen_metrics = metrics.get("queen", {}) if isinstance(metrics, dict) else {}
     telegram_metrics = metrics.get("telegram", {}) if isinstance(metrics, dict) else {}
+    whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
+    whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
     exec_metrics = metrics.get("exec_run", {}) if isinstance(metrics, dict) else {}
+    selected_channel = normalize_user_channel(settings.user_channel)
     if metrics:
         grid.add_row("")
         grid.add_row("Queen Queues", f"[dim]followup=[/dim]{queen_metrics.get('followup_queues', 0)} [dim]internal=[/dim]{queen_metrics.get('internal_queues', 0)}")
-        grid.add_row("Telegram Chat", f"[dim]queues=[/dim]{telegram_metrics.get('chat_queues', 0)} [dim]tasks=[/dim]{telegram_metrics.get('send_tasks', 0)}")
+        if selected_channel == "whatsapp":
+            grid.add_row(
+                "WhatsApp",
+                f"[dim]mapped chats=[/dim]{whatsapp_metrics.get('chat_mappings', 0)} [dim]connected=[/dim]{whatsapp_metrics.get('connected', 0)}",
+            )
+        else:
+            grid.add_row("Telegram Chat", f"[dim]queues=[/dim]{telegram_metrics.get('chat_queues', 0)} [dim]tasks=[/dim]{telegram_metrics.get('send_tasks', 0)}")
         grid.add_row("Exec Sessions", f"[dim]running=[/dim]{exec_metrics.get('background_sessions_running', 0)} [dim]total=[/dim]{exec_metrics.get('background_sessions_total', 0)}")
     else:
         grid.add_row("Metrics", "[dim]Not available[/dim]")
@@ -792,7 +814,21 @@ def config_show(reveal_secrets: bool = typer.Option(False, "--reveal-secrets", h
 
     secret_keywords = ("token", "key", "secret", "api_key")
     groups: list[tuple[str, set[str]]] = [
-        ("Telegram", {"TELEGRAM_BOT_TOKEN", "ALLOWED_TELEGRAM_CHAT_IDS", "BROODMIND_TELEGRAM_PARSE_MODE"}),
+        (
+            "User Channel",
+            {
+                "BROODMIND_USER_CHANNEL",
+                "TELEGRAM_BOT_TOKEN",
+                "ALLOWED_TELEGRAM_CHAT_IDS",
+                "BROODMIND_TELEGRAM_PARSE_MODE",
+                "ALLOWED_WHATSAPP_NUMBERS",
+                "BROODMIND_WHATSAPP_AUTH_DIR",
+                "BROODMIND_WHATSAPP_BRIDGE_HOST",
+                "BROODMIND_WHATSAPP_BRIDGE_PORT",
+                "BROODMIND_WHATSAPP_CALLBACK_TOKEN",
+                "BROODMIND_WHATSAPP_NODE_COMMAND",
+            },
+        ),
         (
             "Provider",
             {
@@ -862,7 +898,15 @@ def config_show(reveal_secrets: bool = typer.Option(False, "--reveal-secrets", h
     header.add_column()
     resolved_profile = resolve_litellm_profile(settings)
     provider = str(getattr(settings, "llm_provider", "litellm"))
-    profile_status = "[bright_green]READY[/bright_green]" if settings.telegram_bot_token.strip() else "[bright_red]SETUP NEEDED[/bright_red]"
+    selected_channel = normalize_user_channel(settings.user_channel)
+    if selected_channel == "whatsapp":
+        profile_status = (
+            "[bright_green]READY[/bright_green]"
+            if parse_allowed_whatsapp_numbers(settings.allowed_whatsapp_numbers)
+            else "[bright_red]SETUP NEEDED[/bright_red]"
+        )
+    else:
+        profile_status = "[bright_green]READY[/bright_green]" if settings.telegram_bot_token.strip() else "[bright_red]SETUP NEEDED[/bright_red]"
     header.add_row("Profile", profile_status)
     header.add_row("Provider", f"[bright_cyan]{resolved_profile.label}[/bright_cyan] [dim]({resolved_profile.provider_id})[/dim]")
     header.add_row("Model", f"[bright_cyan]{resolved_profile.model or '(unset)'}[/bright_cyan]")
@@ -901,10 +945,14 @@ def config_show(reveal_secrets: bool = typer.Option(False, "--reveal-secrets", h
         panels.append(Panel(table, title="[bold white]Additional[/bold white]", border_style=surface, padding=(0, 1)))
 
     checks: list[str] = []
-    if not settings.telegram_bot_token.strip():
-        checks.append("[bright_red]Missing TELEGRAM_BOT_TOKEN[/bright_red]")
-    if not settings.allowed_telegram_chat_ids.strip():
-        checks.append("[yellow]ALLOWED_TELEGRAM_CHAT_IDS is not set[/yellow]")
+    if selected_channel == "whatsapp":
+        if not parse_allowed_whatsapp_numbers(settings.allowed_whatsapp_numbers):
+            checks.append("[bright_red]Set ALLOWED_WHATSAPP_NUMBERS for WhatsApp access[/bright_red]")
+    else:
+        if not settings.telegram_bot_token.strip():
+            checks.append("[bright_red]Missing TELEGRAM_BOT_TOKEN[/bright_red]")
+        if not settings.allowed_telegram_chat_ids.strip():
+            checks.append("[yellow]ALLOWED_TELEGRAM_CHAT_IDS is not set[/yellow]")
     if resolved_profile.requires_api_key and not (resolved_profile.api_key or "").strip():
         checks.append(
             f"[bright_red]Set BROODMIND_LITELLM_API_KEY (or legacy key) for {resolved_profile.label}[/bright_red]"
@@ -981,6 +1029,93 @@ def build_worker_image(tag: str = "broodmind-worker:latest") -> None:
     raise SystemExit(__import__("subprocess").call(cmd))
 
 
+@whatsapp_app.command("install-bridge")
+def whatsapp_install_bridge() -> None:
+    settings = load_settings()
+    bridge = WhatsAppBridgeController(settings)
+    try:
+        bridge.install_bridge()
+    except Exception as exc:
+        console.print(f"[bold red]Failed to install WhatsApp bridge:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    console.print("[bold green][V] WhatsApp bridge dependencies installed.[/bold green]")
+
+
+@whatsapp_app.command("link")
+def whatsapp_link(timeout_seconds: int = typer.Option(180, "--timeout", help="How long to wait for linking")) -> None:
+    settings = load_settings()
+    bridge = WhatsAppBridgeController(settings)
+    try:
+        bridge.start(callback_url=None)
+    except WhatsAppBridgeError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print("[bold cyan]Waiting for WhatsApp QR link...[/bold cyan]")
+    seen_qr = ""
+    deadline = time.time() + max(30, timeout_seconds)
+    try:
+        while time.time() < deadline:
+            status = bridge.status()
+            if status.get("connected"):
+                console.print("[bold green][V] WhatsApp linked and connected.[/bold green]")
+                return
+            qr_terminal = bridge.qr_terminal()
+            qr_text = str(qr_terminal.get("terminal", "") or "").strip()
+            qr_raw = str(qr_terminal.get("qr", "") or "").strip()
+            if qr_raw and qr_raw != seen_qr:
+                seen_qr = qr_raw
+                console.print()
+                if qr_text:
+                    console.print(qr_text)
+                else:
+                    console.print(qr_raw)
+                console.print()
+                console.print("[dim]Scan the QR with WhatsApp on your phone.[/dim]")
+            time.sleep(2)
+    finally:
+        bridge.stop()
+    console.print("[bold red]Timed out waiting for WhatsApp link.[/bold red]")
+    raise typer.Exit(code=1)
+
+
+@whatsapp_app.command("status")
+def whatsapp_status() -> None:
+    settings = load_settings()
+    bridge = WhatsAppBridgeController(settings)
+    if not bridge.bridge_installed():
+        console.print("[yellow]WhatsApp bridge dependencies are not installed.[/yellow]")
+        return
+    try:
+        status = bridge.status()
+    except Exception as exc:
+        console.print(f"[bold red]Failed to read WhatsApp status:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold cyan", justify="right")
+    grid.add_column(style="white")
+    grid.add_row("Connected", str(bool(status.get("connected"))))
+    grid.add_row("Linked", str(bool(status.get("linked"))))
+    grid.add_row("Auth Dir", str(status.get("authDir", "")))
+    grid.add_row("Self", str(status.get("self", "") or "[dim]unknown[/dim]"))
+    console.print(Panel(grid, title="[bold white]WhatsApp Status[/bold white]", border_style="bright_blue"))
+
+
+@whatsapp_app.command("logout")
+def whatsapp_logout() -> None:
+    settings = load_settings()
+    bridge = WhatsAppBridgeController(settings)
+    try:
+        bridge.start(callback_url=None)
+        bridge.logout()
+    except Exception as exc:
+        console.print(f"[bold red]Failed to logout WhatsApp session:[/bold red] {exc}")
+        raise typer.Exit(code=1) from exc
+    finally:
+        bridge.stop()
+    console.print("[bold green][V] WhatsApp session cleared.[/bold green]")
+
+
 @app.command("dashboard")
 def dashboard(
     watch: bool = typer.Option(True, "--watch/--once", "-w/-o", help="Continuously refresh dashboard (default) or show once"),
@@ -1047,6 +1182,7 @@ app.add_typer(workers_app, name="workers")
 app.add_typer(audit_app, name="audit")
 app.add_typer(memory_app, name="memory")
 app.add_typer(config_app, name="config")
+app.add_typer(whatsapp_app, name="whatsapp")
 
 
 def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore | None = None) -> dict:
@@ -1125,7 +1261,7 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
         "system": {
             "running": running,
             "pid": pid,
-            "active_channel": status_data.get("active_channel", "Telegram"),
+            "active_channel": status_data.get("active_channel", user_channel_label(settings.user_channel)),
             "started_at": status_data.get("started_at"),
             "last_heartbeat": status_data.get("last_message_at"),
             "uptime": _uptime_human(status_data.get("started_at")),
@@ -1144,6 +1280,8 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
         "queues": {
             "telegram_send_tasks": int(telegram_metrics.get("send_tasks", 0) or 0),
             "telegram_queues": int(telegram_metrics.get("chat_queues", 0) or 0),
+            "whatsapp_mapped_chats": int(whatsapp_metrics.get("chat_mappings", 0) or 0),
+            "whatsapp_connected": int(whatsapp_metrics.get("connected", 0) or 0),
             "exec_sessions_running": int(exec_metrics.get("background_sessions_running", 0) or 0),
             "exec_sessions_total": int(exec_metrics.get("background_sessions_total", 0) or 0),
         },

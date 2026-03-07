@@ -38,6 +38,19 @@ uv sync
 Write-Host "Installing Playwright browser binaries..."
 uv run playwright install chromium
 
+if (Get-Command npm -ErrorAction SilentlyContinue) {
+    Write-Host "Installing WhatsApp bridge dependencies..."
+    Push-Location "scripts/whatsapp_bridge"
+    try {
+        npm install
+    }
+    finally {
+        Pop-Location
+    }
+} else {
+    Write-Host "npm not found. Skipping WhatsApp bridge dependency install."
+}
+
 Write-Host ""
 Write-Host "Launching onboarding..."
 uv run broodmind configure

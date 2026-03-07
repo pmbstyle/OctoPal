@@ -12,6 +12,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
+from broodmind.channels import normalize_user_channel, user_channel_label
 from broodmind.cli.branding import print_banner
 from broodmind.config.manager import ConfigManager
 from broodmind.providers.catalog import get_provider_catalog_entry, list_registered_provider_ids
@@ -35,7 +36,7 @@ def configure_wizard() -> None:
         Panel(
             Text("BroodMind Configuration Studio\n", style="bold bright_cyan")
             + Text(
-                "Guided setup for Telegram access, provider profiles, storage paths, and runtime defaults.",
+                "Guided setup for your user channel, provider profiles, storage paths, and runtime defaults.",
                 style="dim",
             ),
             title="[bold white]Onboarding[/bold white]",
@@ -56,7 +57,13 @@ def configure_wizard() -> None:
     advanced_mode = setup_mode == "advanced"
     total_steps = 6 if advanced_mode else 5
 
-    _configure_telegram_access(config, staged, step_index=1, total_steps=total_steps, advanced_mode=advanced_mode)
+    access_summary = _configure_user_channel_access(
+        config,
+        staged,
+        step_index=1,
+        total_steps=total_steps,
+        advanced_mode=advanced_mode,
+    )
     provider_summary = _configure_provider_profile(
         config,
         staged,
@@ -99,6 +106,7 @@ def configure_wizard() -> None:
     _print_review(
         config=config,
         staged=staged,
+        access_summary=access_summary,
         provider_summary=provider_summary,
         storage_summary=storage_summary,
         features_summary=features_summary,
@@ -115,23 +123,49 @@ def configure_wizard() -> None:
     _print_saved_summary(config, staged)
 
 
-def _configure_telegram_access(
+def _configure_user_channel_access(
     config: ConfigManager,
     staged: dict[str, str],
     *,
     step_index: int,
     total_steps: int,
     advanced_mode: bool,
-) -> None:
-    console.print(Rule(f"[bold {ACCENT}]Step {step_index}/{total_steps}  Telegram Access[/bold {ACCENT}]"))
-    console.print("Get your bot token from @BotFather and lock BroodMind to your chat IDs.")
+) -> dict[str, str]:
+    console.print(Rule(f"[bold {ACCENT}]Step {step_index}/{total_steps}  User Channel[/bold {ACCENT}]"))
+    current_channel = normalize_user_channel(_effective_value(config, staged, "BROODMIND_USER_CHANNEL", "telegram"))
+    channel = Prompt.ask(
+        "User communication channel",
+        choices=["telegram", "whatsapp"],
+        default=current_channel,
+    )
+    _set_if_changed(config, staged, "BROODMIND_USER_CHANNEL", channel)
+
+    if channel == "whatsapp":
+        console.print("Use WhatsApp Web with a gateway-owned linked session and allowlisted sender numbers.")
+        current_numbers = _effective_value(config, staged, "ALLOWED_WHATSAPP_NUMBERS", "")
+        allowed_numbers = Prompt.ask("Allowed WhatsApp numbers (comma-separated, E.164)", default=current_numbers)
+        if allowed_numbers:
+            _set_if_changed(config, staged, "ALLOWED_WHATSAPP_NUMBERS", allowed_numbers)
+        current_auth_dir = _effective_value(config, staged, "BROODMIND_WHATSAPP_AUTH_DIR", "data/whatsapp-auth")
+        auth_dir = Prompt.ask("WhatsApp auth/session directory", default=current_auth_dir)
+        _set_if_changed(config, staged, "BROODMIND_WHATSAPP_AUTH_DIR", auth_dir)
+        if advanced_mode:
+            current_bridge_host = _effective_value(config, staged, "BROODMIND_WHATSAPP_BRIDGE_HOST", "127.0.0.1")
+            bridge_host = Prompt.ask("WhatsApp bridge host", default=current_bridge_host)
+            _set_if_changed(config, staged, "BROODMIND_WHATSAPP_BRIDGE_HOST", bridge_host)
+            current_bridge_port = _effective_value(config, staged, "BROODMIND_WHATSAPP_BRIDGE_PORT", "8765")
+            bridge_port = Prompt.ask("WhatsApp bridge port", default=current_bridge_port)
+            _set_if_changed(config, staged, "BROODMIND_WHATSAPP_BRIDGE_PORT", bridge_port)
+        return {
+            "channel": user_channel_label(channel),
+            "recipients": allowed_numbers or "[configure later]",
+            "session_dir": auth_dir,
+        }
+
+    console.print("Get your bot token from @BotFather and lock BroodMind to your Telegram chat IDs.")
 
     current_token = _effective_value(config, staged, "TELEGRAM_BOT_TOKEN", "")
-    token = Prompt.ask(
-        "Telegram Bot Token",
-        default=current_token,
-        password=bool(current_token),
-    )
+    token = Prompt.ask("Telegram Bot Token", default=current_token, password=bool(current_token))
     if token:
         _set_if_changed(config, staged, "TELEGRAM_BOT_TOKEN", token)
 
@@ -148,6 +182,11 @@ def _configure_telegram_access(
             default=current_parse_mode if current_parse_mode else "MarkdownV2",
         )
         _set_if_changed(config, staged, "BROODMIND_TELEGRAM_PARSE_MODE", "" if parse_mode == "none" else parse_mode)
+    return {
+        "channel": "Telegram",
+        "recipients": allowed_ids or "[configure later]",
+        "session_dir": "[managed by Telegram]",
+    }
 
 
 def _configure_provider_profile(
@@ -461,6 +500,7 @@ def _print_review(
     *,
     config: ConfigManager,
     staged: dict[str, str],
+    access_summary: dict[str, str],
     provider_summary: dict[str, str],
     storage_summary: dict[str, str],
     features_summary: dict[str, str],
@@ -472,6 +512,7 @@ def _print_review(
     overview.add_column(style="bold white")
     overview.add_column()
     overview.add_row("Mode", "Advanced" if advanced_mode else "Quick")
+    overview.add_row("User channel", access_summary["channel"])
     overview.add_row("Provider", f"{provider_summary['provider']} [dim]({provider_summary['provider_id']})[/dim]")
     overview.add_row("Model", provider_summary["model"])
     overview.add_row("Provider key", provider_summary["api_key_set"])
@@ -488,6 +529,7 @@ def _print_review(
     )
 
     sections: list[tuple[str, dict[str, str]]] = [
+        ("User Channel", access_summary),
         ("Provider Profile", provider_summary),
         ("Features", features_summary),
         ("Runtime Paths", storage_summary),

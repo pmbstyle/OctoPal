@@ -24,7 +24,9 @@ It is designed for long-running assistant workflows, with memory, scheduling, an
 
 - Python 3.12+
 - `uv` (recommended)
-- Telegram bot token from [@BotFather](https://t.me/botfather)
+- One user channel:
+  - Telegram bot token from [@BotFather](https://t.me/botfather), or
+  - WhatsApp Web linking via QR (requires Node.js for the bridge)
 - At least one LLM API key:
   - `BROODMIND_LITELLM_API_KEY` for the provider you select in `broodmind configure`, or
   - legacy `ZAI_API_KEY` / `OPENROUTER_API_KEY` if you are upgrading an existing setup
@@ -172,11 +174,19 @@ Restart BroodMind after config changes.
 
 ## Troubleshooting
 
-### Bot starts but does not reply
+### Telegram bot starts but does not reply
 
 - Verify `TELEGRAM_BOT_TOKEN`
 - Verify your chat ID is in `ALLOWED_TELEGRAM_CHAT_IDS`
 - Check `uv run broodmind status` and `uv run broodmind logs --follow`
+
+### WhatsApp is selected but not receiving messages
+
+- Verify `BROODMIND_USER_CHANNEL=whatsapp`
+- Verify your phone number is in `ALLOWED_WHATSAPP_NUMBERS`
+- Run `uv run broodmind whatsapp install-bridge`
+- Run `uv run broodmind whatsapp link`
+- Start BroodMind again and check `uv run broodmind whatsapp status`
 
 ### LLM errors
 

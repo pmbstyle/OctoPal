@@ -7,6 +7,7 @@ from broodmind.gateway.dashboard import register_dashboard_routes
 from broodmind.gateway.ws import register_ws_routes
 from broodmind.queen.core import Queen
 from broodmind.tools.skills_tools import ensure_skills_layout
+from broodmind.whatsapp.routes import register_whatsapp_routes
 
 def build_app(settings: Settings, queen: Queen | None = None) -> FastAPI:
     """Build the FastAPI app for the BroodMind Gateway.
@@ -32,4 +33,5 @@ def build_app(settings: Settings, queen: Queen | None = None) -> FastAPI:
     
     register_ws_routes(app)
     register_dashboard_routes(app)
+    register_whatsapp_routes(app)
     return app

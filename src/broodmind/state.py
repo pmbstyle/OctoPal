@@ -6,6 +6,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
+from broodmind.channels import user_channel_label
 from broodmind.config.settings import Settings
 
 
@@ -23,6 +24,7 @@ def write_start_status(settings: Settings) -> None:
         "pid": _current_pid(),
         "started_at": _utc_now_iso(),
         "last_message_at": None,
+        "active_channel": user_channel_label(settings.user_channel),
     }
     _status_path(settings).write_text(json.dumps(payload, indent=2), encoding="utf-8")
 

@@ -6,6 +6,8 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from broodmind.channels import DEFAULT_USER_CHANNEL
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -14,7 +16,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    telegram_bot_token: str = Field(..., alias="TELEGRAM_BOT_TOKEN")
+    telegram_bot_token: str = Field("", alias="TELEGRAM_BOT_TOKEN")
+    user_channel: str = Field(DEFAULT_USER_CHANNEL, alias="BROODMIND_USER_CHANNEL")
 
     # LLM Provider Settings
     # Runtime stays on LiteLLM, while the active upstream provider is chosen via
@@ -98,6 +101,12 @@ class Settings(BaseSettings):
     # Get your chat ID by messaging @userinfobot on Telegram
     allowed_telegram_chat_ids: str = Field("", alias="ALLOWED_TELEGRAM_CHAT_IDS")
     telegram_parse_mode: str = Field("MarkdownV2", alias="BROODMIND_TELEGRAM_PARSE_MODE")
+    allowed_whatsapp_numbers: str = Field("", alias="ALLOWED_WHATSAPP_NUMBERS")
+    whatsapp_auth_dir: Path | None = Field(default=None, alias="BROODMIND_WHATSAPP_AUTH_DIR")
+    whatsapp_bridge_host: str = Field("127.0.0.1", alias="BROODMIND_WHATSAPP_BRIDGE_HOST")
+    whatsapp_bridge_port: int = Field(8765, alias="BROODMIND_WHATSAPP_BRIDGE_PORT")
+    whatsapp_callback_token: str = Field("", alias="BROODMIND_WHATSAPP_CALLBACK_TOKEN")
+    whatsapp_node_command: str = Field("node", alias="BROODMIND_WHATSAPP_NODE_COMMAND")
 
 
 def _resolve_env_file() -> Path | None:

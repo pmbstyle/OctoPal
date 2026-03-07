@@ -49,6 +49,16 @@ uv sync
 echo "Installing Playwright browser binaries..."
 uv run playwright install chromium
 
+if command -v npm >/dev/null 2>&1; then
+  echo "Installing WhatsApp bridge dependencies..."
+  (
+    cd scripts/whatsapp_bridge
+    npm install
+  )
+else
+  echo "npm not found. Skipping WhatsApp bridge dependency install."
+fi
+
 echo
 echo "Launching onboarding..."
 uv run broodmind configure

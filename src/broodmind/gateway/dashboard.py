@@ -15,6 +15,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
+from broodmind.channels import user_channel_label
 from broodmind.config.settings import Settings
 from broodmind.runtime_metrics import read_metrics_snapshot
 from broodmind.state import is_pid_running, read_status
@@ -928,7 +929,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         "system": {
             "running": running,
             "pid": pid,
-            "active_channel": status_data.get("active_channel", "Telegram"),
+            "active_channel": status_data.get("active_channel", user_channel_label(settings.user_channel)),
             "started_at": status_data.get("started_at"),
             "last_heartbeat": status_data.get("last_message_at"),
             "uptime": _uptime_human(status_data.get("started_at")),
