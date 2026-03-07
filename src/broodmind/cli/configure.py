@@ -120,7 +120,8 @@ def configure_wizard() -> None:
         return
 
     _apply_staged_changes(config, staged)
-    _print_saved_summary(config, staged)
+    saved_channel = normalize_user_channel(_effective_value(config, staged, "BROODMIND_USER_CHANNEL", "telegram"))
+    _print_saved_summary(config, staged, user_channel=saved_channel)
 
 
 def _configure_user_channel_access(
@@ -143,7 +144,10 @@ def _configure_user_channel_access(
     if channel == "whatsapp":
         console.print("Use WhatsApp Web with a gateway-owned linked session and allowlisted sender numbers.")
         current_numbers = _effective_value(config, staged, "ALLOWED_WHATSAPP_NUMBERS", "")
-        allowed_numbers = Prompt.ask("Allowed WhatsApp numbers (comma-separated, E.164)", default=current_numbers)
+        allowed_numbers = Prompt.ask(
+            "Allowed WhatsApp numbers (comma-separated, e.g. +15551234567)",
+            default=current_numbers,
+        )
         if allowed_numbers:
             _set_if_changed(config, staged, "ALLOWED_WHATSAPP_NUMBERS", allowed_numbers)
         current_auth_dir = _effective_value(config, staged, "BROODMIND_WHATSAPP_AUTH_DIR", "data/whatsapp-auth")
@@ -566,20 +570,35 @@ def _print_review(
     )
 
 
-def _print_saved_summary(config: ConfigManager, staged: dict[str, str]) -> None:
+def _print_saved_summary(config: ConfigManager, staged: dict[str, str], *, user_channel: str) -> None:
+    next_steps = _saved_summary_next_steps(user_channel)
     console.print(
         Panel(
             f"[bold {SUCCESS}][V] Configuration complete[/bold {SUCCESS}]\n"
             f"Saved to: [cyan]{config.env_path.absolute()}[/cyan]\n\n"
             f"Updated settings: [bold]{len(staged)}[/bold]\n\n"
             "[bold]Next:[/bold]\n"
-            "[magenta]uv run broodmind start[/magenta]\n"
-            "[magenta]uv run broodmind status[/magenta]\n"
-            "[magenta]uv run broodmind config show[/magenta]",
+            + "\n".join(f"[magenta]{step}[/magenta]" for step in next_steps),
             border_style=SUCCESS,
             padding=(1, 2),
         )
     )
+
+
+def _saved_summary_next_steps(user_channel: str) -> list[str]:
+    normalized_channel = normalize_user_channel(user_channel)
+    if normalized_channel == "whatsapp":
+        return [
+            "uv run broodmind whatsapp install-bridge",
+            "uv run broodmind whatsapp link",
+            "uv run broodmind start",
+            "uv run broodmind whatsapp status",
+        ]
+    return [
+        "uv run broodmind start",
+        "uv run broodmind status",
+        "uv run broodmind config show",
+    ]
 
 
 def _mask_value(key: str, value: Any) -> str:
