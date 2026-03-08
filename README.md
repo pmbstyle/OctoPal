@@ -9,10 +9,40 @@
 BroodMind is a local AI orchestration system built around a **Queen + Workers** architecture.
 It runs on your device or server and acts as a long-running AI operator that plans tasks, spawns workers, and executes workflows on your behalf.
 
+The **Queen** is the long-running coordinator: it holds memory, plans work, chooses tools, manages context, and delegates execution.
+**Workers** are short-lived specialists with limited permissions, bounded context, and task-specific tool access.
+
+BroodMind is designed for persistent assistant workflows, not just single prompts. It combines conversation channels, reusable workers, scheduling, memory, canon, policy controls, and an ops dashboard into one local system you can run on your own machine or server.
+
+This separation improves safety and reliability: sensitive context stays with the Queen, while workers receive only the minimum context needed to complete a task.
+
 ## Core architecture
 
-- **Queen** talks to the user, has all system context and memory, plans work, chooses tools, and orchestrates its workers.
-- **Workers** execute focused tasks with limited permissions, time bounds, and minimal context required for completion.
+```mermaid
+flowchart TD
+    A["User"] --> B["Telegram / WhatsApp"]
+    B --> C["Gateway / Channel Runtime"]
+    C --> D["Queen"]
+
+    D --> E["Load memory + canon + identity files"]
+    E --> D
+
+    D --> F{"Direct reply or execution?"}
+    F -->|"Direct reply"| G["Compose response"]
+    F -->|"Execution"| H["Plan steps"]
+
+    H --> I["Use tools directly"]
+    H --> J["Spawn worker"]
+
+    J --> K["Worker with limited context, permissions, and tools"]
+    K --> L["Return result / question / error"]
+    L --> D
+
+    I --> D
+    G --> M["Channel send pipeline"]
+    D --> M
+    M --> N["User receives response"]
+```
 
 It is designed for long-running assistant workflows, with memory, scheduling, and operational guardrails.
 The Queen, who holds all system context and sensitive data, never communicates with the world outside by itself. Instead, the Queen delegates tasks to workers with limited context and predefined tool/skill sets. Workers can spawn subworkers for multi-step tasks. Workers can only return response of their tasks or question/error responses. 
@@ -20,17 +50,17 @@ This design increases data security, reduces context leakage, and helps guard ag
 
 ## What It Can Do
 
-- Handle user channel (Telegram/WhatsApp) conversations with planning + execution flow
-- Delegate tasks to specialized workers
-- Run filesystem/web/exec tools under policy controls
-- Can create reusable workers
-- Can use skills and provide skills to workers
-- Keep persistent memory and canon files
-- Track context health and proactively reset context when overloaded
-- Expose a private dashboard/gateway for ops visibility
-- The system environment is shaped by a set of canonical files:
+- Run as a persistent AI operator over Telegram or WhatsApp
+- Plan work and delegate tasks to specialized workers
+- Execute filesystem, web, browser, and shell tools under policy controls
+- Create and reuse worker templates and skills
+- Maintain persistent memory, canon, and user/system identity files
+- Monitor context health and trigger structured context resets when needed
+- Schedule recurring tasks and background routines
+- Expose a private gateway and dashboard for status, workers, and system visibility
+- The system environment is shaped by a set of canonical memory files:
   - **MEMORY.md** – working memory and durable context; important facts, current state, and notes the system may need across sessions
-  - **memory/canon/** - curated long-term knowledge that has been reviewed and promoted from ordinary memory into trusted reference material
+  - **memory/canon/** – curated long-term knowledge that has been reviewed and promoted into trusted reference material
   - **USER.md** – user profile, preferences, habits, and interaction style
   - **SOUL.md** – system identity, values, tone, and core behavioral principles
   - **HEARTBEAT.md** – recurring duties, monitoring loops, schedules, and background obligations
@@ -88,7 +118,7 @@ After bootstrap, start BroodMind and then open the dashboard in your browser:
 uv run broodmind start
 ```
 
-Open [http://127.0.0.1:8000/dashboard](http://127.0.0.1:8000/dashboard).
+Open [http://127.0.0.1:8001/dashboard](http://127.0.0.1:8001/dashboard) (change IP to your instance)
 
 If you enabled dashboard protection during `broodmind configure`, use the value of `BROODMIND_DASHBOARD_TOKEN` from `.env` when the dashboard or dashboard API asks for it.
 
