@@ -52,8 +52,8 @@ This design improves data security, reduces context leakage, and protects the sy
 
 - Run as a persistent AI operator over Telegram or WhatsApp
 - Plan work and delegate tasks to specialized workers
-- Execute filesystem, web, browser, and shell tools under policy controls
-- Create and reuse worker templates and skills
+- Execute filesystem, web, browser, shell, and MCP tools  under policy controls
+- Create and reuse worker templates, MCP server connections, and skills([SKILL.md](https://agentskills.io/home))
 - Maintain persistent memory, canon, and user/system identity files
 - Monitor context health and trigger structured context resets when needed
 - Schedule recurring tasks and background routines
