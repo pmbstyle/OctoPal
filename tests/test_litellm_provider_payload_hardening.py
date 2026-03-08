@@ -4,7 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 from broodmind.config.settings import Settings
-from broodmind.providers.litellm_provider import LiteLLMProvider
+from broodmind.providers.litellm_provider import LiteLLMProvider, _serialize_message
 
 
 def _settings() -> Settings:
@@ -76,3 +76,22 @@ def test_complete_retries_with_strict_payload_on_1214(monkeypatch) -> None:
     assert len(captured) == 2
     assert captured[1][0]["role"] == "user"
     assert "system:" in captured[1][0]["content"].lower()
+
+
+def test_serialize_message_coerces_null_tool_call_content() -> None:
+    serialized = _serialize_message(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "dummy_tool", "arguments": "{}"},
+                }
+            ],
+        }
+    )
+
+    assert serialized["content"] == ""
+    assert serialized["tool_calls"][0]["function"]["name"] == "dummy_tool"

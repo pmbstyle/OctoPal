@@ -334,8 +334,15 @@ class LiteLLMProvider:
 def _serialize_message(message: Message | dict) -> dict:
     """Serialize a message to dict format."""
     if isinstance(message, dict):
-        return message
-    return message.to_dict()
+        serialized = dict(message)
+    else:
+        serialized = message.to_dict()
+
+    # Some OpenAI-compatible providers reject assistant tool-call messages when
+    # content is null instead of an empty string.
+    if serialized.get("tool_calls") and serialized.get("content") is None:
+        serialized["content"] = ""
+    return serialized
 
 
 def _normalize_plain_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
