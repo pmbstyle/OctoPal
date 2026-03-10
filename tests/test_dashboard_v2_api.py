@@ -4,6 +4,9 @@ from fastapi.testclient import TestClient
 
 from broodmind.config.settings import Settings
 from broodmind.gateway.app import build_app
+from broodmind.store.sqlite import SQLiteStore
+from broodmind.store.models import WorkerRecord
+from broodmind.utils import utc_now
 
 
 def _make_client(tmp_path, *, token: str = "") -> TestClient:
@@ -57,3 +60,41 @@ def test_dashboard_v2_stream_route_is_registered(tmp_path) -> None:
     assert schema.status_code == 200
     payload = schema.json()
     assert "/api/dashboard/v2/stream" in payload.get("paths", {})
+
+
+def test_dashboard_v2_workers_exposes_worker_result_details(tmp_path) -> None:
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="123:abc",
+        BROODMIND_STATE_DIR=tmp_path / "state",
+        BROODMIND_WORKSPACE_DIR=tmp_path / "workspace",
+    )
+    app = build_app(settings)
+    store = SQLiteStore(settings)
+    now = utc_now()
+    store.create_worker(
+        WorkerRecord(
+            id="worker-12345678",
+            status="completed",
+            task="Summarize latest sync",
+            granted_caps=[],
+            created_at=now,
+            updated_at=now,
+            summary="Sync finished successfully",
+            output={"report": {"status": "ok", "items": 3}},
+            tools_used=["web_search", "web_fetch"],
+            template_name="Research Worker",
+        )
+    )
+    app.state.dashboard_store = store
+    client = TestClient(app)
+
+    headers = {"x-broodmind-token": settings.dashboard_token} if settings.dashboard_token else {}
+    response = client.get("/api/dashboard/v2/workers", headers=headers)
+    assert response.status_code == 200
+
+    payload = response.json()
+    recent = payload["workers"]["recent"]
+    assert len(recent) == 1
+    assert recent[0]["summary"] == "Sync finished successfully"
+    assert recent[0]["result_preview"] == "Sync finished successfully"
+    assert recent[0]["output"] == {"report": {"status": "ok", "items": 3}}

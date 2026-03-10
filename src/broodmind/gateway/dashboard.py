@@ -971,19 +971,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
                 for w in running_nodes
             ],
             "recent": [
-                {
-                    "id": w.id,
-                    "template_name": w.template_name or w.template_id or "",
-                    "status": w.status,
-                    "task": w.task,
-                    "updated_at": w.updated_at.isoformat(),
-                    "summary": w.summary or "",
-                    "error": w.error or "",
-                    "tools_used": w.tools_used or [],
-                    "parent_worker_id": w.parent_worker_id,
-                    "lineage_id": w.lineage_id,
-                    "spawn_depth": w.spawn_depth,
-                }
+                _serialize_recent_worker(w)
                 for w in recent_workers[:last]
             ],
         },
@@ -1432,6 +1420,56 @@ def _estimate_mttr_minutes(recent_workers: list[WorkerRecord]) -> float | None:
     if not durations:
         return None
     return round(sum(durations) / len(durations), 1)
+
+
+def _serialize_recent_worker(worker: WorkerRecord) -> dict[str, Any]:
+    output = worker.output if isinstance(worker.output, dict) else None
+    return {
+        "id": worker.id,
+        "template_name": worker.template_name or worker.template_id or "",
+        "status": worker.status,
+        "task": worker.task,
+        "updated_at": worker.updated_at.isoformat(),
+        "summary": worker.summary or "",
+        "error": worker.error or "",
+        "tools_used": worker.tools_used or [],
+        "parent_worker_id": worker.parent_worker_id,
+        "lineage_id": worker.lineage_id,
+        "spawn_depth": worker.spawn_depth,
+        "result_preview": _worker_result_preview(worker),
+        "output": output,
+    }
+
+
+def _worker_result_preview(worker: WorkerRecord) -> str:
+    summary = str(worker.summary or "").strip()
+    if summary:
+        return _truncate_preview(summary, 280)
+
+    error = str(worker.error or "").strip()
+    if error:
+        return _truncate_preview(error, 280)
+
+    output = worker.output if isinstance(worker.output, dict) else None
+    if output:
+        serialized = _safe_preview_json(output)
+        if serialized:
+            return _truncate_preview(serialized, 280)
+    return ""
+
+
+def _safe_preview_json(value: Any) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, indent=2)
+    except Exception:
+        return repr(value)
+
+
+def _truncate_preview(text: str, limit: int) -> str:
+    cleaned = " ".join(str(text).split())
+    if len(cleaned) <= limit:
+        return cleaned
+    return cleaned[: limit - 3].rstrip() + "..."
 
 
 def _build_noise_control(*, logs: list[dict[str, Any]]) -> dict[str, Any]:
