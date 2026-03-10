@@ -12,7 +12,12 @@ type WorkerItem = {
   status?: string;
   task?: string;
   updated_at?: string;
+  summary?: string;
   error?: string;
+  result_preview?: string;
+  output?: Record<string, unknown> | null;
+  tools_used?: string[];
+  lineage_id?: string | null;
   parent_worker_id?: string | null;
   spawn_depth?: number;
 };
@@ -40,6 +45,7 @@ export function WorkersPage() {
   const [data, setData] = useState<WorkersPayload | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>("");
+  const [expandedWorkerId, setExpandedWorkerId] = useState<string>("");
 
   useEffect(() => {
     let active = true;
@@ -127,17 +133,89 @@ export function WorkersPage() {
                     <th>Status</th>
                     <th>Template</th>
                     <th>Task</th>
+                    <th>Result</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {recent.slice(0, 12).map((worker) => (
-                    <tr key={worker.id ?? worker.updated_at}>
-                      <td>{short(worker.id)}</td>
-                      <td className={tone(worker.status)}>{String(worker.status ?? "unknown")}</td>
-                      <td>{worker.template_name ?? "n/a"}</td>
-                      <td title={worker.task ?? ""}>{String(worker.task ?? "").slice(0, 64) || "n/a"}</td>
-                    </tr>
-                  ))}
+                  {recent.slice(0, 12).flatMap((worker, index) => {
+                    const workerKey = worker.id ?? worker.updated_at ?? `worker-${index}`;
+                    const workerId = worker.id ?? "";
+                    const isExpanded = expandedWorkerId === worker.id;
+                    const preview = worker.result_preview?.trim() || "No result yet";
+                    return [
+                      <tr
+                        key={`${workerKey}-row`}
+                        className="cursor-pointer align-top"
+                        onClick={() => {
+                          if (!workerId) {
+                            return;
+                          }
+                          setExpandedWorkerId((current) => (current === workerId ? "" : workerId));
+                        }}
+                      >
+                        <td>{short(worker.id)}</td>
+                        <td className={tone(worker.status)}>{String(worker.status ?? "unknown")}</td>
+                        <td>{worker.template_name ?? "n/a"}</td>
+                        <td title={worker.task ?? ""}>{String(worker.task ?? "").slice(0, 64) || "n/a"}</td>
+                        <td title={preview} className="max-w-xs">
+                          <div className="text-sm text-slate-300">
+                            {preview.length > 88 ? `${preview.slice(0, 88)}...` : preview}
+                          </div>
+                        </td>
+                      </tr>,
+                      isExpanded ? (
+                        <tr key={`${workerKey}-details`}>
+                          <td colSpan={5} className="bg-slate-900/70">
+                            <div className="space-y-3 rounded-xl border border-slate-800 bg-slate-950/80 p-4">
+                              <div className="flex flex-wrap gap-3 text-xs text-slate-400">
+                                <span>Updated: {worker.updated_at ?? "n/a"}</span>
+                                <span>Lineage: {short(worker.lineage_id ?? undefined)}</span>
+                                <span>
+                                  Parent:{" "}
+                                  {worker.parent_worker_id ? short(worker.parent_worker_id) : "root"}
+                                </span>
+                                <span>Depth: {worker.spawn_depth ?? 0}</span>
+                              </div>
+
+                              {worker.summary ? (
+                                <div className="space-y-1">
+                                  <div className="text-xs uppercase tracking-[0.2em] text-cyan-300">Summary</div>
+                                  <div className="rounded-lg border border-cyan-950/80 bg-cyan-950/20 p-3 text-sm text-slate-100">
+                                    {worker.summary}
+                                  </div>
+                                </div>
+                              ) : null}
+
+                              {worker.error ? (
+                                <div className="space-y-1">
+                                  <div className="text-xs uppercase tracking-[0.2em] text-rose-300">Error</div>
+                                  <div className="rounded-lg border border-rose-950/80 bg-rose-950/20 p-3 text-sm text-rose-100">
+                                    {worker.error}
+                                  </div>
+                                </div>
+                              ) : null}
+
+                              {worker.output ? (
+                                <div className="space-y-1">
+                                  <div className="text-xs uppercase tracking-[0.2em] text-emerald-300">Output</div>
+                                  <pre className="overflow-x-auto rounded-lg border border-slate-800 bg-slate-900 p-3 text-xs text-slate-200">
+                                    {JSON.stringify(worker.output, null, 2)}
+                                  </pre>
+                                </div>
+                              ) : null}
+
+                              {worker.tools_used && worker.tools_used.length > 0 ? (
+                                <div className="space-y-1">
+                                  <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Tools</div>
+                                  <div className="text-sm text-slate-300">{worker.tools_used.join(", ")}</div>
+                                </div>
+                              ) : null}
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null,
+                    ];
+                  })}
                 </tbody>
               </table>
             </div>
@@ -165,4 +243,3 @@ export function WorkersPage() {
     </section>
   );
 }
-
