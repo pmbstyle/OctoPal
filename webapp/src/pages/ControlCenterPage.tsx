@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link, useOutletContext } from "react-router-dom";
 
 import { fetchOverview, fetchQueen, fetchSystem, fetchWorkers } from "../api/dashboardClient";
 import type { components } from "../api/types";
-import type { DashboardFilters } from "../ui/GlobalFiltersBar";
+import type { AppShellOutletContext } from "../ui/AppShell";
 
 type OverviewPayload = components["schemas"]["DashboardOverviewV2"];
 type WorkersPayload = components["schemas"]["DashboardWorkersV2"];
@@ -294,7 +295,8 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
   );
 }
 
-export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
+export function ControlCenterPage() {
+  const { filters } = useOutletContext<AppShellOutletContext>();
   const [bundle, setBundle] = useState<SnapshotBundle | null>(null);
   const [history, setHistory] = useState<MetricPoint[]>([]);
   const [loading, setLoading] = useState(true);
@@ -515,8 +517,16 @@ export function ControlCenterPage({ filters }: { filters: DashboardFilters }) {
 
       <section className="relative rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
         <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Workers</h3>
-          <p className="text-xs text-slate-500">Top 12 by recency, timestamps in local browser time</p>
+          <div>
+            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Workers</h3>
+            <p className="text-xs text-slate-500">Top 12 by recency, timestamps in local browser time</p>
+          </div>
+          <Link
+            to="/workers"
+            className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-200 transition hover:border-cyan-300/60 hover:bg-cyan-400/15"
+          >
+            Open workers page
+          </Link>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] border-separate border-spacing-y-2 text-left text-sm">

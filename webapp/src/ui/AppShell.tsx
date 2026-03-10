@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
+import { NavLink, Outlet } from "react-router-dom";
 
 import { GlobalFiltersBar } from "./GlobalFiltersBar";
 import type { DashboardFilters } from "./GlobalFiltersBar";
-import { ControlCenterPage } from "../pages/ControlCenterPage";
 
 const filtersStorageKey = "broodmind.webapp.filters";
 const tokenStorageKey = "broodmind.webapp.token";
@@ -18,6 +18,16 @@ export type AppShellOutletContext = {
   filters: DashboardFilters;
   setFilters: (next: DashboardFilters) => void;
 };
+
+const navItems = [
+  { to: "/", label: "Control" },
+  { to: "/overview", label: "Overview" },
+  { to: "/workers", label: "Workers" },
+  { to: "/queen", label: "Queen" },
+  { to: "/incidents", label: "Incidents" },
+  { to: "/system", label: "System" },
+  { to: "/actions", label: "Actions" },
+];
 
 export function AppShell() {
   const [filters, setFilters] = useState<DashboardFilters>(() => {
@@ -74,8 +84,27 @@ export function AppShell() {
           </p>
         </header>
         <GlobalFiltersBar filters={filters} onChange={setFilters} />
+        <nav className="mt-4 flex flex-wrap gap-2">
+          {navItems.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === "/"}
+              className={({ isActive }) =>
+                [
+                  "rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] transition",
+                  isActive
+                    ? "border-cyan-400/50 bg-cyan-400/10 text-cyan-200"
+                    : "border-slate-800 bg-slate-900/70 text-slate-400 hover:border-slate-700 hover:text-slate-200",
+                ].join(" ")
+              }
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
         <main className="mt-5">
-          <ControlCenterPage filters={filters} />
+          <Outlet context={{ filters, setFilters }} />
         </main>
         <footer className="mt-8 border-t border-slate-800 pt-4 text-xs text-slate-500">
           Updates every 4 seconds. Streamlined for operator-first monitoring.
