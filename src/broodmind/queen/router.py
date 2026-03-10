@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import base64
+import re
 import uuid
 from pathlib import Path
 from collections.abc import Awaitable, Callable
@@ -26,6 +27,12 @@ _MAX_PLAN_STEPS = 10
 _MAX_VERIFY_CONTEXT_CHARS = 20000
 _DEFAULT_MAX_TOOL_COUNT = 64
 _MIN_TOOL_COUNT_ON_OVERFLOW = 12
+_TOOL_LIKE_PARTIAL_PREFIX_RE = re.compile(
+    r"^(?:fs_|check_|list_|start_|stop_|manage_|search_|schedule_|remove_|queen_|get_)",
+    re.IGNORECASE,
+)
+_FUNCTION_CALL_PARTIAL_RE = re.compile(r"^[A-Za-z_][\w.-]{1,80}\s*\(")
+_SNAKE_COMMAND_PARTIAL_RE = re.compile(r"^[a-z][a-z0-9_]{2,80}$")
 _PRIORITY_TOOL_NAMES = {
     "queen_context_reset",
     "queen_context_health",
@@ -225,7 +232,6 @@ async def route_or_reply(
                                 provider,
                                 messages,
                                 context="transient_tool_error_fallback",
-                                on_partial=partial_callback,
                             )
                             return await _finalize_response(
                                 provider=provider,
@@ -285,7 +291,6 @@ async def route_or_reply(
                         provider,
                         messages,
                         context="empty_tool_response_fallback",
-                        on_partial=partial_callback,
                     )
                     return await _finalize_response(
                         provider=provider,
@@ -317,7 +322,6 @@ async def route_or_reply(
                     provider,
                     messages,
                     context="tool_limit_fallback",
-                    on_partial=partial_callback,
                 )
                 return await _finalize_response(
                     provider=provider,
@@ -339,7 +343,6 @@ async def route_or_reply(
                     provider,
                     messages,
                     context="tool_error_fallback",
-                    on_partial=partial_callback,
                 )
                 return await _finalize_response(
                     provider=provider,
@@ -952,6 +955,9 @@ def _build_partial_callback(
         clean = normalize_plain_text(text or "")
         if not clean:
             return
+        clean = _sanitize_partial_for_user(clean)
+        if not clean:
+            return
         if should_suppress_user_delivery(clean):
             return
         try:
@@ -960,3 +966,36 @@ def _build_partial_callback(
             logger.debug("Failed to emit partial stream", chat_id=chat_id, exc_info=True)
 
     return _on_partial
+
+
+def _sanitize_partial_for_user(text: str) -> str:
+    lines = [line.rstrip() for line in normalize_plain_text(text).splitlines()]
+    visible_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if visible_lines and visible_lines[-1] != "":
+                visible_lines.append("")
+            continue
+        if _looks_like_internal_partial_line(stripped):
+            continue
+        visible_lines.append(stripped)
+
+    while visible_lines and visible_lines[-1] == "":
+        visible_lines.pop()
+    return "\n".join(visible_lines).strip()
+
+
+def _looks_like_internal_partial_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if _FUNCTION_CALL_PARTIAL_RE.match(stripped):
+        return True
+    if _TOOL_LIKE_PARTIAL_PREFIX_RE.match(stripped):
+        return True
+    if _SNAKE_COMMAND_PARTIAL_RE.match(stripped) and "_" in stripped:
+        return True
+    if stripped.startswith(("```", "{", "[tool", "<tool")):
+        return True
+    return False
