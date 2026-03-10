@@ -94,6 +94,17 @@ async def route_or_reply(
             images=images,
             wake_notice=wake_notice,
         )
+        if not internal_followup:
+            messages.append(
+                Message(
+                    role="system",
+                    content=(
+                        "If you are sending an interim update and you must return with a later result without waiting "
+                        "for another user message, append exactly FOLLOWUP_REQUIRED on its own final line. "
+                        "Do not use FOLLOWUP_REQUIRED for final/completed answers."
+                    ),
+                )
+            )
         _log_system_prompt(messages, "route")
 
         mcp_manager = getattr(queen, "mcp_manager", None)
@@ -428,6 +439,56 @@ async def route_worker_result_back_to_queen(
 def should_send_worker_followup(text: str) -> bool:
     """Determine if a worker follow-up should be sent to the user."""
     return not should_suppress_user_delivery(text)
+
+
+def should_force_worker_followup(result: WorkerResult) -> bool:
+    """Return True when a completed worker result is substantive enough to surface."""
+    summary = (result.summary or "").strip()
+    if not summary:
+        return False
+
+    if len(summary) >= 160:
+        return True
+
+    if result.questions or result.knowledge_proposals:
+        return True
+
+    if len(result.tools_used or []) >= 2:
+        return True
+
+    output = result.output
+    if isinstance(output, dict):
+        interesting_keys = {
+            "path",
+            "file",
+            "files",
+            "report",
+            "report_path",
+            "output_path",
+            "results",
+            "items",
+            "jobs",
+            "posts",
+            "articles",
+        }
+        if interesting_keys.intersection(output.keys()):
+            return True
+
+    return False
+
+
+def build_forced_worker_followup(result: WorkerResult) -> str:
+    """Build a concise Queen-style fallback when routing suppresses a useful update."""
+    summary = normalize_plain_text(result.summary or "Task finished.")
+    if len(summary) > 700:
+        summary = summary[:697].rstrip() + "..."
+
+    parts = [summary]
+    if result.questions:
+        questions = [q.strip() for q in result.questions[:3] if q and q.strip()]
+        if questions:
+            parts.append("\n".join(f"- {question}" for question in questions))
+    return "\n\n".join(parts).strip()
 
 
 def normalize_plain_text(text: str) -> str:

@@ -1,11 +1,22 @@
+from datetime import timedelta
+
 from broodmind.utils import (
     has_no_user_response_suffix,
     is_heartbeat_ok,
     should_suppress_user_delivery,
 )
-from broodmind.queen.core import _build_worker_result_timeout_followup
-from broodmind.queen.router import should_send_worker_followup
+from broodmind.queen.core import (
+    _build_worker_result_timeout_followup,
+    _extract_followup_required_marker,
+    Queen,
+)
+from broodmind.queen.router import (
+    build_forced_worker_followup,
+    should_force_worker_followup,
+    should_send_worker_followup,
+)
 from broodmind.workers.contracts import WorkerResult
+from broodmind.utils import utc_now
 
 def test_is_heartbeat_ok():
     assert is_heartbeat_ok("HEARTBEAT_OK") is True
@@ -33,6 +44,53 @@ def test_should_send_worker_followup():
     assert should_send_worker_followup("Done.\nNO USER RESPONSE") is False
     assert should_send_worker_followup("I have finished the task.") is True
     assert should_send_worker_followup("HEARTBEAT_OK\nI did something else too.") is False
+
+
+def test_force_worker_followup_for_substantive_results():
+    result = WorkerResult(
+        summary="Created research/jobs/2026-03-10.md with seven ranked AI/ML roles across Canada and USA, including salary ranges and fit notes for each company.",
+        output={"report_path": "research/jobs/2026-03-10.md"},
+    )
+    assert should_force_worker_followup(result) is True
+    text = build_forced_worker_followup(result)
+    assert "research/jobs/2026-03-10.md" in text
+    assert should_send_worker_followup(text) is True
+
+
+def test_do_not_force_worker_followup_for_tiny_internal_results():
+    result = WorkerResult(summary="Saved canon entry.")
+    assert should_force_worker_followup(result) is False
+
+
+def test_followup_required_marker_is_stripped_and_detected():
+    text, wants_followup = _extract_followup_required_marker(
+        "Проверю статус child worker и вернусь с итогом.\nFOLLOWUP_REQUIRED"
+    )
+    assert wants_followup is True
+    assert text == "Проверю статус child worker и вернусь с итогом."
+
+
+def test_followup_required_marker_is_not_set_for_normal_reply():
+    text, wants_followup = _extract_followup_required_marker("Готово, вот итог.")
+    assert wants_followup is False
+    assert text == "Готово, вот итог."
+
+
+def test_pending_conversational_closure_expires():
+    queen = Queen(
+        approvals=None,
+        memory=None,
+        canon=None,
+        provider=None,
+        store=None,
+        policy=None,
+        runtime=None,
+    )
+    correlation_id = "corr-expired"
+    queen._pending_conversational_closure_by_correlation[correlation_id] = (
+        utc_now() - timedelta(seconds=4000)
+    )
+    assert queen.has_pending_conversational_closure(correlation_id) is False
 
 
 def test_no_user_response_suffix_detection():

@@ -22,14 +22,17 @@ from broodmind.policy.engine import PolicyEngine
 from broodmind.providers.base import InferenceProvider
 from broodmind.browser.manager import get_browser_manager
 from broodmind.housekeeping import cleanup_workspace_tmp, rotate_canon_events
+from broodmind.logging_config import correlation_id_var
 from broodmind.queen.prompt_builder import (
     build_bootstrap_context_prompt,
     build_queen_prompt,
 )
 from broodmind.queen.router import (
+    build_forced_worker_followup,
     normalize_plain_text,
     route_or_reply,
     route_worker_result_back_to_queen,
+    should_force_worker_followup,
     should_send_worker_followup,
 )
 from broodmind.runtime_metrics import update_component_gauges
@@ -51,8 +54,6 @@ _QUEUE_IDLE_TIMEOUT_SECONDS = 300.0
 _WORKER_RESULT_ROUTING_TIMEOUT_SECONDS = 900.0
 _RESET_CONFIRM_THRESHOLD = 2
 _RESET_CONFIDENCE_MIN = 0.7
-
-
 def _build_worker_result_timeout_followup(result: WorkerResult) -> str:
     """Return a minimal user-facing fallback when Queen routing times out."""
     summary = (result.summary or "").strip()
@@ -88,6 +89,13 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0, maximum: floa
     except (TypeError, ValueError):
         return default
     return min(maximum, max(minimum, value))
+
+
+_PENDING_CONVERSATIONAL_CLOSURE_TTL_SECONDS = _env_int(
+    "BROODMIND_PENDING_CONVERSATIONAL_CLOSURE_TTL_SECONDS",
+    3600,
+    minimum=60,
+)
 
 
 _WATCH_THRESHOLDS = {
@@ -184,7 +192,7 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
     """
     while True:
         try:
-            task_text, result = await asyncio.wait_for(queue.get(), timeout=_QUEUE_IDLE_TIMEOUT_SECONDS)
+            task_text, result, correlation_id = await asyncio.wait_for(queue.get(), timeout=_QUEUE_IDLE_TIMEOUT_SECONDS)
         except TimeoutError:
             break
         try:
@@ -226,9 +234,18 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
                     logger.warning("Worker-result routing timed out", chat_id=chat_id)
                     final_text = _build_worker_result_timeout_followup(result)
 
+                pending_closure = queen.has_pending_conversational_closure(correlation_id)
+                if (
+                    not should_send_worker_followup(final_text)
+                    and (should_force_worker_followup(result) or pending_closure)
+                ):
+                    logger.info("Forcing substantive worker follow-up", chat_id=chat_id)
+                    final_text = build_forced_worker_followup(result)
+
                 if should_send_worker_followup(final_text):
                     if queen.internal_send:
                         await queen.internal_send(chat_id, final_text)
+                        queen.clear_pending_conversational_closure(correlation_id)
                         logger.info("Internal worker follow-up sent", chat_id=chat_id, text_len=len(final_text))
                         await queen.memory.add_message(
                             "assistant",
@@ -254,7 +271,14 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
     _publish_runtime_metrics()
 
 
-def _enqueue_internal_result(queen: Queen, chat_id: int, task_text: str, result: WorkerResult) -> None:
+def _enqueue_internal_result(
+    queen: Queen,
+    chat_id: int,
+    task_text: str,
+    result: WorkerResult,
+    *,
+    correlation_id: str | None,
+) -> None:
     loop = asyncio.get_running_loop()
     queue = _INTERNAL_QUEUES.get(chat_id)
     if queue is not None and getattr(queue, "_loop", None) not in (None, loop):
@@ -268,7 +292,7 @@ def _enqueue_internal_result(queen: Queen, chat_id: int, task_text: str, result:
         _INTERNAL_QUEUES[chat_id] = queue
     if chat_id not in _INTERNAL_TASKS or _INTERNAL_TASKS[chat_id].done():
         _INTERNAL_TASKS[chat_id] = asyncio.create_task(_internal_worker(queen, chat_id, queue))
-    queue.put_nowait((task_text, result))
+    queue.put_nowait((task_text, result, correlation_id))
     logger.info("Queued internal worker result", chat_id=chat_id, queue_size=queue.qsize())
     _publish_runtime_metrics()
 
@@ -307,6 +331,7 @@ class Queen:
     _pending_wakeup_by_chat: dict[int, str] | None = None
     _context_health_by_chat: dict[int, dict[str, Any]] | None = None
     _last_reply_norm_by_chat: dict[int, str] | None = None
+    _pending_conversational_closure_by_correlation: dict[str, Any] | None = None
     _no_progress_turns_by_chat: dict[int, int] | None = None
     _progress_revision_by_chat: dict[int, int] | None = None
     _reset_streak_without_progress_by_chat: dict[int, int] | None = None
@@ -336,6 +361,8 @@ class Queen:
             self._context_health_by_chat = {}
         if self._last_reply_norm_by_chat is None:
             self._last_reply_norm_by_chat = {}
+        if self._pending_conversational_closure_by_correlation is None:
+            self._pending_conversational_closure_by_correlation = {}
         if self._no_progress_turns_by_chat is None:
             self._no_progress_turns_by_chat = {}
         if self._progress_revision_by_chat is None:
@@ -712,6 +739,39 @@ class Queen:
         pending = self._pending_wakeup_by_chat or {}
         return str(pending.get(chat_id, "") or "")
 
+    def has_pending_conversational_closure(self, correlation_id: str | None) -> bool:
+        if not correlation_id:
+            return False
+        self._prune_pending_conversational_closures()
+        pending = self._pending_conversational_closure_by_correlation or {}
+        return correlation_id in pending
+
+    def mark_pending_conversational_closure(self, correlation_id: str | None) -> None:
+        if not correlation_id:
+            return
+        self._prune_pending_conversational_closures()
+        pending = self._pending_conversational_closure_by_correlation or {}
+        pending[correlation_id] = utc_now()
+
+    def clear_pending_conversational_closure(self, correlation_id: str | None) -> None:
+        if not correlation_id:
+            return
+        pending = self._pending_conversational_closure_by_correlation or {}
+        pending.pop(correlation_id, None)
+
+    def _prune_pending_conversational_closures(self) -> None:
+        pending = self._pending_conversational_closure_by_correlation or {}
+        if not pending:
+            return
+        cutoff = utc_now() - timedelta(seconds=_PENDING_CONVERSATIONAL_CLOSURE_TTL_SECONDS)
+        expired = [
+            correlation_id
+            for correlation_id, created_at in pending.items()
+            if not created_at or created_at < cutoff
+        ]
+        for correlation_id in expired:
+            pending.pop(correlation_id, None)
+
     def clear_context_wakeup(self, chat_id: int) -> None:
         pending = self._pending_wakeup_by_chat or {}
         pending.pop(chat_id, None)
@@ -1080,75 +1140,91 @@ class Queen:
                 immediate="I'm currently active on WebSocket. Please use the WebSocket client or wait until it's closed.",
                 followup=None,
             )
+        correlation_token = None
+        correlation_id = correlation_id_var.get()
+        if not correlation_id:
+            correlation_id = f"turn-{uuid4()}"
+            correlation_token = correlation_id_var.set(correlation_id)
 
-        # Clear recent tasks at the start of each new user message
-        self._recent_tasks.clear()
-        if callable(approval_requester):
-            self._approval_requesters[chat_id] = approval_requester
-        logger.info("Handling message", chat_id=chat_id, is_ws=is_ws, has_images=bool(images))
-        logger.debug("Received message text", text_len=len(text), text=text[:500])
-        if persist_to_memory:
-            await self.memory.add_message(
-                "user",
-                text,
-                {"chat_id": chat_id, "has_images": bool(images), "heartbeat": not track_progress},
-            )
-        bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
-        if bootstrap_context.files:
-            files_summary = ", ".join([f"{name} ({size} chars)" for name, size in bootstrap_context.files])
-            logger.debug("Queen bootstrap files", files=files_summary, hash=bootstrap_context.hash)
-        route_kwargs: dict[str, Any] = {
-            "show_typing": show_typing,
-            "images": images,
-            "include_wakeup": include_wakeup,
-        }
-        while True:
-            try:
-                reply_text = await route_or_reply(
-                    self,
-                    self.provider,
-                    self.memory,
-                    text,
-                    chat_id,
-                    bootstrap_context.content,
-                    **route_kwargs,
-                )
-                break
-            except TypeError as exc:
-                # Backward-compatible fallback for monkeypatched tests/extensions using older signatures.
-                msg = str(exc)
-                if "unexpected keyword argument" not in msg:
-                    raise
-                removed = False
-                for key in list(route_kwargs.keys()):
-                    if f"'{key}'" in msg:
-                        route_kwargs.pop(key, None)
-                        removed = True
-                        break
-                if not removed:
-                    raise
-        logger.info("Queen response ready")
-        if persist_to_memory:
-            await self.memory.add_message("assistant", reply_text, {"chat_id": chat_id, "heartbeat": not track_progress})
-        if track_progress:
-            reply_norm = _normalize_compact(reply_text)
-            prior_reply = self._last_reply_norm_by_chat.get(chat_id, "")
-            if _is_progress_reply(reply_norm, prior_reply):
-                self._register_progress(chat_id, "assistant_response")
-            else:
-                self._no_progress_turns_by_chat[chat_id] = int(self._no_progress_turns_by_chat.get(chat_id, 0)) + 1
-            self._last_reply_norm_by_chat[chat_id] = reply_norm
         try:
-            await self.get_context_health_snapshot(chat_id)
-        except Exception:
-            logger.debug("Failed to refresh context health snapshot", chat_id=chat_id, exc_info=True)
-        if include_wakeup:
-            self.clear_context_wakeup(chat_id)
-        if bootstrap_context.hash:
-            await asyncio.to_thread(
-                self.store.set_chat_bootstrap_hash, chat_id, bootstrap_context.hash, utc_now()
+            # Clear recent tasks at the start of each new user message
+            self._recent_tasks.clear()
+            if callable(approval_requester):
+                self._approval_requesters[chat_id] = approval_requester
+            logger.info("Handling message", chat_id=chat_id, is_ws=is_ws, has_images=bool(images))
+            logger.debug("Received message text", text_len=len(text), text=text[:500])
+            if persist_to_memory:
+                await self.memory.add_message(
+                    "user",
+                    text,
+                    {"chat_id": chat_id, "has_images": bool(images), "heartbeat": not track_progress},
+                )
+            bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
+            if bootstrap_context.files:
+                files_summary = ", ".join([f"{name} ({size} chars)" for name, size in bootstrap_context.files])
+                logger.debug("Queen bootstrap files", files=files_summary, hash=bootstrap_context.hash)
+            route_kwargs: dict[str, Any] = {
+                "show_typing": show_typing,
+                "images": images,
+                "include_wakeup": include_wakeup,
+            }
+            while True:
+                try:
+                    reply_text = await route_or_reply(
+                        self,
+                        self.provider,
+                        self.memory,
+                        text,
+                        chat_id,
+                        bootstrap_context.content,
+                        **route_kwargs,
+                    )
+                    break
+                except TypeError as exc:
+                    # Backward-compatible fallback for monkeypatched tests/extensions using older signatures.
+                    msg = str(exc)
+                    if "unexpected keyword argument" not in msg:
+                        raise
+                    removed = False
+                    for key in list(route_kwargs.keys()):
+                        if f"'{key}'" in msg:
+                            route_kwargs.pop(key, None)
+                            removed = True
+                            break
+                    if not removed:
+                        raise
+            reply_text, wants_followup = _extract_followup_required_marker(reply_text)
+            logger.info("Queen response ready")
+            if persist_to_memory:
+                await self.memory.add_message("assistant", reply_text, {"chat_id": chat_id, "heartbeat": not track_progress})
+            if track_progress:
+                reply_norm = _normalize_compact(reply_text)
+                prior_reply = self._last_reply_norm_by_chat.get(chat_id, "")
+                if _is_progress_reply(reply_norm, prior_reply):
+                    self._register_progress(chat_id, "assistant_response")
+                else:
+                    self._no_progress_turns_by_chat[chat_id] = int(self._no_progress_turns_by_chat.get(chat_id, 0)) + 1
+                self._last_reply_norm_by_chat[chat_id] = reply_norm
+            if wants_followup:
+                self.mark_pending_conversational_closure(correlation_id)
+            try:
+                await self.get_context_health_snapshot(chat_id)
+            except Exception:
+                logger.debug("Failed to refresh context health snapshot", chat_id=chat_id, exc_info=True)
+            if include_wakeup:
+                self.clear_context_wakeup(chat_id)
+            if bootstrap_context.hash:
+                await asyncio.to_thread(
+                    self.store.set_chat_bootstrap_hash, chat_id, bootstrap_context.hash, utc_now()
+                )
+            return QueenReply(
+                immediate=normalize_plain_text(reply_text),
+                followup=None,
+                followup_required=wants_followup,
             )
-        return QueenReply(immediate=normalize_plain_text(reply_text), followup=None)
+        finally:
+            if correlation_token is not None:
+                correlation_id_var.reset(correlation_token)
 
     async def _start_worker_async(
         self,
@@ -1165,8 +1241,6 @@ class Queen:
         root_task_id: str | None = None,
         spawn_depth: int = 0,
     ) -> dict[str, Any]:
-        from broodmind.logging_config import correlation_id_var
-
         if parent_worker_id:
             violation = self._check_child_spawn_limits(
                 lineage_id=lineage_id,
@@ -1298,7 +1372,13 @@ class Queen:
                     reason="parent_failed",
                 )
             self._mark_worker_inactive(run_id)
-            _enqueue_internal_result(self, chat_id, task, result)
+            _enqueue_internal_result(
+                self,
+                chat_id,
+                task,
+                result,
+                correlation_id=task_request.correlation_id,
+            )
         asyncio.create_task(_runner())
         await self._emit_progress(
             chat_id,
@@ -1486,6 +1566,23 @@ def _is_progress_reply(current_norm: str, prior_norm: str) -> bool:
     if any(marker in current_norm for marker in stalled_markers):
         return False
     return True
+
+
+_FOLLOWUP_REQUIRED_MARKER = "FOLLOWUP_REQUIRED"
+_FOLLOWUP_REQUIRED_MARKER_NORMALIZED = "FOLLOWUPREQUIRED"
+
+
+def _extract_followup_required_marker(text: str) -> tuple[str, bool]:
+    value = normalize_plain_text(text or "")
+    if not value:
+        return value, False
+
+    trimmed = re.sub(r"[^\w]+$", "", value).strip()
+    normalized = re.sub(r"[\s_-]+", "", trimmed).upper()
+    if normalized.endswith(_FOLLOWUP_REQUIRED_MARKER_NORMALIZED):
+        cleaned = re.sub(r"(?is)(?:\n|\r|\s)*[*_`<>-]*FOLLOWUP[\s_-]*REQUIRED[*_`<>-]*\s*$", "", value).strip()
+        return cleaned, True
+    return value, False
 
 
 def _workspace_dir() -> Path:
@@ -1680,3 +1777,4 @@ def _build_wakeup_message(handoff: dict[str, Any], handoff_path: str) -> str:
 class QueenReply:
     immediate: str
     followup: asyncio.Task[str] | None
+    followup_required: bool = False
