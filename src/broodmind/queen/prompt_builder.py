@@ -120,7 +120,11 @@ async def build_bootstrap_context_prompt(store: Store, chat_id: int) -> Bootstra
             workspace / "USER.md",
         ]
 
-        optional_files = [workspace / "HEARTBEAT.md", workspace / "MEMORY.md"]
+        optional_files = [
+            workspace / "HEARTBEAT.md",
+            workspace / "MEMORY.md",
+            workspace / "experiments" / "README.md",
+        ]
 
         file_entries: list[tuple[str, str]] = []
 
@@ -139,7 +143,8 @@ async def build_bootstrap_context_prompt(store: Store, chat_id: int) -> Bootstra
             content = path.read_text(encoding="utf-8")
 
             if content.strip():
-                file_entries.append((path.name, content))
+                rel = path.relative_to(workspace).as_posix()
+                file_entries.append((rel, content))
 
         for path in memory_files:
             content = path.read_text(encoding="utf-8")

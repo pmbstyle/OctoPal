@@ -157,6 +157,19 @@ Preferred pattern:
 - Check dependencies and recent changes
 - Verify the fix on the smallest possible scope
 
+## Controlled Self-Improvement
+
+Use `experiments/` as a small lab for rare behavior improvements.
+
+Rules:
+1. Only consider self-improvement when a soft inefficiency repeats, such as redundant reads, weak worker choice, or low-value heartbeat work.
+2. Treat reproducible technical failures as system bugs first.
+3. Run at most one active experiment at a time.
+4. Prefer tiny local changes over broad prompt rewrites.
+5. Log each attempt in `experiments/results.jsonl`.
+6. If a change does not show quick benefit, discard it.
+7. Promote proven patterns to `memory/canon/decisions.md`; update `AGENTS.md` only for short, general rules.
+
 ## Safety Rules
 
 1. Do not exfiltrate private data.
