@@ -15,8 +15,17 @@ type QueenView = {
   internal_tasks?: number;
 };
 type QueuesView = {
+  active_channel?: string;
+  active_channel_label?: string;
+  active_channel_updated_at?: string;
+  channel_queue_depth?: number;
+  channel_send_tasks?: number | null;
+  channel_connected?: number | null;
+  channel_chat_mappings?: number | null;
   telegram_send_tasks?: number;
   telegram_queues?: number;
+  whatsapp_connected?: number;
+  whatsapp_mapped_chats?: number;
   exec_sessions_running?: number;
   exec_sessions_total?: number;
 };
@@ -119,6 +128,10 @@ export function QueenPage() {
   const control = (data.control ?? {}) as ControlView;
   const health = (data.health ?? {}) as HealthView;
   const lastAck = control.last_ack ?? {};
+  const activeChannel = String(queues.active_channel ?? "telegram").toLowerCase();
+  const activeChannelLabel = String(queues.active_channel_label ?? (activeChannel === "whatsapp" ? "WhatsApp" : "Telegram"));
+  const channelUpdatedAt = queues.active_channel_updated_at;
+  const isWhatsApp = activeChannel === "whatsapp";
 
   return (
     <section className="grid gap-5">
@@ -163,12 +176,23 @@ export function QueenPage() {
           <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Queues and Sessions</h3>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Telegram queues</div>
-              <div className="mt-2 text-xl font-semibold text-slate-100">{metric(queues.telegram_queues)}</div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">
+                {isWhatsApp ? `${activeChannelLabel} bridge` : `${activeChannelLabel} queues`}
+              </div>
+              <div className="mt-2 text-xl font-semibold text-slate-100">
+                {isWhatsApp ? (Number(queues.channel_connected ?? 0) > 0 ? "Connected" : "Disconnected") : metric(queues.channel_queue_depth)}
+              </div>
+              {channelUpdatedAt ? (
+                <div className="mt-2 text-xs text-slate-500">Updated {formatLocalDateTime(channelUpdatedAt)}</div>
+              ) : null}
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Telegram send tasks</div>
-              <div className="mt-2 text-xl font-semibold text-slate-100">{metric(queues.telegram_send_tasks)}</div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">
+                {isWhatsApp ? "Mapped chats" : `${activeChannelLabel} send tasks`}
+              </div>
+              <div className="mt-2 text-xl font-semibold text-slate-100">
+                {isWhatsApp ? metric(queues.channel_chat_mappings) : metric(queues.channel_send_tasks)}
+              </div>
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
               <div className="text-xs uppercase tracking-wide text-slate-500">Exec sessions running</div>

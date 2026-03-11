@@ -24,6 +24,12 @@ def test_build_filters_normalizes_unknown_values(tmp_path) -> None:
     assert filters.environment == "all"
 
 
+def test_build_filters_accepts_whatsapp_service(tmp_path) -> None:
+    settings = _settings(tmp_path)
+    filters = _build_filters(settings, window_minutes=60, service="whatsapp", environment="all")
+    assert filters.service == "whatsapp"
+
+
 def test_normalize_log_entry_respects_service_filter() -> None:
     filters = DashboardFilters(window_minutes=60, service="telegram", environment="all")
     line = '{"timestamp":"2026-03-01T00:00:00+00:00","level":"info","event":"telegram message queued"}'
@@ -36,3 +42,11 @@ def test_normalize_log_entry_respects_service_filter() -> None:
         filters=filters,
     )
     assert blocked is None
+
+
+def test_normalize_log_entry_detects_whatsapp_service(tmp_path) -> None:
+    filters = DashboardFilters(window_minutes=60, service="whatsapp", environment="all")
+    line = '{"timestamp":"2026-03-01T00:00:00+00:00","level":"info","event":"whatsapp bridge connected"}'
+    entry = _normalize_log_entry(line, filters=filters)
+    assert entry is not None
+    assert entry["service"] == "whatsapp"

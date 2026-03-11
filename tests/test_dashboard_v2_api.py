@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from broodmind.config.settings import Settings
 from broodmind.gateway.app import build_app
 from broodmind.store.sqlite import SQLiteStore
+from broodmind.state import write_start_status
 from broodmind.store.models import WorkerRecord
 from broodmind.utils import utc_now
 
@@ -98,3 +101,64 @@ def test_dashboard_v2_workers_exposes_worker_result_details(tmp_path) -> None:
     assert recent[0]["summary"] == "Sync finished successfully"
     assert recent[0]["result_preview"] == "Sync finished successfully"
     assert recent[0]["output"] == {"report": {"status": "ok", "items": 3}}
+
+
+def test_dashboard_v2_uses_whatsapp_metrics_for_active_channel(tmp_path) -> None:
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="123:abc",
+        BROODMIND_USER_CHANNEL="whatsapp",
+        BROODMIND_STATE_DIR=tmp_path / "state",
+        BROODMIND_WORKSPACE_DIR=tmp_path / "workspace",
+    )
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    write_start_status(settings)
+    (settings.state_dir / "runtime_metrics.json").write_text(
+        json.dumps(
+            {
+                "telegram": {
+                    "chat_queues": 0,
+                    "send_tasks": 0,
+                    "updated_at": "2026-03-01T00:00:00+00:00",
+                },
+                "whatsapp": {
+                    "connected": 1,
+                    "chat_mappings": 2,
+                    "updated_at": utc_now().isoformat(),
+                },
+                "queen": {
+                    "followup_queues": 0,
+                    "internal_queues": 0,
+                    "followup_tasks": 0,
+                    "internal_tasks": 0,
+                },
+                "exec_run": {
+                    "background_sessions_running": 0,
+                    "background_sessions_total": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    app = build_app(settings)
+    client = TestClient(app)
+    headers = {"x-broodmind-token": settings.dashboard_token} if settings.dashboard_token else {}
+
+    overview = client.get("/api/dashboard/v2/overview", headers=headers)
+    assert overview.status_code == 200
+    overview_payload = overview.json()
+    assert overview_payload["health"]["status"] == "ok"
+    assert "Telegram" not in overview_payload["health"]["summary"]
+    assert all("Telegram:" not in reason for reason in overview_payload["health"]["reasons"])
+    assert overview_payload["system"]["active_channel"] == "WhatsApp"
+    assert overview_payload["system"]["active_channel_id"] == "whatsapp"
+
+    queen = client.get("/api/dashboard/v2/queen", headers=headers)
+    assert queen.status_code == 200
+    queen_payload = queen.json()
+    assert queen_payload["queues"]["active_channel"] == "whatsapp"
+    assert queen_payload["queues"]["active_channel_label"] == "WhatsApp"
+    assert queen_payload["queues"]["channel_connected"] == 1
+    assert queen_payload["queues"]["channel_chat_mappings"] == 2
+    assert queen_payload["queues"]["channel_queue_depth"] == 0
+    assert queen_payload["queues"]["channel_send_tasks"] is None

@@ -15,7 +15,7 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
-from broodmind.channels import user_channel_label
+from broodmind.channels import normalize_user_channel, user_channel_label
 from broodmind.config.settings import Settings
 from broodmind.runtime_metrics import read_metrics_snapshot
 from broodmind.state import is_pid_running, read_status
@@ -23,7 +23,7 @@ from broodmind.store.sqlite import SQLiteStore
 from broodmind.store.models import AuditEvent, WorkerRecord
 
 _WINDOW_CHOICES = {15, 60, 240, 1440}
-_SERVICE_CHOICES = {"all", "gateway", "queen", "telegram", "exec_run", "mcp", "workers"}
+_SERVICE_CHOICES = {"all", "gateway", "queen", "telegram", "whatsapp", "exec_run", "mcp", "workers"}
 _STREAM_TOPICS = {"overview", "incidents", "queen", "workers", "system", "actions", "snapshot"}
 
 
@@ -836,8 +836,16 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
     metrics = read_metrics_snapshot(settings.state_dir) or {}
     queen_metrics = metrics.get("queen", {}) if isinstance(metrics, dict) else {}
     telegram_metrics = metrics.get("telegram", {}) if isinstance(metrics, dict) else {}
+    whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
     exec_metrics = metrics.get("exec_run", {}) if isinstance(metrics, dict) else {}
     connectivity_metrics = metrics.get("connectivity", {}) if isinstance(metrics, dict) else {}
+    active_channel = _resolve_active_channel(status_data, settings)
+    active_channel_label = user_channel_label(active_channel)
+    channel_metrics = _select_active_channel_metrics(
+        active_channel=active_channel,
+        telegram_metrics=telegram_metrics,
+        whatsapp_metrics=whatsapp_metrics,
+    )
 
     active_workers = store.get_active_workers(older_than_minutes=5)
     recent_workers = store.list_recent_workers(max(50, last))
@@ -869,16 +877,18 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
     recent_logs = _tail_logs(log_path, 12, filters=filters)
     log_health = _compute_log_health(log_path, now, window_minutes=filters.window_minutes, filters=filters)
     latency_p95_ms = _estimate_control_latency_p95_ms(requests, acks)
-    queue_depth = followup_q + internal_q + int(telegram_metrics.get("chat_queues", 0) or 0) + len(pending_requests)
+    queue_depth = followup_q + internal_q + int(channel_metrics.get("queue_depth", 0) or 0) + len(pending_requests)
     active_workers_kpi = by_status.get("running", 0) + by_status.get("started", 0)
     mcp_servers = connectivity_metrics.get("mcp_servers", {})
 
     services_all = _build_service_health(
+        active_channel=active_channel,
         now=now,
         system_running=running,
         system_last_heartbeat=status_data.get("last_message_at"),
         queen_metrics=queen_metrics,
         telegram_metrics=telegram_metrics,
+        whatsapp_metrics=whatsapp_metrics,
         exec_metrics=exec_metrics,
         mcp_servers=mcp_servers if isinstance(mcp_servers, dict) else {},
     )
@@ -906,6 +916,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         queue_depth=queue_depth,
     )
     slo = _build_slo_metrics(
+        active_channel=active_channel,
         services=services_all,
         log_health=log_health,
         recent_workers=recent_workers,
@@ -929,7 +940,8 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         "system": {
             "running": running,
             "pid": pid,
-            "active_channel": status_data.get("active_channel", user_channel_label(settings.user_channel)),
+            "active_channel": active_channel_label,
+            "active_channel_id": active_channel,
             "started_at": status_data.get("started_at"),
             "last_heartbeat": status_data.get("last_message_at"),
             "uptime": _uptime_human(status_data.get("started_at")),
@@ -944,8 +956,17 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         "connectivity": {"mcp_servers": mcp_servers if isinstance(mcp_servers, dict) else {}},
         "logs": recent_logs,
         "queues": {
+            "active_channel": active_channel,
+            "active_channel_label": active_channel_label,
+            "active_channel_updated_at": channel_metrics.get("updated_at"),
+            "channel_queue_depth": int(channel_metrics.get("queue_depth", 0) or 0),
+            "channel_send_tasks": channel_metrics.get("send_tasks"),
+            "channel_connected": channel_metrics.get("connected"),
+            "channel_chat_mappings": channel_metrics.get("chat_mappings"),
             "telegram_send_tasks": int(telegram_metrics.get("send_tasks", 0) or 0),
             "telegram_queues": int(telegram_metrics.get("chat_queues", 0) or 0),
+            "whatsapp_connected": int(whatsapp_metrics.get("connected", 0) or 0),
+            "whatsapp_mapped_chats": int(whatsapp_metrics.get("chat_mappings", 0) or 0),
             "exec_sessions_running": int(exec_metrics.get("background_sessions_running", 0) or 0),
             "exec_sessions_total": int(exec_metrics.get("background_sessions_total", 0) or 0),
         },
@@ -1027,11 +1048,13 @@ def _build_kpis(
 
 def _build_service_health(
     *,
+    active_channel: str,
     now: datetime,
     system_running: bool,
     system_last_heartbeat: str | None,
     queen_metrics: dict[str, Any],
     telegram_metrics: dict[str, Any],
+    whatsapp_metrics: dict[str, Any],
     exec_metrics: dict[str, Any],
     mcp_servers: dict[str, Any],
 ) -> list[dict[str, Any]]:
@@ -1083,17 +1106,19 @@ def _build_service_health(
 
     telegram_q = int(telegram_metrics.get("chat_queues", 0) or 0)
     telegram_status = "ok"
-    telegram_reason = "healthy"
+    telegram_reason = "inactive channel"
     telegram_age = _age_seconds(str(telegram_metrics.get("updated_at", "")), now)
-    if telegram_q >= 40:
-        telegram_status = "critical"
-        telegram_reason = f"chat queues overloaded ({telegram_q})"
-    elif telegram_q >= 15:
-        telegram_status = "warning"
-        telegram_reason = f"chat queues elevated ({telegram_q})"
-    elif telegram_age is not None and telegram_age > 240:
-        telegram_status = "warning"
-        telegram_reason = f"metrics stale for {int(telegram_age)}s"
+    if active_channel == "telegram":
+        telegram_reason = "healthy"
+        if telegram_q >= 40:
+            telegram_status = "critical"
+            telegram_reason = f"chat queues overloaded ({telegram_q})"
+        elif telegram_q >= 15:
+            telegram_status = "warning"
+            telegram_reason = f"chat queues elevated ({telegram_q})"
+        elif telegram_age is not None and telegram_age > 240:
+            telegram_status = "warning"
+            telegram_reason = f"metrics stale for {int(telegram_age)}s"
     out.append(
         {
             "id": "telegram",
@@ -1102,6 +1127,42 @@ def _build_service_health(
             "reason": telegram_reason,
             "updated_at": telegram_metrics.get("updated_at"),
             "metrics": {"chat_queues": telegram_q, "send_tasks": int(telegram_metrics.get("send_tasks", 0) or 0)},
+        }
+    )
+
+    whatsapp_connected_raw = whatsapp_metrics.get("connected")
+    whatsapp_connected = None if whatsapp_connected_raw is None else int(bool(whatsapp_connected_raw))
+    whatsapp_mappings = int(whatsapp_metrics.get("chat_mappings", 0) or 0)
+    whatsapp_status = "ok"
+    whatsapp_reason = "inactive channel"
+    whatsapp_age = _age_seconds(str(whatsapp_metrics.get("updated_at", "")), now)
+    if active_channel == "whatsapp":
+        if whatsapp_connected == 0:
+            whatsapp_status = "critical"
+            whatsapp_reason = "bridge disconnected"
+        elif whatsapp_age is not None and whatsapp_age > 240:
+            whatsapp_status = "warning"
+            whatsapp_reason = f"metrics stale for {int(whatsapp_age)}s"
+        elif whatsapp_connected == 1:
+            whatsapp_reason = (
+                f"connected ({whatsapp_mappings} mapped chat(s))"
+                if whatsapp_mappings > 0
+                else "connected"
+            )
+        else:
+            whatsapp_status = "warning"
+            whatsapp_reason = "awaiting bridge status"
+    out.append(
+        {
+            "id": "whatsapp",
+            "name": "WhatsApp",
+            "status": whatsapp_status,
+            "reason": whatsapp_reason,
+            "updated_at": whatsapp_metrics.get("updated_at"),
+            "metrics": {
+                "connected": whatsapp_connected,
+                "chat_mappings": whatsapp_mappings,
+            },
         }
     )
 
@@ -1356,6 +1417,7 @@ def _build_incidents(
 
 def _build_slo_metrics(
     *,
+    active_channel: str,
     services: list[dict[str, Any]],
     log_health: dict[str, Any],
     recent_workers: list[WorkerRecord],
@@ -1364,7 +1426,7 @@ def _build_slo_metrics(
     error_budget_target = 1.0
     error_budget_fraction = error_budget_target / 100.0
 
-    core_services = [s for s in services if str(s.get("id", "")) in {"gateway", "queen", "telegram", "exec_run"}]
+    core_services = [s for s in services if str(s.get("id", "")) in {"gateway", "queen", active_channel, "exec_run"}]
     if not core_services:
         uptime_pct = 100.0
     else:
@@ -1635,6 +1697,8 @@ def _detect_log_service(payload: dict[str, Any], event: str) -> str:
         str(payload.get("logger", "")),
     ]
     haystack = " ".join(candidates + [event]).lower()
+    if "whatsapp" in haystack:
+        return "whatsapp"
     if "telegram" in haystack:
         return "telegram"
     if "queen" in haystack:
@@ -1648,6 +1712,36 @@ def _detect_log_service(payload: dict[str, Any], event: str) -> str:
     if "gateway" in haystack or "websocket" in haystack or "fastapi" in haystack:
         return "gateway"
     return "gateway"
+
+
+def _resolve_active_channel(status_data: dict[str, Any], settings: Settings) -> str:
+    raw = str(status_data.get("active_channel", "")).strip()
+    if raw:
+        return normalize_user_channel(raw)
+    return normalize_user_channel(settings.user_channel)
+
+
+def _select_active_channel_metrics(
+    *,
+    active_channel: str,
+    telegram_metrics: dict[str, Any],
+    whatsapp_metrics: dict[str, Any],
+) -> dict[str, Any]:
+    if active_channel == "whatsapp":
+        return {
+            "queue_depth": 0,
+            "send_tasks": None,
+            "connected": int(whatsapp_metrics.get("connected", 0) or 0),
+            "chat_mappings": int(whatsapp_metrics.get("chat_mappings", 0) or 0),
+            "updated_at": whatsapp_metrics.get("updated_at"),
+        }
+    return {
+        "queue_depth": int(telegram_metrics.get("chat_queues", 0) or 0),
+        "send_tasks": int(telegram_metrics.get("send_tasks", 0) or 0),
+        "connected": None,
+        "chat_mappings": None,
+        "updated_at": telegram_metrics.get("updated_at"),
+    }
 
 
 def _extract_log_environment(payload: dict[str, Any]) -> str:
