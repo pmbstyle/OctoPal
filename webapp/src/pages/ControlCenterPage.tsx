@@ -196,7 +196,7 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
       <div className="relative mt-3">
         <svg
           viewBox={`0 0 ${width} ${height}`}
-          className="h-64 w-full rounded-lg bg-slate-950/80 xl:h-74"
+          className="h-66 w-full rounded-lg bg-slate-950/80 xl:h-74"
           onMouseMove={(event) => {
             const rect = event.currentTarget.getBoundingClientRect();
             if (rect.width <= 0 || points.length === 0) {
