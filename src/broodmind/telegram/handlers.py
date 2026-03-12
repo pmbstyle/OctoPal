@@ -294,6 +294,12 @@ def register_handlers(
                 reply = await queen.handle_message(text, message.chat.id, images=images)
             except Exception:
                 logger.exception("Failed to handle message")
+                await _enqueue_send(
+                    message.bot,
+                    message.chat.id,
+                    "Я получил сообщение, но обработка сломалась на стороне королевы. Попробуй повторить ещё раз; если это было изображение, сейчас как раз чиню fallback для таких сообщений.",
+                    reply_to_message_id=message.message_id,
+                )
                 return
 
             if isinstance(reply, QueenReply):

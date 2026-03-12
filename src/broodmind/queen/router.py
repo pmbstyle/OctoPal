@@ -68,6 +68,28 @@ _TEXTUAL_TOOL_PREVIEW_RE = re.compile(
 )
 
 
+def _is_vision_tool_compatibility_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return (
+        "invalid api parameter" in err
+        or "'code': '1210'" in err
+        or '"code": "1210"' in err
+    )
+
+
+def _build_saved_image_fallback_text(user_text: str, saved_paths: list[str]) -> str:
+    intro = user_text.strip() or "Please inspect the attached image."
+    path_lines = "\n".join(f"- {path}" for path in saved_paths)
+    return (
+        f"{intro}\n\n"
+        "[SYSTEM NOTE: The user sent image attachments. Direct multimodal processing was rejected by the active "
+        "provider/model combination, so the images were saved locally for tool-based inspection.\n"
+        f"{path_lines}\n"
+        "Use any available filesystem, MCP, or image-analysis tools to inspect those files before answering. "
+        "If no such tools are available, explain that clearly and ask the user for a brief description.]"
+    )
+
+
 async def route_or_reply(
     queen: Any,
     provider: InferenceProvider,
@@ -164,6 +186,7 @@ async def route_or_reply(
             had_tool_calls = False
             transient_tool_failures = 0
             max_attempts = 10
+            vision_tool_fallback_used = False
             
             for _ in range(max_attempts):
                 try:
@@ -171,10 +194,9 @@ async def route_or_reply(
                 except Exception as e:
                     # If we have images, this might be a multi-modal conflict (e.g. z.ai GLM-4 doesn't support tools + vision).
                     # Fallback strategy: Save images to disk and retry with a text-only prompt pointing to the files.
-                    if images:
+                    if images and not vision_tool_fallback_used and _is_vision_tool_compatibility_error(e):
                         logger.warning("Vision+Tools failed; attempting save-to-disk fallback", error=str(e))
                         try:
-                            # 1. Save images to disk
                             saved_paths = []
                             workspace_dir = Path(os.getenv("BROODMIND_WORKSPACE_DIR", "workspace")).resolve()
                             img_dir = workspace_dir / "tmp" / "telegram_images"
@@ -197,27 +219,43 @@ async def route_or_reply(
                                     f.write(base64.b64decode(b64_str))
                                 saved_paths.append(str(file_path))
                             
-                            # 2. Construct new text-only message
-                            fallback_text = (
-                                f"{user_text}\n\n"
-                                "[SYSTEM NOTE: User sent {len(images)} image(s). Direct vision processing failed (provider rejected multimodal payload). "
-                                "The images have been saved locally at:\n" + 
-                                "\n".join([f"- {p}" for p in saved_paths]) + 
-                                "\nIf you have file analysis tools, you can use them on these paths. Otherwise, ask the user for a description.]"
-                            )
-                            
-                            # 3. Replace the last message (which had the image payload) with text-only version
-                            # effectively 'popping' the failed multimodal message and replacing it
+                            fallback_text = _build_saved_image_fallback_text(user_text, saved_paths)
+
                             logger.info("Retrying with text-only fallback and saved images", count=len(saved_paths))
                             messages[-1] = {"role": "user", "content": fallback_text}
-                            
-                            # 4. Disable images flag so we don't loop forever if this retry fails too
-                            images = None 
-                            continue 
+                            images = None
+                            vision_tool_fallback_used = True
+                            continue
                             
                         except Exception as fallback_exc:
                             logger.error("Fallback save-and-retry failed", error=str(fallback_exc))
                             return "I see you sent an image, but I am unable to process it. My current model configuration might not support vision, and I could not save it for tool analysis."
+                    if vision_tool_fallback_used:
+                        logger.warning(
+                            "Tool-enabled retry after image save failed; falling back to plain text completion",
+                            error=_exception_chain_text(e)[:500],
+                        )
+                        messages.append(
+                            Message(
+                                role="system",
+                                content=(
+                                    "Tool calling failed even after converting the image request into a text-only "
+                                    "instruction with local file paths. Reply without tools. Be transparent that the "
+                                    "image files were saved locally but could not be inspected automatically."
+                                ),
+                            )
+                        )
+                        fallback_text = await _complete_text(
+                            provider,
+                            messages,
+                            context="saved_image_tool_retry_failed",
+                        )
+                        return await _finalize_response(
+                            provider=provider,
+                            messages=messages,
+                            response_text=fallback_text,
+                            internal_followup=internal_followup,
+                        )
                     if _is_context_overflow_error(e) and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW:
                         prior_count = len(active_tool_specs)
                         active_tool_specs = _shrink_tool_specs_for_retry(active_tool_specs)

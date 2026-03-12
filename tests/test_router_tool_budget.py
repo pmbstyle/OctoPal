@@ -133,6 +133,86 @@ def test_route_falls_back_when_tool_run_ends_with_empty_response(monkeypatch) ->
     asyncio.run(scenario())
 
 
+def test_route_retries_image_message_with_saved_file_paths(monkeypatch, tmp_path) -> None:
+    class DummyProvider:
+        def __init__(self) -> None:
+            self.tool_calls = 0
+            self.last_retry_messages = None
+
+        async def complete(self, messages, **kwargs):
+            return "I could not use tools, but I preserved the image locally and explained the limitation."
+
+        async def complete_stream(self, messages, *, on_partial, **kwargs):
+            raise AssertionError("streaming should not be used in this test")
+
+        async def complete_with_tools(self, messages, *, tools, tool_choice="auto", **kwargs):
+            self.tool_calls += 1
+            if self.tool_calls == 1:
+                raise RuntimeError("OpenAIException - Invalid API parameter. {'error': {'code': '1210'}}")
+            self.last_retry_messages = messages
+            return {"content": "I inspected the saved image path via tools.", "tool_calls": []}
+
+    class DummyMemory:
+        async def add_message(self, role, content, metadata=None):
+            return None
+
+    class DummyQueen:
+        store = object()
+        canon = object()
+        internal_progress_send = None
+        is_ws_active = False
+
+        async def set_typing(self, chat_id: int, active: bool) -> None:
+            return None
+
+        async def set_thinking(self, active: bool) -> None:
+            return None
+
+        def peek_context_wakeup(self, chat_id: int) -> str:
+            return ""
+
+    async def fake_build_queen_prompt(**kwargs):
+        return [
+            Message(
+                role="user",
+                content=[
+                    {"type": "text", "text": str(kwargs["user_text"])},
+                    {"type": "image_url", "image_url": {"url": kwargs["images"][0]}},
+                ],
+            )
+        ]
+
+    async def fake_build_plan(provider, messages, has_tools):
+        return None
+
+    import broodmind.queen.router as router
+
+    monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
+    monkeypatch.setattr(router, "_build_plan", fake_build_plan)
+    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(tmp_path))
+
+    async def scenario() -> None:
+        provider = DummyProvider()
+        response = await router.route_or_reply(
+            DummyQueen(),
+            provider,
+            DummyMemory(),
+            "what is in this image?",
+            123,
+            "",
+            images=["data:image/jpeg;base64,SGVsbG8="],
+        )
+        assert response == "I inspected the saved image path via tools."
+        assert provider.tool_calls == 2
+        assert provider.last_retry_messages is not None
+        last_message = provider.last_retry_messages[-1]
+        assert last_message["role"] == "user"
+        assert "saved locally for tool-based inspection" in last_message["content"]
+        assert str(tmp_path) in last_message["content"]
+
+    asyncio.run(scenario())
+
+
 def test_plain_completion_does_not_stream_for_telegram(monkeypatch) -> None:
     class DummyProvider:
         async def complete(self, messages, **kwargs):
