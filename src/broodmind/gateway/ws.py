@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, status
 import structlog
 
-from broodmind.queen.core import Queen, QueenReply
+from broodmind.runtime.queen.core import Queen, QueenReply
 from broodmind.utils import get_tailscale_ips, should_suppress_user_delivery
 
 logger = structlog.get_logger(__name__)

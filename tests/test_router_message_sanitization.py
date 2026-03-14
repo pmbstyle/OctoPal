@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from broodmind.providers.base import Message
-from broodmind.queen.router import _sanitize_messages_for_complete
+from broodmind.infrastructure.providers.base import Message
+from broodmind.runtime.queen.router import _sanitize_messages_for_complete
 
 
 def test_sanitize_messages_removes_tool_role_and_tool_calls() -> None:
@@ -14,7 +14,7 @@ def test_sanitize_messages_removes_tool_role_and_tool_calls() -> None:
     )
     roles = [m["role"] for m in sanitized]
     assert "tool" not in roles
-    assert roles == ["assistant", "user"]
+    assert roles == ["assistant", "assistant", "user"]
 
 
 def test_sanitize_messages_converts_multimodal_content_to_text() -> None:

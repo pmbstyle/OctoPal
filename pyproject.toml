@@ -50,7 +50,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-broodmind = ["*.md", "prompts/*.md"]
+broodmind = ["*.md", "runtime/queen/prompts/*.md"]
 
 [tool.black]
 line-length = 100

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from broodmind.config.settings import Settings
-from broodmind.providers.profile_resolver import resolve_litellm_profile
+from broodmind.infrastructure.config.settings import Settings
+from broodmind.infrastructure.providers.profile_resolver import resolve_litellm_profile
 
 
 def _base_settings(**overrides) -> Settings:

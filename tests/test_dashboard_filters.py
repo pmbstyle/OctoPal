@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from broodmind.config.settings import Settings
+from broodmind.infrastructure.config.settings import Settings
 from broodmind.gateway.dashboard import (
     DashboardFilters,
     _build_filters,

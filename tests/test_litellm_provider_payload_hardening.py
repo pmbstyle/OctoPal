@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from broodmind.config.settings import Settings
-from broodmind.providers.litellm_provider import LiteLLMProvider, _serialize_message
+from broodmind.infrastructure.config.settings import Settings
+from broodmind.infrastructure.providers.litellm_provider import LiteLLMProvider, _serialize_message
 
 
 def _settings() -> Settings:
@@ -44,7 +44,7 @@ def test_complete_normalizes_system_only_payload_to_include_user(monkeypatch) ->
         captured.append(kwargs["messages"])
         return _response("ok")
 
-    monkeypatch.setattr("broodmind.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
     provider = LiteLLMProvider(_settings())
 
     result = asyncio.run(provider.complete([{"role": "system", "content": "You are verifier"}]))
@@ -66,7 +66,7 @@ def test_complete_retries_with_strict_payload_on_1214(monkeypatch) -> None:
             raise RuntimeError("Error code: 400 - {'error': {'code': '1214', 'message': 'The messages parameter is illegal.'}}")
         return _response("ok-after-retry")
 
-    monkeypatch.setattr("broodmind.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
     provider = LiteLLMProvider(_settings())
 
     result = asyncio.run(provider.complete([{"role": "system", "content": "Verifier prompt"}]))

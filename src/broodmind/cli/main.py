@@ -22,23 +22,23 @@ from rich.table import Table
 
 from broodmind.channels import normalize_user_channel, user_channel_label
 from broodmind.cli.branding import print_banner
-from broodmind.config.settings import Settings, load_settings
+from broodmind.infrastructure.config.settings import Settings, load_settings
 from broodmind.gateway.app import build_app
-from broodmind.logging_config import configure_logging
-from broodmind.providers.profile_resolver import resolve_litellm_profile
-from broodmind.runtime_metrics import read_metrics_snapshot
-from broodmind.state import (
+from broodmind.infrastructure.logging import configure_logging
+from broodmind.infrastructure.providers.profile_resolver import resolve_litellm_profile
+from broodmind.runtime.metrics import read_metrics_snapshot
+from broodmind.runtime.state import (
     is_pid_running,
     list_broodmind_runtime_pids,
     pid_command_line,
     read_status,
     write_start_status,
 )
-from broodmind.store.sqlite import SQLiteStore
-from broodmind.whatsapp.bridge import WhatsAppBridgeController, WhatsAppBridgeError
-from broodmind.whatsapp.ids import parse_allowed_whatsapp_numbers
-from broodmind.whatsapp.runtime import WhatsAppRuntime
-from broodmind.workers.templates import sync_default_templates
+from broodmind.infrastructure.store.sqlite import SQLiteStore
+from broodmind.channels.whatsapp.bridge import WhatsAppBridgeController, WhatsAppBridgeError
+from broodmind.channels.whatsapp.ids import parse_allowed_whatsapp_numbers
+from broodmind.channels.whatsapp.runtime import WhatsAppRuntime
+from broodmind.runtime.workers.templates import sync_default_templates
 from aiogram import Bot
 
 app = typer.Typer(add_completion=False)
@@ -299,7 +299,7 @@ def start(
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground mode (showing logs)"),
 ) -> None:
     """Start the BroodMind Queen."""
-    from broodmind.telegram.bot import run_bot, build_dispatcher
+    from broodmind.channels.telegram.bot import run_bot, build_dispatcher
 
     try:
         settings = load_settings()
@@ -1169,7 +1169,7 @@ def dashboard(
 def sync_worker_templates(
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite existing workspace worker templates"),
 ) -> None:
-    """Copy default worker templates into workspace/workers."""
+    """Copy default worker templates into the configured workspace workers directory."""
     settings = load_settings()
     result = sync_default_templates(settings.workspace_dir, overwrite=overwrite)
     console.print(

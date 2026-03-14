@@ -5,10 +5,10 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from broodmind.queen.core import Queen
-from broodmind.scheduler.service import SchedulerService
+from broodmind.runtime.queen.core import Queen
+from broodmind.runtime.scheduler.service import SchedulerService
 from broodmind.tools.tools import _tool_check_schedule, _tool_schedule_task
-from broodmind.workers.contracts import WorkerResult
+from broodmind.runtime.workers.contracts import WorkerResult
 
 
 class _StoreStub:

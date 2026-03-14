@@ -6,17 +6,17 @@ from broodmind.utils import (
     looks_like_textual_tool_invocation,
     should_suppress_user_delivery,
 )
-from broodmind.queen.core import (
+from broodmind.runtime.queen.core import (
     _build_worker_result_timeout_followup,
     _extract_followup_required_marker,
     Queen,
 )
-from broodmind.queen.router import (
+from broodmind.runtime.queen.router import (
     build_forced_worker_followup,
     should_force_worker_followup,
     should_send_worker_followup,
 )
-from broodmind.workers.contracts import WorkerResult
+from broodmind.runtime.workers.contracts import WorkerResult
 from broodmind.utils import utc_now
 
 def test_is_heartbeat_ok():
@@ -137,7 +137,7 @@ def test_worker_result_timeout_followup_stays_user_visible():
     assert should_send_worker_followup(text) is True
 
 def test_queen_does_not_have_web_fetch():
-    from broodmind.queen.router import _get_queen_tools
+    from broodmind.runtime.queen.router import _get_queen_tools
     class DummyQueen:
         store = None
     

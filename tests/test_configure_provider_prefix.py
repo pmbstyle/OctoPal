@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from broodmind.cli.configure import _apply_staged_changes, _stage_provider_model_prefix
-from broodmind.config.manager import ConfigManager
+from broodmind.infrastructure.config.manager import ConfigManager
 
 
 def test_stage_provider_model_prefix_removes_stale_prefix_for_ollama(tmp_path) -> None:

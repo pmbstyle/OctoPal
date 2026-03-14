@@ -5,8 +5,8 @@ import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from broodmind.store.models import WorkerTemplateRecord
-from broodmind.tools.worker_tools import _tool_start_child_worker
+from broodmind.infrastructure.store.models import WorkerTemplateRecord
+from broodmind.tools.workers.management import _tool_start_child_worker
 
 
 def _template(

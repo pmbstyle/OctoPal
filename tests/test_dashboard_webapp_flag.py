@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from broodmind.config.settings import Settings
+from broodmind.infrastructure.config.settings import Settings
 from broodmind.gateway.app import build_app
 
 

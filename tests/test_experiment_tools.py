@@ -4,7 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from broodmind.tools.experiments_tools import queen_experiment_log
+from broodmind.tools.memory.experiments import queen_experiment_log
 from broodmind.tools.tools import get_tools
 
 

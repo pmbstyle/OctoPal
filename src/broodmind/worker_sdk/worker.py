@@ -6,10 +6,10 @@ import sys
 from dataclasses import dataclass, field
 from typing import Any
 
-from broodmind.intents.registry import canonical_json, normalize_payload
-from broodmind.intents.types import IntentRequest
-from broodmind.policy.permits import Permit
-from broodmind.workers.contracts import KnowledgeProposal, WorkerResult, WorkerSpec
+from broodmind.runtime.intents.registry import canonical_json, normalize_payload
+from broodmind.runtime.intents.types import IntentRequest
+from broodmind.runtime.policy.permits import Permit
+from broodmind.runtime.workers.contracts import KnowledgeProposal, WorkerResult, WorkerSpec
 
 
 @dataclass

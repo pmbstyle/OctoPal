@@ -4,8 +4,11 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
-from broodmind.store.models import WorkerRecord, WorkerTemplateRecord
-from broodmind.tools.worker_tools import _tool_start_workers_parallel, _tool_synthesize_worker_results
+from broodmind.infrastructure.store.models import WorkerRecord, WorkerTemplateRecord
+from broodmind.tools.workers.management import (
+    _tool_start_workers_parallel,
+    _tool_synthesize_worker_results,
+)
 
 
 def _template(worker_id: str, description: str, tools: list[str], perms: list[str]) -> WorkerTemplateRecord:

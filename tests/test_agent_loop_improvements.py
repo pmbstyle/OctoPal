@@ -6,7 +6,7 @@ from pathlib import Path
 
 from broodmind.tools.registry import ToolSpec
 from broodmind.worker_sdk.worker import Worker
-from broodmind.workers.agent_worker import (
+from broodmind.runtime.workers.agent_worker import (
     _auto_tune_max_steps,
     _classify_tool_error,
     _detect_tool_loop,
@@ -18,8 +18,8 @@ from broodmind.workers.agent_worker import (
     _resolve_tool_loop_thresholds,
     _tool_no_progress_streak,
 )
-from broodmind.workers.contracts import WorkerSpec
-from broodmind.workers.runtime import _call_mcp_with_name_fallback, _extract_mcp_tool_identity
+from broodmind.runtime.workers.contracts import WorkerSpec
+from broodmind.runtime.workers.runtime import _call_mcp_with_name_fallback, _extract_mcp_tool_identity
 
 
 def _dummy_worker() -> Worker:

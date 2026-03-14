@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import asyncio
 
-from broodmind.queen.router import (
+from broodmind.runtime.queen.router import (
     _finalize_response,
     _budget_tool_specs,
     _recover_textual_tool_call,
     _sanitize_messages_for_complete,
     _shrink_tool_specs_for_retry,
 )
-from broodmind.providers.base import Message
+from broodmind.infrastructure.providers.base import Message
 from broodmind.tools.tools import get_tools
 from broodmind.tools.registry import ToolSpec
 
@@ -110,7 +110,7 @@ def test_route_falls_back_when_tool_run_ends_with_empty_response(monkeypatch) ->
             {"queen": queen, "chat_id": chat_id},
         )
 
-    import broodmind.queen.router as router
+    import broodmind.runtime.queen.router as router
 
     monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
@@ -185,7 +185,7 @@ def test_route_retries_image_message_with_saved_file_paths(monkeypatch, tmp_path
     async def fake_build_plan(provider, messages, has_tools):
         return None
 
-    import broodmind.queen.router as router
+    import broodmind.runtime.queen.router as router
 
     monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
@@ -246,7 +246,7 @@ def test_plain_completion_does_not_stream_for_telegram(monkeypatch) -> None:
     async def fake_build_plan(provider, messages, has_tools):
         return None
 
-    import broodmind.queen.router as router
+    import broodmind.runtime.queen.router as router
 
     monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
@@ -304,7 +304,7 @@ def test_plain_completion_can_stream_for_websocket(monkeypatch) -> None:
     async def fake_build_plan(provider, messages, has_tools):
         return None
 
-    import broodmind.queen.router as router
+    import broodmind.runtime.queen.router as router
 
     monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)

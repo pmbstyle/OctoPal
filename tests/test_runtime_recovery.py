@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from broodmind.workers.contracts import WorkerResult, WorkerSpec
-from broodmind.workers.runtime import WorkerRuntime, _classify_recoverable_error
+from broodmind.runtime.workers.contracts import WorkerResult, WorkerSpec
+from broodmind.runtime.workers.runtime import WorkerRuntime, _classify_recoverable_error
 
 
 class _StoreStub:

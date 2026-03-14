@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from broodmind.gateway.dashboard import _build_noise_control, _build_slo_metrics
-from broodmind.store.models import WorkerRecord
+from broodmind.infrastructure.store.models import WorkerRecord
 
 
 def _worker(worker_id: str, status: str, updated_at: datetime, template_id: str = "coder") -> WorkerRecord:
@@ -31,6 +31,7 @@ def test_build_slo_metrics_produces_expected_keys() -> None:
         _worker("c1", "completed", now + timedelta(minutes=10)),
     ]
     slo = _build_slo_metrics(
+        active_channel="telegram",
         services=services,
         log_health={"error_rate_5m": 0.015},
         recent_workers=workers,

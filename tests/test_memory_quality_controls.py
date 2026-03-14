@@ -4,8 +4,8 @@ import asyncio
 import uuid
 from datetime import timedelta
 
-from broodmind.memory.service import MemoryService
-from broodmind.store.models import MemoryEntry
+from broodmind.runtime.memory.service import MemoryService
+from broodmind.infrastructure.store.models import MemoryEntry
 from broodmind.utils import utc_now
 
 

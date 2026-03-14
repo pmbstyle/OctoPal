@@ -1,4 +1,4 @@
-from broodmind.logging_config import _prepare_console_stream
+from broodmind.infrastructure.logging import _prepare_console_stream
 
 
 class _FakeStream:

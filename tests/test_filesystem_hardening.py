@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from broodmind.tools.download_file import download_file
-from broodmind.tools.filesystem import fs_delete, fs_write
+from broodmind.tools.filesystem.download import download_file
+from broodmind.tools.filesystem.files import fs_delete, fs_write
 
 
 def _ensure_symlink_supported(tmp_path: Path) -> None:

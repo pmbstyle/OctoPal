@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from broodmind.intents.types import IntentRequest
+from broodmind.runtime.intents.types import IntentRequest
 
 
 def http_get(url: str, headers: dict[str, str] | None = None) -> IntentRequest:

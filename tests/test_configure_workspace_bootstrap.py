@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from broodmind.cli.configure import _ensure_workspace_bootstrap
-from broodmind.queen.prompt_builder import build_bootstrap_context_prompt
+from broodmind.runtime.queen.prompt_builder import build_bootstrap_context_prompt
 
 
 def test_workspace_bootstrap_creates_required_markdown(tmp_path: Path) -> None:
