@@ -451,8 +451,6 @@ def _dashboard_v2_projection(snapshot: dict[str, Any], *, topic: str) -> dict[st
     incidents = dict(snapshot.get("incidents", {}))
     summary = incidents.get("summary", {}) if isinstance(incidents, dict) else {}
 
-    template_cache: dict[str, WorkerTemplateRecord | None] = {}
-
     return {
         "contract_version": "dashboard.v2.overview",
         "generated_at": generated_at,
@@ -925,6 +923,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         recent_workers=recent_workers,
     )
     noise_control = _build_noise_control(logs=incident_logs)
+    template_cache: dict[str, WorkerTemplateRecord | None] = {}
 
     return {
         "contract_version": "dashboard.v1",
