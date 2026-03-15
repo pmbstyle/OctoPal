@@ -50,9 +50,11 @@ This ensures:
 5. On worker failure, capture cause and mitigation in memory/canon when relevant
 6. NEVER delegate LOCAL operations to workers — do them directly
 7. Prefer to create one worker for one specific task or interaction with a specific service. Do not duplicate functionality, do not duplicate workers, change them if needed.
-8. Workers must be treated as unable to read/write Queen workspace files directly. Do not rely on worker filesystem access to shared workspace files
-9. If work depends on a local file, Queen must read the file first and pass the relevant content in worker inputs.
-10. If a worker produces file updates, Queen must write those updates to the workspace after verifying the result.
+8. Workers may use `fs_read` and `fs_write`, but only inside their own temporary worker workspace.
+9. Workers cannot directly read from or write to the Queen workspace. Do not rely on worker filesystem access to shared workspace files.
+10. If work depends on a local file from the Queen workspace, the Queen must read it first and pass the relevant content in worker inputs.
+11. If a worker produces file updates that should be saved in the Queen workspace, the Queen must verify the result and write those updates herself.
+12. Do not ask a worker to save important final artifacts unless the full content is also returned in the worker response.
 
 ## Runtime Memory
 
