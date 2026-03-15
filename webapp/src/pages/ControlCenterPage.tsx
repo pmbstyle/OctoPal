@@ -478,8 +478,10 @@ export function ControlCenterPage() {
         </div>
       </section>
 
-      <div className="grid gap-5 xl:grid-cols-[380px_minmax(0,1fr)]">
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60 xl:flex xl:h-full xl:flex-col">
+      <RealtimeGraph points={history} />
+
+      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60">
+        <section className="xl:flex xl:h-full xl:flex-col">
           <div className="flex items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Queen</h3>
@@ -555,9 +557,7 @@ export function ControlCenterPage() {
             </div>
           </div>
         </section>
-
-        <RealtimeGraph points={history} />
-      </div>
+      </section>
 
       <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
