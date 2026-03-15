@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import os
 import uuid
 from pathlib import Path
 from typing import Any
@@ -169,7 +168,7 @@ class WhatsAppRuntime:
             logger.warning("Failed to decode inbound WhatsApp image payload")
             return [], []
 
-        workspace_root = Path(os.getenv("BROODMIND_WORKSPACE_DIR", str(self.settings.workspace_dir))).resolve()
+        workspace_root = Path(self.settings.workspace_dir).resolve()
         image_dir = workspace_root / "tmp" / "whatsapp_images"
         image_dir.mkdir(parents=True, exist_ok=True)
 
