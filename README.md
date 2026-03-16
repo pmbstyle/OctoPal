@@ -6,7 +6,7 @@
   <strong>RUN YOUR OWN AI HIVE, FAST AND SECURE!</strong>
 </p>
 
-BroodMind is a local autonomous AI hive that runs autonomous workers to complete tasks for you.
+BroodMind is a local AI hive that runs autonomous workers to complete tasks for you.
 It acts as a persistent AI operator that can plan work, spawn specialized agents, and manage long-running workflows.
 
 The **Queen** is the long-running coordinator: it holds memory, plans work, chooses tools, manages context, and delegates execution.
