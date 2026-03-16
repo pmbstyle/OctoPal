@@ -6,66 +6,56 @@
   <strong>RUN YOUR OWN AI HIVE, FAST AND SECURE!</strong>
 </p>
 
-BroodMind is a local AI orchestration system built around a **Queen + Workers** architecture.
-It runs on your device or server and acts as a long-running AI operator that plans tasks, spawns workers, and executes workflows on your behalf.
+BroodMind is a local autonomous AI hive that runs autonomous workers to complete tasks for you.
+It acts as a persistent AI operator that can plan work, spawn specialized agents, and manage long-running workflows.
 
 The **Queen** is the long-running coordinator: it holds memory, plans work, chooses tools, manages context, and delegates execution.
 **Workers** are short-lived specialists with limited permissions, bounded context, and task-specific tool access.
 
 BroodMind is designed for persistent assistant workflows, not just single prompts. It combines conversation channels, reusable workers, scheduling, memory, canon, policy controls, and an ops dashboard into one local system you can run on your own machine or server.
 
-This separation improves safety and reliability: sensitive context stays with the Queen, while workers receive only the minimum context needed to complete a task.
+This separation improves safety and reliability: sensitive context stays with the Queen, while workers receive only the minimal context needed to complete a task.
 
-## Core Architecture
-
-```mermaid
-flowchart TD
-    A["User"] --> B["Telegram / WhatsApp"]
-    B --> C["Gateway / Channel Runtime"]
-    C --> D["Queen"]
-
-    D --> E["Load memory + canon + identity files"]
-    E --> D
-
-    D --> F{"Direct reply or execution?"}
-    F -->|"Direct reply"| G["Compose response"]
-    F -->|"Execution"| H["Plan steps"]
-
-    H --> I["Use tools directly"]
-    H --> J["Spawn worker"]
-
-    J --> K["Worker with limited context, permissions, and tools"]
-    K --> L["Return result / question / error"]
-    L --> D
-
-    I --> D
-    G --> M["Channel send pipeline"]
-    D --> M
-    M --> N["User receives response"]
-```
-
-It is designed for long-running assistant workflows, with memory, scheduling, and operational guardrails.
-The Queen, which holds all system context and sensitive data, never communicates with the outside world on its own. Instead, the Queen delegates tasks to workers with limited context and predefined tool/skill sets. Workers can spawn subworkers for multi-step tasks. Workers can only return response of their tasks or question/error responses. 
-This design improves data security, reduces context leakage, and protects the system from prompt injection attacks.
-
-## What It Can Do
+## 🪛 What It Can Do
 
 - Run as a persistent AI operator over Telegram or WhatsApp
 - Plan work and delegate tasks to specialized workers
-- Execute filesystem, web, browser, shell, and MCP tools  under policy controls
+- Execute filesystem, web, browser, shell, and MCP tools under policy controls
 - Create and reuse worker templates, MCP server connections, and skills([SKILL.md](https://agentskills.io/home))
 - Maintain persistent memory, canon, and user/system identity files
 - Monitor context health and trigger structured context resets when needed
 - Schedule recurring tasks and background routines
 - Expose a private gateway and dashboard for status, workers, and system visibility
-- A set of canonical memory files shapes the system environment:
-  - **MEMORY.md** – working memory and durable context; important facts, current state, and notes the system may need across sessions
-  - **memory/canon/** – curated long-term knowledge that has been reviewed and promoted into trusted reference material
-  - **USER.md** – user profile, preferences, habits, and interaction style
-  - **SOUL.md** – system identity, values, tone, and core behavioral principles
-  - **HEARTBEAT.md** – recurring duties, monitoring loops, schedules, and background obligations
+- A set of canonical memory files shapes the system environment
 
-## Quick Start
+
+```
+User
+   │
+Channels (Telegram / WhatsApp / WS)
+   │
+ Queen
+   │
+ Worker Pool
+   │
+ Tools / MCP / Skills
+   │
+ External Systems
+```
+
+**Example workflow:**
+
+User:
+"Research the latest Gemini model and write a summary."
+
+Queen:
+1. Spawns Web Researcher
+2. Researcher fetches sources
+3. Writer worker generates summary
+4. Queen stores canon entry
+5. Result returned to user
+
+## 🚀 Quick Start
 
 ### 1. Prerequisites
 
@@ -189,19 +179,6 @@ uv run broodmind stop
 uv run broodmind restart
 uv run broodmind status
 uv run broodmind logs --follow
-
-# gateway/dashboard
-uv run broodmind gateway
-uv run broodmind dashboard
-uv run broodmind dashboard --watch
-
-# worker templates
-uv run broodmind sync-worker-templates
-uv run broodmind sync-worker-templates --overwrite
-
-# memory maintenance
-uv run broodmind memory stats
-uv run broodmind memory cleanup --dry-run
 ```
 
 ## Optional: Docker Worker Launcher
@@ -220,6 +197,72 @@ BROODMIND_WORKER_DOCKER_IMAGE=broodmind-worker:latest
 ```
 
 Restart BroodMind after config changes.
+
+
+## ✨ Key Features
+
+### 💻 Local and Cloud deployment
+
+BroodMind can work from any environment that supports Python execution.
+Fast and simple bootstrap onboarding helps you to start using BroodMind right away.
+
+- deploy on your local PC (Linux, Windows, MacOS)
+- deploy on a VPS
+- deploy in Docker
+
+BroodMind works from a specified directory and has no access to your system components.
+
+### 🧠 Delegation-driven architecture
+
+The Queen, which holds all system context and sensitive data, never communicates with the outside world on its own.
+Instead, the Queen delegates tasks to workers with limited context and predefined tool/skill sets.
+Workers can spawn subworkers for multi-step tasks. Workers can only return response of their tasks or question/error responses. 
+
+- the Queen delegates external operations to workers, which ensures context isolation, enhances security, and provides async task execution
+- workers execute in an isolated environment, which gets deleted after each execution
+- workers can act as orchestrators and create sub-workers for multi-tasking
+- workers operate with a predefined set of tools, MCP, and skills in their config as well as `max_thinking_steps` and `execution_timeout`
+- the Queen can create new workers for a specific task (ex. use a skill to work with an external resource)
+- Prebuilt worker templates include:
+  - Web Researcher
+  - Web Fetcher
+  - Data Analyst
+  - Code Worker
+  - Writer
+  - DevOps / Release Manager
+  - Security Auditor
+  - Test Runner
+  - System Self-Controller
+
+### 📃 Multilayer memory system
+
+The Queen operates with a local vector database to store communication history and file-based context:
+
+- **MEMORY.md** – working memory and durable context; important facts, current state, and notes the system may need across sessions
+- **memory/canon/** – curated long-term knowledge that has been reviewed and promoted into trusted reference material
+- **USER.md** – user profile, preferences, habits, and interaction style
+- **SOUL.md** – system identity, values, tone, and core behavioral principles
+- **HEARTBEAT.md** – recurring duties, monitoring loops, schedules, and background obligations
+
+### 🤖 Multi-channel user communication
+
+BroodMind supports:
+- Telegram (Botfather)
+- WhatsApp (Dedicated or personal numbers)
+- WS API gateway (Build or bring your own client)
+
+Communication channels, by default, provide full support of functions like:
+- text communication
+- image attachments
+- message reactions
+- 5s grace window for user messages.
+
+  You can send a followback message before the Queen executes it - this helps to prevent typos, wrong commands, etc.
+
+### ⚙️ Web dashboard
+
+Dashboard provides a complete view of what's happening within a system in real-time.
+Built-in Tailscale tunneling and token-based authentication prevent unauthorised access.
 
 ## Troubleshooting
 
