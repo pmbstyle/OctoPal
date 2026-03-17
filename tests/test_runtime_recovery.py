@@ -4,7 +4,11 @@ import asyncio
 from pathlib import Path
 
 from broodmind.runtime.workers.contracts import WorkerResult, WorkerSpec
-from broodmind.runtime.workers.runtime import WorkerRuntime, _classify_recoverable_error
+from broodmind.runtime.workers.runtime import (
+    WorkerRuntime,
+    _classify_recoverable_error,
+    _classify_worker_text_log_level,
+)
 
 
 class _StoreStub:
@@ -238,3 +242,47 @@ def test_worker_failed_result_marks_store_failed(tmp_path: Path) -> None:
     assert store.status_updates == ["failed"]
     assert store.result_summaries == ["Worker failed: MCP schema mismatch"]
     assert store.result_errors == ["schema mismatch"]
+
+
+def test_stderr_loop_batches_traceback_into_single_log(tmp_path: Path) -> None:
+    runtime = WorkerRuntime(
+        store=_StoreStub(),
+        policy=_PolicyStub(),
+        workspace_dir=tmp_path,
+        launcher=_LauncherStub(),
+        mcp_manager=None,
+    )
+    captured: list[tuple[str, str | None, str]] = []
+
+    def _fake_emit(source: str, worker_id: str | None, text: str) -> None:
+        captured.append((source, worker_id, text))
+
+    runtime._emit_worker_text_log = _fake_emit  # type: ignore[method-assign]
+    stderr = _FakeReader(
+        [
+            b"Traceback (most recent call last):\n",
+            b'  File "worker.py", line 1, in <module>\n',
+            b"RuntimeError: boom\n",
+        ]
+    )
+
+    asyncio.run(runtime._read_stderr_loop("w1", stderr))
+
+    assert captured == [
+        (
+            "stderr",
+            "w1",
+            'Traceback (most recent call last):\nFile "worker.py", line 1, in <module>\nRuntimeError: boom',
+        )
+    ]
+
+
+def test_worker_text_log_level_downgrades_retry_noise() -> None:
+    assert _classify_worker_text_log_level(
+        "LiteLLM rate limited (attempt 2/6). Retrying in 2.20s",
+        source="stderr",
+    ) == "info"
+    assert _classify_worker_text_log_level(
+        "Traceback (most recent call last):\nRuntimeError: boom",
+        source="stderr",
+    ) == "error"

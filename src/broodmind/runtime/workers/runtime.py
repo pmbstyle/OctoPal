@@ -35,6 +35,9 @@ logger = structlog.get_logger(__name__)
 WORKER_MODULE = "broodmind.runtime.workers.agent_worker"
 _MAX_RECOVERY_ATTEMPTS = 1
 _RECOVERY_BACKOFF_SECONDS = 0.2
+_STDERR_BATCH_IDLE_SECONDS = 0.05
+_STDERR_BATCH_MAX_LINES = 40
+_STDERR_BATCH_MAX_CHARS = 12000
 
 
 @dataclass
@@ -774,35 +777,59 @@ class WorkerRuntime:
 
     def _log_non_json_output(self, text: str) -> None:
         """Log non-JSON output from worker intelligently."""
-        import re
-        # Strip ANSI escape sequences (color codes)
-        ansi_escape = re.compile(r'\x1b\[[0-9;]*[mK]')
-        clean_text = ansi_escape.sub('', text)
+        self._emit_worker_text_log("stdout", None, text)
 
-        # Keywords that suggest an actual error
-        error_keywords = {"error", "exception", "failed", "traceback", "critical"}
-        lower_text = clean_text.lower()
-
-        if any(kw in lower_text for kw in error_keywords):
-            logger.error("Worker output (error?): %s", clean_text)
-        elif "info" in lower_text:
-            logger.info("Worker output: %s", clean_text)
-        elif "debug" in lower_text:
-            logger.debug("Worker output: %s", clean_text)
+    def _emit_worker_text_log(self, source: str, worker_id: str | None, text: str) -> None:
+        clean_text = _sanitize_worker_text(text)
+        if not clean_text:
+            return
+        level = _classify_worker_text_log_level(clean_text, source=source)
+        if source == "stderr":
+            message = f"Worker stderr: id={worker_id} {clean_text}" if worker_id else f"Worker stderr: {clean_text}"
+        elif level == "error":
+            message = f"Worker output (error?): {clean_text}"
+        elif level == "debug":
+            message = f"Worker output (non-JSON): {clean_text}"
         else:
-            # Default to debug for unknown non-JSON output to avoid log noise
-            logger.debug("Worker output (non-JSON): %s", clean_text)
+            message = f"Worker output: {clean_text}"
+        getattr(logger, level)(message)
 
     async def _read_stderr_loop(self, worker_id: str, stderr: asyncio.StreamReader) -> None:
         """Read worker stderr logs without affecting stdout JSON protocol parsing."""
+        buffer: list[str] = []
+        buffered_chars = 0
+
+        def _flush() -> None:
+            nonlocal buffer, buffered_chars
+            if not buffer:
+                return
+            self._emit_worker_text_log("stderr", worker_id, "\n".join(buffer))
+            buffer = []
+            buffered_chars = 0
+
         while True:
-            line = await stderr.readline()
+            if buffer:
+                try:
+                    line = await asyncio.wait_for(
+                        stderr.readline(),
+                        timeout=_STDERR_BATCH_IDLE_SECONDS,
+                    )
+                except TimeoutError:
+                    _flush()
+                    continue
+            else:
+                line = await stderr.readline()
             if not line:
+                _flush()
                 break
             text = line.decode("utf-8", errors="replace").strip()
             if not text:
+                _flush()
                 continue
-            logger.warning("Worker stderr: id=%s %s", worker_id, text)
+            buffer.append(text)
+            buffered_chars += len(text)
+            if len(buffer) >= _STDERR_BATCH_MAX_LINES or buffered_chars >= _STDERR_BATCH_MAX_CHARS:
+                _flush()
 
 
 
@@ -869,6 +896,33 @@ def _worker_result_error_text(result: WorkerResult) -> str:
             return error.strip()
     summary = str(result.summary or "").strip()
     return summary or "Worker reported failure"
+
+
+def _sanitize_worker_text(text: str) -> str:
+    import re
+
+    ansi_escape = re.compile(r"\x1b\[[0-9;]*[mK]")
+    clean_text = ansi_escape.sub("", str(text or ""))
+    return clean_text.strip()
+
+
+def _classify_worker_text_log_level(text: str, *, source: str) -> str:
+    lowered = (text or "").lower()
+    if source == "stderr" and any(token in lowered for token in ("rate limited", "retrying in", "backing off")):
+        return "info"
+    if any(token in lowered for token in ("traceback", "exception", "critical")):
+        return "error"
+    if "error" in lowered and "rate limit" not in lowered:
+        return "error"
+    if "failed" in lowered and "retrying" not in lowered:
+        return "error"
+    if "warning" in lowered:
+        return "warning"
+    if "info" in lowered:
+        return "info"
+    if "debug" in lowered:
+        return "debug"
+    return "debug" if source == "stdout" else "info"
 
 
 def _truncate_text(text: str, max_chars: int) -> str:
