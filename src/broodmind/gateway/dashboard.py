@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import os
-import asyncio
+import shutil
 from uuid import uuid4
 from collections import deque
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ from typing import Any
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from broodmind.channels import normalize_user_channel, user_channel_label
 from broodmind.infrastructure.config.settings import Settings
@@ -74,6 +75,22 @@ class DashboardSystemV2(DashboardV2Envelope):
 
 class DashboardActionsV2(DashboardV2Envelope):
     actions: dict[str, Any]
+
+
+class WorkerTemplatePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    description: str
+    system_prompt: str
+    available_tools: list[str] = Field(default_factory=list)
+    required_permissions: list[str] = Field(default_factory=list)
+    model: str | None = None
+    max_thinking_steps: int = 10
+    default_timeout_seconds: int = 300
+    can_spawn_children: bool = False
+    allowed_child_templates: list[str] = Field(default_factory=list)
 
 
 def register_dashboard_routes(app: FastAPI) -> None:
@@ -152,6 +169,47 @@ def register_dashboard_routes(app: FastAPI) -> None:
             "tailscale_ips_configured": bool(settings.tailscale_ips.strip()),
             "dashboard_token_configured": bool(settings.dashboard_token.strip()),
         }
+
+    @app.get("/api/dashboard/worker-templates")
+    async def dashboard_worker_templates(request: Request) -> dict[str, Any]:
+        settings = _get_settings(app)
+        _verify_dashboard_token(request, settings)
+        store = _get_store(app, settings)
+        templates = [
+            _serialize_worker_template(template)
+            for template in sorted(store.list_worker_templates(), key=lambda item: (item.name.lower(), item.id.lower()))
+        ]
+        return {"count": len(templates), "templates": templates}
+
+    @app.post("/api/dashboard/worker-templates")
+    async def dashboard_create_worker_template(
+        request: Request,
+        payload: WorkerTemplatePayload,
+    ) -> dict[str, Any]:
+        settings = _get_settings(app)
+        _verify_dashboard_token(request, settings)
+        store = _get_store(app, settings)
+        return _create_worker_template(settings, store, payload)
+
+    @app.put("/api/dashboard/worker-templates/{template_id}")
+    async def dashboard_update_worker_template(
+        template_id: str,
+        request: Request,
+        payload: WorkerTemplatePayload,
+    ) -> dict[str, Any]:
+        settings = _get_settings(app)
+        _verify_dashboard_token(request, settings)
+        store = _get_store(app, settings)
+        return _update_worker_template(settings, store, template_id, payload)
+
+    @app.delete("/api/dashboard/worker-templates/{template_id}")
+    async def dashboard_delete_worker_template(
+        template_id: str,
+        request: Request,
+    ) -> dict[str, Any]:
+        settings = _get_settings(app)
+        _verify_dashboard_token(request, settings)
+        return _delete_worker_template(settings, template_id)
 
     @app.post("/api/dashboard/actions")
     async def dashboard_actions(
@@ -503,6 +561,145 @@ def _get_store(app: FastAPI, settings: Settings) -> SQLiteStore:
     store = SQLiteStore(settings)
     app.state.dashboard_store = store
     return store
+
+
+def _serialize_worker_template(template: WorkerTemplateRecord) -> dict[str, Any]:
+    return {
+        "id": template.id,
+        "name": template.name,
+        "description": template.description,
+        "system_prompt": template.system_prompt,
+        "available_tools": list(template.available_tools),
+        "required_permissions": list(template.required_permissions),
+        "model": template.model,
+        "max_thinking_steps": int(template.max_thinking_steps),
+        "default_timeout_seconds": int(template.default_timeout_seconds),
+        "can_spawn_children": bool(template.can_spawn_children),
+        "allowed_child_templates": list(template.allowed_child_templates),
+        "created_at": template.created_at.isoformat(),
+        "updated_at": template.updated_at.isoformat(),
+    }
+
+
+def _create_worker_template(
+    settings: Settings,
+    store: SQLiteStore,
+    payload: WorkerTemplatePayload,
+) -> dict[str, Any]:
+    data = _normalize_worker_template_payload(payload, expected_id=None)
+    worker_id = str(data["id"])
+    if store.get_worker_template(worker_id) is not None:
+        raise HTTPException(status_code=409, detail=f"Worker template '{worker_id}' already exists")
+
+    worker_file = _resolve_worker_template_file(settings.workspace_dir, worker_id)
+    worker_file.parent.mkdir(parents=True, exist_ok=True)
+    worker_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    created = store.get_worker_template(worker_id)
+    if created is None:
+        raise HTTPException(status_code=500, detail="Worker template was written but could not be reloaded")
+    return {"status": "created", "template": _serialize_worker_template(created)}
+
+
+def _update_worker_template(
+    settings: Settings,
+    store: SQLiteStore,
+    template_id: str,
+    payload: WorkerTemplatePayload,
+) -> dict[str, Any]:
+    existing = store.get_worker_template(template_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail=f"Worker template '{template_id}' not found")
+
+    data = _normalize_worker_template_payload(payload, expected_id=template_id)
+    worker_file = _resolve_worker_template_file(settings.workspace_dir, template_id)
+    if not worker_file.exists():
+        raise HTTPException(status_code=404, detail=f"Worker template file for '{template_id}' not found")
+    worker_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    updated = store.get_worker_template(template_id)
+    if updated is None:
+        raise HTTPException(status_code=500, detail="Worker template was updated but could not be reloaded")
+    return {"status": "updated", "template": _serialize_worker_template(updated)}
+
+
+def _delete_worker_template(settings: Settings, template_id: str) -> dict[str, Any]:
+    _validate_worker_template_id(template_id)
+    worker_dir = _resolve_worker_template_file(settings.workspace_dir, template_id).parent
+    if not worker_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Worker template '{template_id}' not found")
+    shutil.rmtree(worker_dir)
+    return {"status": "deleted", "template_id": template_id}
+
+
+def _normalize_worker_template_payload(
+    payload: WorkerTemplatePayload,
+    *,
+    expected_id: str | None,
+) -> dict[str, Any]:
+    worker_id = payload.id.strip()
+    _validate_worker_template_id(worker_id)
+    if expected_id is not None and worker_id != expected_id:
+        raise HTTPException(status_code=400, detail="Template id in path and payload must match")
+
+    name = payload.name.strip()
+    description = payload.description.strip()
+    system_prompt = payload.system_prompt.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Worker template name is required")
+    if not description:
+        raise HTTPException(status_code=400, detail="Worker template description is required")
+    if not system_prompt:
+        raise HTTPException(status_code=400, detail="Worker template system_prompt is required")
+
+    max_steps = int(payload.max_thinking_steps)
+    timeout_seconds = int(payload.default_timeout_seconds)
+    if max_steps <= 0:
+        raise HTTPException(status_code=400, detail="max_thinking_steps must be greater than 0")
+    if timeout_seconds <= 0:
+        raise HTTPException(status_code=400, detail="default_timeout_seconds must be greater than 0")
+
+    return {
+        "id": worker_id,
+        "name": name,
+        "description": description,
+        "system_prompt": system_prompt,
+        "available_tools": _normalize_string_list(payload.available_tools),
+        "required_permissions": _normalize_string_list(payload.required_permissions),
+        "model": (payload.model or "").strip() or None,
+        "max_thinking_steps": max_steps,
+        "default_timeout_seconds": timeout_seconds,
+        "can_spawn_children": bool(payload.can_spawn_children),
+        "allowed_child_templates": _normalize_string_list(payload.allowed_child_templates),
+    }
+
+
+def _normalize_string_list(items: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item or "").strip()
+        if not text or text in seen:
+            continue
+        out.append(text)
+        seen.add(text)
+    return out
+
+
+def _validate_worker_template_id(template_id: str) -> None:
+    text = template_id.strip()
+    if not text or not all(ch.islower() or ch.isdigit() or ch in {"_", "-"} for ch in text):
+        raise HTTPException(status_code=400, detail="Worker template id must use lowercase letters, numbers, '_' or '-'")
+    if not text[0].isalnum():
+        raise HTTPException(status_code=400, detail="Worker template id must start with a letter or digit")
+
+
+def _resolve_worker_template_file(workspace_dir: Path, template_id: str) -> Path:
+    workers_root = (workspace_dir / "workers").resolve()
+    candidate = (workers_root / template_id / "worker.json").resolve()
+    try:
+        candidate.relative_to(workers_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid worker template path") from exc
+    return candidate
 
 
 def _resolve_webapp_dist_dir(settings: Settings) -> Path | None:

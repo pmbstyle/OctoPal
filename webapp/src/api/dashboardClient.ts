@@ -13,6 +13,22 @@ type SystemResponse =
 type ActionsResponse =
   paths["/api/dashboard/v2/actions"]["get"]["responses"]["200"]["content"]["application/json"];
 
+export type WorkerTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  system_prompt: string;
+  available_tools: string[];
+  required_permissions: string[];
+  model?: string | null;
+  max_thinking_steps: number;
+  default_timeout_seconds: number;
+  can_spawn_children: boolean;
+  allowed_child_templates: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
 type ActionRequest = {
   action: "restart_worker" | "retry_failed" | "clear_control_queue";
   worker_id?: string;
@@ -48,6 +64,22 @@ async function fetchJson<T>(url: string, token?: string): Promise<T> {
   return (await response.json()) as T;
 }
 
+async function mutateJson<T>(url: string, method: "POST" | "PUT" | "DELETE", token?: string, body?: unknown): Promise<T> {
+  const headers: HeadersInit = token
+    ? { ...defaultHeaders, "x-broodmind-token": token }
+    : defaultHeaders;
+  const response = await fetch(url, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || `Request failed: ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
 export async function fetchOverview(params: DashboardQueryParams): Promise<OverviewResponse> {
   return fetchJson<OverviewResponse>(withQuery("/api/dashboard/v2/overview", params), params.token);
 }
@@ -73,17 +105,38 @@ export async function fetchActions(params: DashboardQueryParams): Promise<Action
 }
 
 export async function runDashboardAction(payload: ActionRequest, token?: string): Promise<Record<string, unknown>> {
-  const headers: HeadersInit = token
-    ? { ...defaultHeaders, "x-broodmind-token": token }
-    : defaultHeaders;
+  return mutateJson<Record<string, unknown>>("/api/dashboard/actions", "POST", token, payload);
+}
 
-  const response = await fetch("/api/dashboard/actions", {
-    method: "POST",
-    headers,
-    body: JSON.stringify(payload),
-  });
-  if (!response.ok) {
-    throw new Error(`Action failed: ${response.status}`);
-  }
-  return (await response.json()) as Record<string, unknown>;
+export async function fetchWorkerTemplates(token?: string): Promise<WorkerTemplate[]> {
+  const payload = await fetchJson<{ count: number; templates: WorkerTemplate[] }>("/api/dashboard/worker-templates", token);
+  return payload.templates ?? [];
+}
+
+export async function createWorkerTemplate(payload: WorkerTemplate, token?: string): Promise<WorkerTemplate> {
+  const response = await mutateJson<{ status: string; template: WorkerTemplate }>(
+    "/api/dashboard/worker-templates",
+    "POST",
+    token,
+    payload,
+  );
+  return response.template;
+}
+
+export async function updateWorkerTemplate(payload: WorkerTemplate, token?: string): Promise<WorkerTemplate> {
+  const response = await mutateJson<{ status: string; template: WorkerTemplate }>(
+    `/api/dashboard/worker-templates/${encodeURIComponent(payload.id)}`,
+    "PUT",
+    token,
+    payload,
+  );
+  return response.template;
+}
+
+export async function deleteWorkerTemplate(templateId: string, token?: string): Promise<void> {
+  await mutateJson<{ status: string }>(
+    `/api/dashboard/worker-templates/${encodeURIComponent(templateId)}`,
+    "DELETE",
+    token,
+  );
 }
