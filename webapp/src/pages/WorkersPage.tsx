@@ -245,8 +245,8 @@ export function WorkersPage() {
         </section>
       ) : null}
 
-      <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60">
+      <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
+        <aside className="flex min-h-0 flex-col rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60 xl:sticky xl:top-5 xl:max-h-[calc(100vh-10rem)]">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Worker list</h3>
             <button
@@ -257,7 +257,7 @@ export function WorkersPage() {
               New
             </button>
           </div>
-          <div className="mt-4 space-y-2">
+          <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
             {templates.length === 0 ? (
               <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-sm text-slate-400">
                 No saved workers yet. Create the first template here.
