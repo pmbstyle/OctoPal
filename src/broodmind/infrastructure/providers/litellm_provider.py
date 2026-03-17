@@ -28,6 +28,7 @@ class LiteLLMProvider:
     """
 
     _semaphores_by_limit: dict[int, asyncio.Semaphore] = {}
+    _rate_limit_cooldowns: dict[tuple[str, str, str], float] = {}
 
     def __init__(self, settings: Settings, model: str | None = None) -> None:
         self._settings = settings
@@ -79,6 +80,36 @@ class LiteLLMProvider:
     @property
     def provider_id(self) -> str:
         return self._profile.provider_id
+
+    def _shared_rate_limit_key(self) -> tuple[str, str, str]:
+        return (
+            self._profile.provider_id,
+            self._model,
+            self._api_base or "",
+        )
+
+    def _now(self) -> float:
+        return asyncio.get_running_loop().time()
+
+    async def _wait_for_shared_rate_limit_cooldown(self) -> None:
+        cooldown_until = self._rate_limit_cooldowns.get(self._shared_rate_limit_key(), 0.0)
+        remaining = cooldown_until - self._now()
+        if remaining <= 0:
+            return
+        logger.info(
+            "LiteLLM shared rate-limit cooldown active; delaying request for %.2fs",
+            remaining,
+        )
+        await asyncio.sleep(remaining)
+
+    def _record_shared_rate_limit_cooldown(self, delay: float) -> None:
+        if delay <= 0:
+            return
+        key = self._shared_rate_limit_key()
+        until = self._now() + delay
+        existing = self._rate_limit_cooldowns.get(key, 0.0)
+        if until > existing:
+            self._rate_limit_cooldowns[key] = until
 
     async def complete(self, messages: list[Message | dict], **kwargs: object) -> str:
         """Complete a chat request without tools."""
@@ -146,7 +177,6 @@ class LiteLLMProvider:
                     "This usually means the model was cut off or is having internal issues. "
                     "Please try your request again."
                 ) from exc
-            
             logger.exception("LiteLLM completion failed")
             raise RuntimeError(f"LiteLLM completion failed: {exc}") from exc
 
@@ -292,7 +322,6 @@ class LiteLLMProvider:
                     "This usually means the model was cut off or is having internal issues. "
                     "Please try your request again or check the provider status."
                 ) from exc
-            
             logger.exception("LiteLLM completion with tools failed")
             raise RuntimeError(f"LiteLLM completion with tools failed: {exc}") from exc
 
@@ -300,6 +329,7 @@ class LiteLLMProvider:
         attempt = 0
         while True:
             try:
+                await self._wait_for_shared_rate_limit_cooldown()
                 return await self._acompletion_guarded(**kwargs)
             except Exception as exc:
                 if not _is_rate_limit_error(exc) or attempt >= self._rate_limit_max_retries:
@@ -316,6 +346,7 @@ class LiteLLMProvider:
                     self._rate_limit_max_retries,
                     delay,
                 )
+                self._record_shared_rate_limit_cooldown(delay)
                 await asyncio.sleep(delay)
                 attempt += 1
 
@@ -348,10 +379,7 @@ class LiteLLMProvider:
 
 def _serialize_message(message: Message | dict) -> dict:
     """Serialize a message to dict format."""
-    if isinstance(message, dict):
-        serialized = dict(message)
-    else:
-        serialized = message.to_dict()
+    serialized = dict(message) if isinstance(message, dict) else message.to_dict()
 
     # Some OpenAI-compatible providers reject assistant tool-call messages when
     # content is null instead of an empty string.
@@ -579,12 +607,12 @@ def _extract_usage(response: Any) -> dict[str, int]:
             return {
                 k: int(v)
                 for k, v in usage_obj.items()
-                if isinstance(k, str) and isinstance(v, (int, float))
+                if isinstance(k, str) and isinstance(v, int | float)
             }
         result: dict[str, int] = {}
         for field in ("prompt_tokens", "completion_tokens", "total_tokens"):
             value = getattr(usage_obj, field, None)
-            if isinstance(value, (int, float)):
+            if isinstance(value, int | float):
                 result[field] = int(value)
         return result
     except Exception:

@@ -13,6 +13,10 @@ def _settings() -> Settings:
         llm_provider="litellm",
         litellm_num_retries=0,
         litellm_timeout=30.0,
+        litellm_max_concurrency=2,
+        litellm_rate_limit_max_retries=2,
+        litellm_rate_limit_base_delay_seconds=1.0,
+        litellm_rate_limit_max_delay_seconds=30.0,
         litellm_fallbacks=None,
         litellm_drop_params=True,
         litellm_caching=False,
@@ -113,3 +117,63 @@ def test_complete_retries_once_when_client_was_closed(monkeypatch) -> None:
 
     assert result == "ok-after-client-retry"
     assert calls["n"] == 2
+
+
+def test_complete_records_shared_cooldown_after_rate_limit(monkeypatch) -> None:
+    calls = {"n": 0}
+    sleeps: list[float] = []
+    clock = {"now": 100.0}
+
+    async def _fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock["now"] += delay
+
+    async def _fake_acompletion(**kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("Error code: 429 - {'error': {'message': 'Rate limit reached for requests'}}")
+        return _response("ok-after-rate-limit")
+
+    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr(
+        "broodmind.infrastructure.providers.litellm_provider._compute_rate_limit_delay",
+        lambda **kwargs: 1.0,
+    )
+    monkeypatch.setattr(LiteLLMProvider, "_now", lambda self: clock["now"])
+    LiteLLMProvider._rate_limit_cooldowns.clear()
+    provider = LiteLLMProvider(_settings())
+
+    result = asyncio.run(provider.complete([{"role": "user", "content": "hello"}]))
+
+    assert result == "ok-after-rate-limit"
+    assert calls["n"] == 2
+    assert sleeps == [1.0]
+    key = provider._shared_rate_limit_key()
+    assert LiteLLMProvider._rate_limit_cooldowns[key] == 101.0
+
+
+def test_complete_respects_shared_cooldown_from_other_instance(monkeypatch) -> None:
+    sleeps: list[float] = []
+    clock = {"now": 50.0}
+
+    async def _fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+        clock["now"] += delay
+
+    async def _fake_acompletion(**kwargs):
+        return _response("ok")
+
+    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr(LiteLLMProvider, "_now", lambda self: clock["now"])
+    LiteLLMProvider._rate_limit_cooldowns.clear()
+
+    provider_a = LiteLLMProvider(_settings())
+    provider_b = LiteLLMProvider(_settings())
+    provider_a._record_shared_rate_limit_cooldown(3.5)
+
+    result = asyncio.run(provider_b.complete([{"role": "user", "content": "hello"}]))
+
+    assert result == "ok"
+    assert sleeps == [3.5]
