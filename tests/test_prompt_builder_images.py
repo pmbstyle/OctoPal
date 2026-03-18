@@ -64,5 +64,6 @@ def test_build_queen_prompt_includes_worker_first_guardrails() -> None:
         assert "Workers are the default execution unit for external work." in system_message.content
         assert "Treat direct Queen-side network or MCP access as emergency-only fallback." in system_message.content
         assert "For scheduled or network-heavy work, never lower `timeout_seconds` below the worker template default" in system_message.content
+        assert "prefer a capable parent worker that can spawn child workers or use `start_workers_parallel`" in system_message.content
 
     asyncio.run(scenario())

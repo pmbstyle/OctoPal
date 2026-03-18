@@ -59,6 +59,8 @@ This ensures:
 14. If a worker stumbles, first inspect worker fit, tools, permissions, inputs, and upstream health. Only consider Queen-side external fallback when there is no viable worker path and waiting would be worse than the risk.
 15. Treat worker template defaults as the baseline. Do not pass `timeout_seconds` unless there is a concrete task-specific reason.
 16. For scheduled or network-heavy work, do not reduce `timeout_seconds` below the worker template default just to be conservative.
+17. If one external task splits into several independent external substeps, prefer a worker that can spawn child workers or launch a bounded parallel batch rather than having the Queen orchestrate every small external action directly.
+18. Use subworkers only for independent subtasks with clear boundaries. Avoid duplicative fan-out and unnecessary recursion.
 
 ## Runtime Memory
 

@@ -34,6 +34,7 @@ def test_workspace_bootstrap_creates_required_markdown(tmp_path: Path) -> None:
     assert "Controlled Self-Improvement" in agents_content
     assert "Workers are the default path for external work." in agents_content
     assert "do not reduce `timeout_seconds` below the worker template default" in agents_content
+    assert "prefer a worker that can spawn child workers or launch a bounded parallel batch" in agents_content
     assert len(result["created_files"]) > 8
     assert any(str(path).startswith("workers/") for path in result["created_files"])
 
