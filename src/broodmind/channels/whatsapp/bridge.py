@@ -27,7 +27,17 @@ class WhatsAppBridgeController:
 
     @property
     def project_root(self) -> Path:
-        return Path(__file__).resolve().parents[3]
+        current = Path(__file__).resolve()
+        fallback: Path | None = None
+        for candidate in current.parents:
+            if fallback is None and (candidate / "pyproject.toml").is_file():
+                fallback = candidate
+            bridge_package = candidate / "scripts" / "whatsapp_bridge" / "package.json"
+            if bridge_package.is_file():
+                return candidate
+        if fallback is not None:
+            return fallback
+        return current.parents[-1]
 
     @property
     def bridge_dir(self) -> Path:
@@ -47,6 +57,7 @@ class WhatsAppBridgeController:
         return (self.bridge_dir / "node_modules" / "@whiskeysockets" / "baileys" / "package.json").is_file()
 
     def install_bridge(self) -> None:
+        self._require_bridge_sources()
         npm = self._find_command(("npm.cmd", "npm"))
         if npm is None:
             raise WhatsAppBridgeError("npm is required to install the WhatsApp bridge dependencies.")
@@ -57,6 +68,7 @@ class WhatsAppBridgeController:
     def start(self, *, callback_url: str | None = None) -> None:
         if self._process and self._process.poll() is None:
             return
+        self._require_bridge_sources()
         if not self.bridge_installed():
             raise WhatsAppBridgeError(
                 "WhatsApp bridge dependencies are not installed. Run `broodmind whatsapp install-bridge` first."
@@ -147,6 +159,15 @@ class WhatsAppBridgeController:
         if not isinstance(payload, dict):
             raise WhatsAppBridgeError(f"Unexpected WhatsApp bridge response for {path}.")
         return payload
+
+    def _require_bridge_sources(self) -> None:
+        package_json = self.bridge_dir / "package.json"
+        if package_json.is_file():
+            return
+        raise WhatsAppBridgeError(
+            f"WhatsApp bridge sources not found at {self.bridge_dir}. "
+            "Expected scripts/whatsapp_bridge/package.json under the project root."
+        )
 
     @staticmethod
     def _find_command(candidates: tuple[str, ...]) -> str | None:
