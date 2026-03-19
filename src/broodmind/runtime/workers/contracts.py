@@ -49,6 +49,9 @@ class TaskRequest(BaseModel):
     spawn_depth: int = 0
 
 
+from broodmind.infrastructure.config.models import LLMConfig
+
+
 class WorkerSpec(BaseModel):
     """Simplified worker specification for runtime."""
     model_config = ConfigDict(frozen=True)
@@ -62,6 +65,7 @@ class WorkerSpec(BaseModel):
     available_tools: list[str]
     mcp_tools: list[dict[str, Any]] = Field(default_factory=list)
     model: str | None = None
+    llm_config: LLMConfig | None = None
     granted_capabilities: list[dict[str, Any]]  # From policy engine
     timeout_seconds: int
     max_thinking_steps: int

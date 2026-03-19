@@ -38,6 +38,7 @@ def build_queen(settings: Settings) -> Queen:
         policy=policy,
         workspace_dir=settings.workspace_dir,
         launcher=launcher,
+        settings=settings,
         mcp_manager=mcp_manager,
     )
     approvals = ApprovalManager(bot=None)

@@ -21,23 +21,10 @@ from typing import Any
 import structlog
 
 from broodmind.infrastructure.mcp.manager import MCPManager
+from broodmind.infrastructure.config.settings import Settings
+from broodmind.infrastructure.config.models import LLMConfig
 from broodmind.infrastructure.store.base import Store
-from broodmind.infrastructure.store.models import AuditEvent, WorkerRecord
-from broodmind.runtime.intents.types import ActionIntent
-from broodmind.runtime.policy.engine import PolicyEngine
-from broodmind.runtime.tool_errors import ToolBridgeError
-from broodmind.runtime.workers.contracts import TaskRequest, WorkerResult, WorkerSpec
-from broodmind.runtime.workers.launcher import WorkerLauncher
-from broodmind.utils import utc_now
-
-logger = structlog.get_logger(__name__)
-
-WORKER_MODULE = "broodmind.runtime.workers.agent_worker"
-_MAX_RECOVERY_ATTEMPTS = 1
-_RECOVERY_BACKOFF_SECONDS = 0.2
-_STDERR_BATCH_IDLE_SECONDS = 0.05
-_STDERR_BATCH_MAX_LINES = 40
-_STDERR_BATCH_MAX_CHARS = 12000
+from broodmind.infrastructure.store.models import AuditEvent, WorkerRecord, WorkerTemplate
 
 
 @dataclass
@@ -46,6 +33,7 @@ class WorkerRuntime:
     policy: PolicyEngine
     workspace_dir: Path
     launcher: WorkerLauncher
+    settings: Settings
     mcp_manager: MCPManager | None = None
     queen: Any | None = None
     _running: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
@@ -119,13 +107,8 @@ class WorkerRuntime:
         # Global MCP tools are intentionally NOT auto-injected.
         # Workers only receive MCP tools explicitly listed in task_request/tools or template available_tools.
 
-        requested_model = task_request.model or template.model
-        if requested_model:
-            logger.info(
-                "Worker model override ignored; routing to Queen/provider default model",
-                worker_id=task_request.worker_id,
-                requested_model=requested_model,
-            )
+        # Resolve worker LLM configuration
+        llm_config = self._resolve_worker_llm_config(template, task_request)
 
         # Create worker spec
         worker_id = task_request.run_id or str(uuid.uuid4())
@@ -138,7 +121,8 @@ class WorkerRuntime:
             system_prompt=template.system_prompt,
             available_tools=requested_tool_names,
             mcp_tools=mcp_tools_data,
-            model=None,
+            model=task_request.model or template.model,
+            llm_config=llm_config,
             granted_capabilities=[c.model_dump() for c in granted],
             timeout_seconds=task_request.timeout_seconds or template.default_timeout_seconds,
             max_thinking_steps=template.max_thinking_steps,
@@ -151,6 +135,45 @@ class WorkerRuntime:
             spawn_depth=task_request.spawn_depth,
             effective_permissions=list(template.required_permissions),
         )
+
+        # Run worker
+        return await self.run(spec, approval_requester=approval_requester)
+
+    def _resolve_worker_llm_config(
+        self, template: WorkerTemplate, task_request: TaskRequest
+    ) -> LLMConfig | None:
+        """Resolve LLM configuration for a worker task."""
+        config_obj = self.settings.config_obj
+        if not config_obj:
+            return None
+
+        # 1. Start with worker-specific override from config.json
+        # Check by template name or ID
+        worker_config = config_obj.worker_llm_overrides.get(
+            template.id
+        ) or config_obj.worker_llm_overrides.get(template.name)
+
+        # 2. If no specific override, use default worker LLM config
+        if not worker_config:
+            # Only use worker_llm_default if it has at least provider_id or model set
+            # otherwise it might be just an empty default object.
+            if config_obj.worker_llm_default.provider_id or config_obj.worker_llm_default.model:
+                worker_config = config_obj.worker_llm_default
+
+        # 3. If still none, fallback to Queen's LLM config
+        if not worker_config:
+            worker_config = config_obj.llm
+
+        # Create a copy to avoid modifying the original config
+        resolved = worker_config.model_copy()
+
+        # 4. Apply TaskRequest/Template model override if provided
+        # This is strictly a model name override, keeping other provider settings.
+        model_override = task_request.model or template.model
+        if model_override:
+            resolved.model = model_override
+
+        return resolved
 
         # Run worker
         return await self.run(spec, approval_requester=approval_requester)

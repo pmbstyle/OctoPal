@@ -265,7 +265,7 @@ async def execute_agent_task(worker: Worker, base_dir: Path) -> WorkerResult:
 
     # Initialize LLM provider from settings
     settings = load_settings()
-    provider = LiteLLMProvider(settings, model=spec.model)
+    provider = LiteLLMProvider(settings, model=spec.model, config=spec.llm_config)
 
     # Build system prompt with tool descriptions
     available_tools = get_tools()
