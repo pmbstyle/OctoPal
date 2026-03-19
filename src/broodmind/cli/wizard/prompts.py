@@ -184,11 +184,18 @@ def _inquirer_multiselect(params: WizardMultiSelectParams[T]) -> list[T]:
         for option in params.options
         if option.enabled
     ]
-    prompt = inquirer.fuzzy if params.searchable else inquirer.checkbox
-    result = prompt(
+    if params.searchable:
+        result = inquirer.checkbox(
+            message=f"{params.message}:",
+            choices=choices,
+            instruction="Space to toggle, arrows to move, enter to confirm, type to filter.",
+        ).execute()
+        return list(result)
+
+    result = inquirer.checkbox(
         message=f"{params.message}:",
         choices=choices,
-        multiselect=True,
+        instruction="Space to toggle, arrows to move, enter to confirm.",
     ).execute()
     return list(result)
 
