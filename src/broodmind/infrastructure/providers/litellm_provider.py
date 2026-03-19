@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import inspect
 import json
 import logging
@@ -13,6 +14,7 @@ from typing import Any
 
 from litellm import acompletion
 
+from broodmind.infrastructure.config.models import LLMConfig
 from broodmind.infrastructure.config.settings import Settings
 from broodmind.infrastructure.providers.base import Message
 from broodmind.infrastructure.providers.profile_resolver import resolve_litellm_profile
@@ -270,11 +272,12 @@ class LiteLLMProvider:
             )
 
         serialized_messages = [_serialize_message(m) for m in messages]
+        normalized_tools = _sanitize_tools_for_provider(tools, self._profile.provider_id)
         payload_str = json.dumps(
-            {"messages": serialized_messages, "tools": tools, "tool_choice": tool_choice},
+            {"messages": serialized_messages, "tools": normalized_tools, "tool_choice": tool_choice},
             ensure_ascii=False,
         )
-        tool_names = [t.get("function", {}).get("name") for t in tools]
+        tool_names = [t.get("function", {}).get("name") for t in normalized_tools]
 
         logger.debug(
             "LiteLLM request (tools): model=%s, messages=%d, tools=%s, total_chars=%d",
@@ -294,9 +297,13 @@ class LiteLLMProvider:
                 timeout=self._settings.litellm_timeout,
                 fallbacks=self._fallbacks,
             )
+            request_kwargs = _sanitize_request_kwargs_for_provider(
+                request_kwargs,
+                provider_id=self._profile.provider_id,
+            )
             response, response_format_mode = await self._complete_with_tools_adaptive_response_format(
                 messages=serialized_messages,
-                tools=tools,
+                tools=normalized_tools,
                 tool_choice=tool_choice,
                 request_kwargs=request_kwargs,
             )
@@ -698,6 +705,170 @@ def _build_request_kwargs(kwargs: dict[str, object], **defaults: object) -> dict
         if key in kwargs and kwargs[key] is not None:
             request_kwargs[key] = kwargs[key]
     return request_kwargs
+
+
+def _sanitize_request_kwargs_for_provider(
+    request_kwargs: dict[str, object],
+    *,
+    provider_id: str,
+) -> dict[str, object]:
+    if provider_id != "minimax":
+        return request_kwargs
+
+    sanitized = dict(request_kwargs)
+    response_format = sanitized.get("response_format")
+    if isinstance(response_format, dict):
+        sanitized["response_format"] = _sanitize_response_format_for_minimax(response_format)
+    return sanitized
+
+
+def _sanitize_tools_for_provider(
+    tools: list[dict[str, Any]],
+    provider_id: str,
+) -> list[dict[str, Any]]:
+    if provider_id != "minimax":
+        return tools
+
+    sanitized_tools: list[dict[str, Any]] = []
+    for tool in tools:
+        next_tool = copy.deepcopy(tool)
+        function = next_tool.get("function")
+        if isinstance(function, dict) and isinstance(function.get("parameters"), dict):
+            function["parameters"] = _sanitize_schema_for_minimax(function["parameters"])
+        sanitized_tools.append(next_tool)
+    return sanitized_tools
+
+
+def _sanitize_response_format_for_minimax(response_format: dict[str, Any]) -> dict[str, Any]:
+    sanitized = copy.deepcopy(response_format)
+    json_schema = sanitized.get("json_schema")
+    if not isinstance(json_schema, dict):
+        return sanitized
+
+    schema = json_schema.get("schema")
+    if isinstance(schema, dict):
+        json_schema["schema"] = _sanitize_schema_for_minimax(schema)
+    return sanitized
+
+
+def _sanitize_schema_for_minimax(schema: Any) -> Any:
+    if isinstance(schema, list):
+        return [_sanitize_schema_for_minimax(item) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+
+    sanitized = {key: _sanitize_schema_for_minimax(value) for key, value in schema.items()}
+
+    for union_key in ("anyOf", "oneOf"):
+        variants = sanitized.get(union_key)
+        if isinstance(variants, list):
+            flattened = _flatten_schema_union_for_minimax(variants)
+            if flattened is not None:
+                for meta_key in ("title", "description", "default"):
+                    if meta_key in sanitized and meta_key not in flattened:
+                        flattened[meta_key] = sanitized[meta_key]
+                sanitized = flattened
+                break
+
+    type_value = sanitized.get("type")
+    if isinstance(type_value, list):
+        sanitized["type"] = _select_minimax_type(type_value)
+
+    return sanitized
+
+
+def _flatten_schema_union_for_minimax(variants: list[Any]) -> dict[str, Any] | None:
+    cleaned_variants = [variant for variant in variants if not _is_null_schema_variant(variant)]
+    if len(cleaned_variants) == 1 and isinstance(cleaned_variants[0], dict):
+        return copy.deepcopy(cleaned_variants[0])
+
+    enum_values = _extract_enum_values_from_variants(cleaned_variants)
+    if enum_values is not None:
+        flattened: dict[str, Any] = {"enum": enum_values}
+        common_type = _detect_common_enum_type(enum_values)
+        if common_type:
+            flattened["type"] = common_type
+        return flattened
+
+    object_variants = [variant for variant in cleaned_variants if isinstance(variant, dict)]
+    if object_variants and len(object_variants) == len(cleaned_variants):
+        merged_properties: dict[str, Any] = {}
+        required_counts: dict[str, int] = {}
+        for variant in object_variants:
+            properties = variant.get("properties")
+            if isinstance(properties, dict):
+                for key, value in properties.items():
+                    if key not in merged_properties:
+                        merged_properties[key] = value
+            required = variant.get("required")
+            if isinstance(required, list):
+                for key in required:
+                    if isinstance(key, str):
+                        required_counts[key] = required_counts.get(key, 0) + 1
+
+        flattened = {
+            "type": "object",
+            "properties": merged_properties,
+            "additionalProperties": sanitized_bool_from_variants(object_variants, "additionalProperties", True),
+        }
+        required = [key for key, count in required_counts.items() if count == len(object_variants)]
+        if required:
+            flattened["required"] = required
+        return flattened
+
+    return None
+
+
+def sanitized_bool_from_variants(variants: list[dict[str, Any]], key: str, default: bool) -> bool:
+    for variant in variants:
+        value = variant.get(key)
+        if isinstance(value, bool):
+            return value
+    return default
+
+
+def _is_null_schema_variant(variant: Any) -> bool:
+    if not isinstance(variant, dict):
+        return False
+    if variant.get("type") == "null":
+        return True
+    enum_values = variant.get("enum")
+    return isinstance(enum_values, list) and enum_values == [None]
+
+
+def _extract_enum_values_from_variants(variants: list[Any]) -> list[Any] | None:
+    values: list[Any] = []
+    for variant in variants:
+        if not isinstance(variant, dict):
+            return None
+        if "const" in variant:
+            values.append(variant["const"])
+            continue
+        enum_values = variant.get("enum")
+        if isinstance(enum_values, list) and len(enum_values) == 1:
+            values.append(enum_values[0])
+            continue
+        return None
+    return values
+
+
+def _detect_common_enum_type(values: list[Any]) -> str | None:
+    type_names = {type(value).__name__ for value in values}
+    mapping = {
+        frozenset({"str"}): "string",
+        frozenset({"int"}): "integer",
+        frozenset({"float"}): "number",
+        frozenset({"bool"}): "boolean",
+    }
+    return mapping.get(frozenset(type_names))
+
+
+def _select_minimax_type(type_values: list[Any]) -> str:
+    normalized = [str(value).strip().lower() for value in type_values if str(value).strip()]
+    for preferred in ("object", "array", "string", "integer", "number", "boolean", "null"):
+        if preferred in normalized:
+            return preferred
+    return normalized[0] if normalized else "string"
 
 
 def _response_format_fallback_modes(

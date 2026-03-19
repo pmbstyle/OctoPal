@@ -4,7 +4,11 @@ import asyncio
 from types import SimpleNamespace
 
 from broodmind.infrastructure.config.settings import Settings
-from broodmind.infrastructure.providers.litellm_provider import LiteLLMProvider, _serialize_message
+from broodmind.infrastructure.providers.litellm_provider import (
+    LiteLLMProvider,
+    _sanitize_schema_for_minimax,
+    _serialize_message,
+)
 
 
 def _settings() -> Settings:
@@ -31,6 +35,27 @@ def _settings() -> Settings:
         zai_timeout_seconds=45.0,
         zai_connect_timeout_seconds=15.0,
         zai_accept_language="en-US,en",
+        debug_prompts=False,
+    )
+
+
+def _minimax_settings() -> Settings:
+    return Settings.model_construct(
+        telegram_bot_token="test-token",
+        llm_provider="litellm",
+        litellm_num_retries=0,
+        litellm_timeout=30.0,
+        litellm_max_concurrency=2,
+        litellm_rate_limit_max_retries=2,
+        litellm_rate_limit_base_delay_seconds=1.0,
+        litellm_rate_limit_max_delay_seconds=30.0,
+        litellm_fallbacks=None,
+        litellm_drop_params=True,
+        litellm_caching=False,
+        litellm_provider_id="minimax",
+        litellm_model="MiniMax-M2.7",
+        litellm_api_key="mini-test",
+        litellm_api_base="https://api.minimax.io/v1",
         debug_prompts=False,
     )
 
@@ -289,3 +314,79 @@ def test_complete_with_tools_downgrades_to_no_response_format_when_needed(monkey
         "none",
     ]
     assert LiteLLMProvider._tool_response_format_modes[provider._tool_response_format_key()] == "none"
+
+
+def test_sanitize_schema_for_minimax_collapses_type_array_to_single_type() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "output": {"type": ["object", "array", "string", "number", "boolean", "null"]},
+        },
+    }
+
+    sanitized = _sanitize_schema_for_minimax(schema)
+
+    assert sanitized["properties"]["output"]["type"] == "object"
+
+
+def test_complete_with_tools_sanitizes_minimax_tools_and_response_format(monkeypatch) -> None:
+    captured: list[dict[str, object]] = []
+
+    async def _fake_acompletion(**kwargs):
+        captured.append(dict(kwargs))
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": "{\"type\":\"result\",\"summary\":\"ok\"}",
+                        "tool_calls": [],
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    LiteLLMProvider._tool_response_format_modes.clear()
+    provider = LiteLLMProvider(_minimax_settings())
+
+    asyncio.run(
+        provider.complete_with_tools(
+            [{"role": "user", "content": "hello"}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "dummy",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "payload": {
+                                    "type": ["object", "array", "string", "null"],
+                                }
+                            },
+                        },
+                    },
+                }
+            ],
+            response_format={
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "worker_result",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "output": {
+                                "type": ["object", "array", "string", "number", "boolean", "null"],
+                            }
+                        },
+                    },
+                },
+            },
+        )
+    )
+
+    assert len(captured) == 1
+    tool_schema = captured[0]["tools"][0]["function"]["parameters"]["properties"]["payload"]
+    assert tool_schema["type"] == "object"
+    response_schema = captured[0]["response_format"]["json_schema"]["schema"]["properties"]["output"]
+    assert response_schema["type"] == "object"
