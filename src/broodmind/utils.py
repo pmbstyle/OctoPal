@@ -19,11 +19,6 @@ _TOOL_RESULT_LINE_RE = re.compile(
     r"(?:^|\n)\s*Tool result \([^)]+\):\s*(?:\{.*?\}|\[.*?\]|.+?)(?=\n|$)",
     re.IGNORECASE | re.DOTALL,
 )
-_TECHNICAL_FAILURE_RE = re.compile(
-    r"remote mcp tool response schema is incompatible|mcp_schema_mismatch|schema mismatch|failed to load worker template",
-    re.IGNORECASE,
-)
-
 # Standard Telegram bot reactions (as of Bot API 7.3+)
 _TELEGRAM_SUPPORTED_REACTIONS = {
     "👍", "👎", "❤", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩",
@@ -117,7 +112,7 @@ def escape_html(text: str) -> str:
 
 
 def sanitize_user_facing_text(text: str) -> str:
-    """Remove reasoning/tool traces and collapse raw machine payloads into safe text."""
+    """Remove explicit reasoning/tool traces while preserving normal plain text."""
     if not text:
         return ""
         
@@ -131,23 +126,6 @@ def sanitize_user_facing_text(text: str) -> str:
     cleaned = _TOOL_CALL_BLOCK_RE.sub("", cleaned)
     cleaned = _TOOL_TAG_RE.sub("", cleaned)
     cleaned = _TOOL_RESULT_LINE_RE.sub("", cleaned)
-    
-    # Filter out common system-level phrases that might leak
-    system_patterns = [
-        r"Worker completed: .*",
-        r"Worker error: .*",
-        r"Processing internal worker result.*",
-        r"Queued worker '.*' as .*",
-        r"Worker .* is running\.",
-        r"Worker .* completed\.",
-        r"Worker .* failed: .*",
-        r"Worker started: .*",
-        r"Forcing substantive worker follow-up",
-        r"Internal worker follow-up sent",
-        r"Queued internal worker result",
-    ]
-    for pattern in system_patterns:
-        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
 
     cleaned = cleaned.strip()
     if not cleaned:
@@ -192,15 +170,6 @@ def _normalize_machine_payload_for_user(payload: dict) -> str | None:
         return str(payload.get("summary", "") or "").strip()
 
     return None
-
-
-def is_technical_delivery_noise(text: str) -> bool:
-    value = sanitize_user_facing_text(text or "")
-    if not value:
-        return True
-    if value.startswith("{") and value.endswith("}"):
-        return True
-    return bool(_TECHNICAL_FAILURE_RE.search(value))
 
 
 def is_heartbeat_ok(text: str) -> bool:
@@ -274,7 +243,7 @@ def looks_like_textual_tool_invocation(text: str) -> bool:
 
 
 def should_suppress_user_delivery(text: str) -> bool:
-    """Guard rail for outbound channels: suppress control/system-only payloads."""
+    """Guard rail for outbound channels: suppress only explicit control/system payloads."""
     value = sanitize_user_facing_text(text or "")
     if not value:
         return True
@@ -284,6 +253,4 @@ def should_suppress_user_delivery(text: str) -> bool:
         return True
     if has_no_user_response_suffix(value):
         return True
-    if is_technical_delivery_noise(value):
-        return True
-    return bool(looks_like_textual_tool_invocation(value))
+    return False

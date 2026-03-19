@@ -256,7 +256,6 @@ def test_start_worker_async_emits_failed_progress_when_store_marks_failed(monkey
     assert "failed" in final_text.lower()
     assert final_meta["worker_status"] == "failed"
 
-
 def test_start_worker_async_infers_longer_timeout_for_context_heavy_network_tasks(monkeypatch) -> None:
     class _Memory:
         async def add_message(self, role: str, content: str, metadata: dict):

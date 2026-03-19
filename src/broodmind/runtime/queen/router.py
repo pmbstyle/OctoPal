@@ -511,6 +511,10 @@ async def route_worker_result_back_to_queen(
         "<worker_result>\n"
         f"{payload_json}\n"
         "</worker_result>\n\n"
+        "Interpretation rules:\n"
+        "- `summary` is internal worker/runtime text and is not user-facing by default.\n"
+        "- Never forward transport/debug/auth/orchestration text to the user.\n"
+        "- If you answer the user, write a clean Queen response in plain language.\n\n"
         "If the output is truncated and you need specific details, use `get_worker_output_path`.\n"
         "If there are knowledge_proposals, review them and use `manage_canon` to save them if valid.\n"
         "If a user-facing response is required now, provide it in plain text.\n"
@@ -573,16 +577,33 @@ def should_force_worker_followup(result: WorkerResult) -> bool:
 
 def build_forced_worker_followup(result: WorkerResult) -> str:
     """Build a concise Queen-style fallback when routing suppresses a useful update."""
-    summary = normalize_plain_text(result.summary or "Task finished.")
-    if len(summary) > 700:
-        summary = summary[:697].rstrip() + "..."
+    lead = _build_generic_worker_completion_message(result)
 
-    parts = [summary]
+    if len(lead) > 700:
+        lead = lead[:697].rstrip() + "..."
+
+    parts = [lead]
     if result.questions:
         questions = [q.strip() for q in result.questions[:3] if q and q.strip()]
         if questions:
             parts.append("\n".join(f"- {question}" for question in questions))
     return "\n\n".join(parts).strip()
+
+
+def _build_generic_worker_completion_message(result: WorkerResult) -> str:
+    output = result.output if isinstance(result.output, dict) else {}
+    for key in ("report_path", "output_path", "path", "file"):
+        value = output.get(key)
+        if isinstance(value, str) and value.strip():
+            return f"Task finished. Output is ready in `{value.strip()}`."
+    files = output.get("files")
+    if isinstance(files, list):
+        visible_files = [str(item).strip() for item in files if str(item).strip()]
+        if visible_files:
+            return f"Task finished. Created {len(visible_files)} file(s)."
+    if result.questions:
+        return "Task finished. I need your input on the next step."
+    return "Task finished."
 
 
 def normalize_plain_text(text: str) -> str:

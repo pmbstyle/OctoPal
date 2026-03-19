@@ -66,6 +66,14 @@ def test_do_not_force_worker_followup_for_tiny_internal_results():
     assert should_force_worker_followup(result) is False
 
 
+def test_forced_worker_followup_uses_generic_message_when_only_internal_summary_exists():
+    result = WorkerResult(
+        summary="Successfully sent DM response to Atlas2 in OpenBotCity",
+        output={"report_path": "research/candidates.md"},
+    )
+    assert build_forced_worker_followup(result) == "Task finished. Output is ready in `research/candidates.md`."
+
+
 def test_followup_required_marker_is_stripped_and_detected():
     text, wants_followup = _extract_followup_required_marker(
         "Проверю статус child worker и вернусь с итогом.\nFOLLOWUP_REQUIRED"
@@ -114,12 +122,11 @@ def test_should_suppress_user_delivery():
     assert should_suppress_user_delivery("Result ready. NO_USER_RESPONSE")
     assert should_suppress_user_delivery("Result ready.\n**NO_USER_RESPONSE**")
     assert should_suppress_user_delivery("**HEARTBEAT_OK**")
-    assert should_suppress_user_delivery("list_workers")
-    assert should_suppress_user_delivery("check_schedule")
-    assert should_suppress_user_delivery("fs_read, file: memory/2026-03-11.md")
-    assert should_suppress_user_delivery("Task failed: remote MCP tool response schema is incompatible.")
     assert not should_suppress_user_delivery("Result ready.")
     assert not should_suppress_user_delivery("Проверяю расписание:")
+    assert not should_suppress_user_delivery("list_workers")
+    assert not should_suppress_user_delivery("fs_read, file: memory/2026-03-11.md")
+    assert not should_suppress_user_delivery("Successfully sent DM response to Atlas2 in OpenBotCity")
 
 
 def test_sanitize_user_facing_text_removes_reasoning_and_tool_traces():
@@ -133,6 +140,11 @@ def test_sanitize_user_facing_text_removes_reasoning_and_tool_traces():
     assert "Tool result" not in cleaned
     assert "</think>" not in cleaned
     assert "Отлично! Все задачи завершены." in cleaned
+
+
+def test_sanitize_user_facing_text_keeps_plain_internal_text_unchanged():
+    raw = "Successfully sent DM response to Atlas2 in OpenBotCity"
+    assert sanitize_user_facing_text(raw) == raw
 
 
 def test_sanitize_user_facing_text_collapses_result_payload_to_summary():
@@ -172,7 +184,7 @@ def test_worker_result_timeout_followup_stays_user_visible():
             questions=["Do you want the long version?", "Should I save it to canon?"],
         )
     )
-    assert "Digest is ready." in text
+    assert "Worker finished, but the follow-up routing step timed out." in text
     assert "Open questions:" in text
     assert should_send_worker_followup(text) is True
 

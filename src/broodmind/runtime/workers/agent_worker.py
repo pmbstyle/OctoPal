@@ -322,7 +322,7 @@ When you need to use a tool, the system will automatically call it for you. Just
 When you have completed the task, respond with:
 {{
   "type": "result",
-  "summary": "Brief summary of what you did",
+  "summary": "Internal summary for the Queen/runtime",
   "output": {{...}}  // Optional structured output
 }}
 
@@ -332,6 +332,11 @@ If you need clarification from the Queen, include:
   "summary": "...",
   "questions": ["question1", "question2"]
 }}
+
+Important:
+- `summary` is internal. Do not assume it will ever be shown to the user verbatim.
+- Never return transport/debug/auth details as if they were user-facing content.
+- Messages like "Successfully sent DM...", "Failed to send DM...", token/JWT errors, retries, truncation counts, and orchestration status are internal runtime details.
 """
 
     messages = [

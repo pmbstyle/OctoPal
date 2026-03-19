@@ -62,11 +62,9 @@ _RESET_CONFIRM_THRESHOLD = 2
 _RESET_CONFIDENCE_MIN = 0.7
 def _build_worker_result_timeout_followup(result: WorkerResult) -> str:
     """Return a minimal user-facing fallback when Queen routing times out."""
-    summary = (result.summary or "").strip()
-    if not summary:
-        summary = "Worker finished, but the follow-up routing step timed out."
+    lead = "Worker finished, but the follow-up routing step timed out."
 
-    lines = [summary]
+    lines = [lead]
     if result.questions:
         lines.append("")
         lines.append("Open questions:")
