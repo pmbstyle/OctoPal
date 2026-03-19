@@ -168,7 +168,109 @@ def load_config() -> BroodMindConfig:
         except Exception:
             # Fallback to default if JSON is malformed
             pass
-    return BroodMindConfig()
+    
+    # If no config file, try to build one from environment for migration
+    config = BroodMindConfig()
+    env_file = _resolve_env_file()
+    temp_settings = Settings(_env_file=env_file) if env_file else Settings()
+    
+    # Map legacy settings to structured config
+    config.telegram.bot_token = temp_settings.telegram_bot_token
+    if temp_settings.allowed_telegram_chat_ids:
+        config.telegram.allowed_chat_ids = [
+            cid.strip() for cid in temp_settings.allowed_telegram_chat_ids.split(",") if cid.strip()
+        ]
+    config.telegram.parse_mode = temp_settings.telegram_parse_mode
+
+    # LLM (Queen) - try to resolve from LiteLLM settings first
+    config.llm.provider_id = temp_settings.litellm_provider_id
+    config.llm.model = temp_settings.litellm_model
+    config.llm.api_key = temp_settings.litellm_api_key
+    config.llm.api_base = temp_settings.litellm_api_base
+    config.llm.model_prefix = temp_settings.litellm_model_prefix
+    
+    # If not set, try legacy fallbacks
+    if not config.llm.provider_id:
+        if temp_settings.zai_api_key:
+            config.llm.provider_id = "zai"
+        elif temp_settings.openrouter_api_key:
+            config.llm.provider_id = "openrouter"
+
+    # LiteLLM Runtime
+    config.litellm.num_retries = temp_settings.litellm_num_retries
+    config.litellm.timeout = temp_settings.litellm_timeout
+    config.litellm.fallbacks = temp_settings.litellm_fallbacks
+    config.litellm.drop_params = temp_settings.litellm_drop_params
+    config.litellm.caching = temp_settings.litellm_caching
+    config.litellm.max_concurrency = temp_settings.litellm_max_concurrency
+    config.litellm.rate_limit_max_retries = temp_settings.litellm_rate_limit_max_retries
+    config.litellm.rate_limit_base_delay_seconds = temp_settings.litellm_rate_limit_base_delay_seconds
+    config.litellm.rate_limit_max_delay_seconds = temp_settings.litellm_rate_limit_max_delay_seconds
+
+    # Storage
+    config.storage.state_dir = temp_settings.state_dir
+    config.storage.workspace_dir = temp_settings.workspace_dir
+
+    # Memory
+    config.memory.top_k = temp_settings.memory_top_k
+    config.memory.prefilter_k = temp_settings.memory_prefilter_k
+    config.memory.min_score = temp_settings.memory_min_score
+    config.memory.max_chars = temp_settings.memory_max_chars
+    config.memory.owner_id = temp_settings.memory_owner_id
+
+    # Gateway
+    config.gateway.host = temp_settings.gateway_host
+    config.gateway.port = temp_settings.gateway_port
+    config.gateway.tailscale_ips = temp_settings.tailscale_ips
+    config.gateway.dashboard_token = temp_settings.dashboard_token
+    config.gateway.tailscale_auto_serve = temp_settings.tailscale_auto_serve
+    config.gateway.webapp_enabled = temp_settings.webapp_enabled
+    if temp_settings.webapp_dist_dir:
+        config.gateway.webapp_dist_dir = temp_settings.webapp_dist_dir
+
+    # Workers
+    config.workers.launcher = temp_settings.worker_launcher
+    config.workers.docker_image = temp_settings.worker_docker_image
+    config.workers.docker_workspace = temp_settings.worker_docker_workspace
+    if temp_settings.worker_docker_host_workspace:
+        config.workers.docker_host_workspace = temp_settings.worker_docker_host_workspace
+    config.workers.max_spawn_depth = temp_settings.worker_max_spawn_depth
+    config.workers.max_children_total = temp_settings.worker_max_children_total
+    config.workers.max_children_concurrent = temp_settings.worker_max_children_concurrent
+
+    # WhatsApp
+    config.whatsapp.mode = temp_settings.whatsapp_mode
+    if temp_settings.allowed_whatsapp_numbers:
+        config.whatsapp.allowed_numbers = [
+            num.strip() for num in temp_settings.allowed_whatsapp_numbers.split(",") if num.strip()
+        ]
+    if temp_settings.whatsapp_auth_dir:
+        config.whatsapp.auth_dir = temp_settings.whatsapp_auth_dir
+    config.whatsapp.bridge_host = temp_settings.whatsapp_bridge_host
+    config.whatsapp.bridge_port = temp_settings.whatsapp_bridge_port
+    config.whatsapp.callback_token = temp_settings.whatsapp_callback_token
+    config.whatsapp.node_command = temp_settings.whatsapp_node_command
+
+    # Search
+    config.search.brave_api_key = temp_settings.brave_api_key
+    config.search.firecrawl_api_key = temp_settings.firecrawl_api_key
+
+    # Common
+    config.log_level = temp_settings.log_level
+    config.debug_prompts = temp_settings.debug_prompts
+    config.heartbeat_interval_seconds = temp_settings.heartbeat_interval_seconds
+    config.user_message_grace_seconds = temp_settings.user_message_grace_seconds
+
+    return config
+
+
+def save_config(config: BroodMindConfig) -> None:
+    config_file = _resolve_config_file()
+    if not config_file:
+        config_file = Path.cwd() / "config.json"
+    
+    with config_file.open("w", encoding="utf-8") as f:
+        json.dump(config.model_dump(mode="json"), f, indent=2)
 
 
 def load_settings() -> Settings:

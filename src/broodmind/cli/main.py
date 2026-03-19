@@ -22,7 +22,7 @@ from rich.table import Table
 
 from broodmind.channels import normalize_user_channel, user_channel_label
 from broodmind.cli.branding import print_banner
-from broodmind.infrastructure.config.settings import Settings, load_settings
+from broodmind.infrastructure.config.settings import Settings, load_settings, save_config
 from broodmind.gateway.app import build_app
 from broodmind.infrastructure.logging import configure_logging
 from broodmind.infrastructure.providers.profile_resolver import resolve_litellm_profile
@@ -802,6 +802,25 @@ def _calculate_cutoff_date(days: int):
 
     from broodmind.utils import utc_now
     return utc_now() - timedelta(days=days)
+
+
+@config_app.command("migrate")
+def config_migrate() -> None:
+    """Migrate current .env settings to structured config.json."""
+    print_banner()
+    settings = load_settings()
+    if not settings.config_obj:
+        console.print("[red]Error: Could not initialize configuration object.[/red]")
+        return
+    
+    config_path = Path.cwd() / "config.json"
+    if config_path.exists():
+        if not Confirm.ask(f"[yellow]config.json already exists. Overwrite?[/yellow]"):
+            return
+
+    save_config(settings.config_obj)
+    console.print(f"[green]Successfully migrated settings to {config_path}[/green]")
+    console.print("[dim]You can now use config.json for advanced settings like worker overrides.[/dim]")
 
 
 @config_app.command("show")
