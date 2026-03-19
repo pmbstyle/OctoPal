@@ -60,6 +60,7 @@ class RichWizardPrompter(WizardPrompter):
         self.console.print()
 
     def note(self, title: str, lines: Sequence[str]) -> None:
+        self.console.print()
         self.console.print(
             Panel(
                 "\n".join(lines),
