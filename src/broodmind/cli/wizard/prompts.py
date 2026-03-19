@@ -57,6 +57,7 @@ class RichWizardPrompter(WizardPrompter):
                 padding=(1, 2),
             )
         )
+        self.console.print()
 
     def note(self, title: str, lines: Sequence[str]) -> None:
         self.console.print(
@@ -67,6 +68,7 @@ class RichWizardPrompter(WizardPrompter):
                 padding=(1, 2),
             )
         )
+        self.console.print()
 
     def select(self, params: WizardSelectParams[T]) -> T:
         try:

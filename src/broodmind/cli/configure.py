@@ -40,6 +40,11 @@ _PROVIDER_GROUPS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _print_section_header(title: str) -> None:
+    console.print()
+    console.print(Rule(f"[bold {ACCENT}]{title}[/bold {ACCENT}]"))
+
+
 def configure_wizard() -> None:
     """Run the modern interactive configuration wizard."""
     print_banner()
@@ -89,7 +94,7 @@ def configure_wizard() -> None:
             section.run(config)
 
     while True:
-        console.print(Rule(f"[bold {ACCENT}]Final Review[/bold {ACCENT}]"))
+        _print_section_header("Final Review")
         _print_review(config)
         action = prompter.select(
             WizardSelectParams(
@@ -129,7 +134,7 @@ def configure_wizard() -> None:
 
 
 def _configure_user_channel(config: BroodMindConfig, advanced: bool, prompter) -> None:
-    console.print(Rule(f"[bold {ACCENT}]Channel Access[/bold {ACCENT}]"))
+    _print_section_header("Channel Access")
 
     channel = prompter.select(
         WizardSelectParams(
@@ -244,7 +249,7 @@ def _configure_llm(
     advanced: bool,
     prompter,
 ) -> None:
-    console.print(Rule(f"[bold {ACCENT}]{label} LLM Settings[/bold {ACCENT}]"))
+    _print_section_header(f"{label} LLM Settings")
 
     provider_choices = _render_provider_select_list(prompter)
     current_id = config.provider_id or "zai"
@@ -374,7 +379,7 @@ def _configure_worker_overrides(config: BroodMindConfig, prompter) -> None:
 
 
 def _configure_storage(config: BroodMindConfig, prompter) -> None:
-    console.print(Rule(f"[bold {ACCENT}]Storage & Workspace[/bold {ACCENT}]"))
+    _print_section_header("Storage & Workspace")
 
     prompter.note(
         "Storage",
@@ -405,7 +410,7 @@ def _configure_storage(config: BroodMindConfig, prompter) -> None:
 
 
 def _configure_features(config: BroodMindConfig, prompter) -> None:
-    console.print(Rule(f"[bold {ACCENT}]Tools & Search[/bold {ACCENT}]"))
+    _print_section_header("Tools & Search")
 
     enabled_tools = prompter.multiselect(
         WizardMultiSelectParams(
@@ -458,7 +463,7 @@ def _configure_features(config: BroodMindConfig, prompter) -> None:
 
 
 def _configure_dashboard(config: BroodMindConfig, prompter) -> None:
-    console.print(Rule(f"[bold {ACCENT}]Dashboard[/bold {ACCENT}]"))
+    _print_section_header("Dashboard")
 
     config.gateway.webapp_enabled = prompter.confirm(
         WizardConfirmParams(
@@ -479,7 +484,7 @@ def _configure_dashboard(config: BroodMindConfig, prompter) -> None:
 
 
 def _configure_runtime_advanced(config: BroodMindConfig, prompter) -> None:
-    console.print(Rule(f"[bold {ACCENT}]Advanced Runtime[/bold {ACCENT}]"))
+    _print_section_header("Advanced Runtime")
 
     config.log_level = prompter.select(
         WizardSelectParams(
