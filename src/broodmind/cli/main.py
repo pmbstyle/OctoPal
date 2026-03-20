@@ -39,6 +39,8 @@ from broodmind.channels.whatsapp.bridge import WhatsAppBridgeController, WhatsAp
 from broodmind.channels.whatsapp.ids import parse_allowed_whatsapp_numbers
 from broodmind.channels.whatsapp.runtime import WhatsAppRuntime
 from broodmind.runtime.workers.templates import sync_default_templates
+from broodmind.tools import get_tools, resolve_tool_diagnostics
+from broodmind.tools.registry import ToolPolicy, ToolPolicyPipelineStep, ToolSpec
 from aiogram import Bot
 
 app = typer.Typer(add_completion=False)
@@ -47,6 +49,7 @@ audit_app = typer.Typer(add_completion=False)
 memory_app = typer.Typer(add_completion=False)
 config_app = typer.Typer(add_completion=False)
 whatsapp_app = typer.Typer(add_completion=False)
+tools_app = typer.Typer(add_completion=False)
 
 console = Console()
 logger = logging.getLogger(__name__)
@@ -1198,11 +1201,184 @@ def sync_worker_templates(
     console.print(f"[dim]Target:[/dim] {settings.workspace_dir / 'workers'}")
 
 
+@tools_app.command("resolve")
+def tools_resolve(
+    profile: str | None = typer.Option(None, "--profile", help="Apply a named tool profile such as research or coding."),
+    preset: str = typer.Option("all", "--preset", help="Permission preset to simulate: all or queen."),
+    blocked: bool = typer.Option(True, "--blocked/--available-only", help="Show blocked tools or only available ones."),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+) -> None:
+    """Explain which tools are available and why others are blocked."""
+    tool_specs = get_tools(mcp_manager=None)
+    snapshot = _build_tool_resolution_snapshot(
+        tool_specs,
+        preset=preset,
+        profile_name=profile,
+        include_blocked=blocked,
+    )
+
+    if json_output:
+        console.print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+        return
+
+    console.print()
+    console.print(
+        Align.center(
+            Panel(
+                _build_tool_resolution_summary_grid(snapshot),
+                title="[bold white]Tool Resolution[/bold white]",
+                border_style="bright_blue",
+                expand=False,
+                padding=(1, 3),
+            )
+        )
+    )
+    console.print()
+    console.print(_build_tool_resolution_table(snapshot["available"], title="Available Tools"))
+    if blocked and snapshot["blocked"]:
+        console.print()
+        console.print(_build_tool_resolution_table(snapshot["blocked"], title="Blocked Tools", include_reason=True))
+    console.print()
+
+
 app.add_typer(workers_app, name="workers")
 app.add_typer(audit_app, name="audit")
 app.add_typer(memory_app, name="memory")
 app.add_typer(config_app, name="config")
 app.add_typer(whatsapp_app, name="whatsapp")
+app.add_typer(tools_app, name="tools")
+
+
+def _build_tool_resolution_snapshot(
+    tool_specs: list[ToolSpec],
+    *,
+    preset: str,
+    profile_name: str | None,
+    include_blocked: bool,
+) -> dict[str, object]:
+    normalized_preset = str(preset or "all").strip().lower()
+    if normalized_preset not in {"all", "queen"}:
+        raise typer.BadParameter(f"Unsupported tools preset: {preset}")
+
+    permissions = (
+        _queen_tool_permissions()
+        if normalized_preset == "queen"
+        else _all_enabled_permissions(tool_specs)
+    )
+    policy_steps = _queen_tool_policy_steps() if normalized_preset == "queen" else []
+    report = resolve_tool_diagnostics(
+        tool_specs,
+        permissions=permissions,
+        profile_name=profile_name,
+        policy_pipeline_steps=policy_steps,
+    )
+    available_rows = [_tool_row(entry.tool) for entry in report.entries if entry.available]
+    blocked_rows = [
+        _tool_row(entry.tool, reason=", ".join(entry.reasons))
+        for entry in report.blocked_tools
+    ] if include_blocked else []
+    return {
+        "preset": normalized_preset,
+        "profile": profile_name or "",
+        "available_count": len(available_rows),
+        "blocked_count": len(report.blocked_tools),
+        "permissions": permissions,
+        "policy_steps": [step.label for step in policy_steps],
+        "available": available_rows,
+        "blocked": blocked_rows,
+    }
+
+
+def _all_enabled_permissions(tool_specs: list[ToolSpec]) -> dict[str, bool]:
+    return {str(tool.permission): True for tool in tool_specs}
+
+
+def _queen_tool_permissions() -> dict[str, bool]:
+    return {
+        "filesystem_read": True,
+        "filesystem_write": True,
+        "worker_manage": True,
+        "llm_subtask": True,
+        "canon_manage": True,
+        "network": True,
+        "exec": True,
+        "service_read": True,
+        "service_control": True,
+        "deploy_control": True,
+        "db_admin": True,
+        "security_audit": True,
+        "self_control": True,
+        "mcp_exec": True,
+        "skill_use": True,
+        "skill_manage": True,
+    }
+
+
+def _queen_tool_policy_steps() -> list[ToolPolicyPipelineStep]:
+    return [
+        ToolPolicyPipelineStep(
+            label="queen.raw_fetch_denylist",
+            policy=ToolPolicy(deny=["web_fetch", "markdown_new_fetch", "fetch_plan_tool"]),
+        )
+    ]
+
+
+def _tool_row(tool: ToolSpec, *, reason: str = "") -> dict[str, str]:
+    return {
+        "name": tool.name,
+        "permission": tool.permission,
+        "category": tool.metadata.category or "-",
+        "risk": tool.metadata.risk,
+        "owner": tool.metadata.owner,
+        "reason": reason,
+    }
+
+
+def _build_tool_resolution_summary_grid(snapshot: dict[str, object]) -> Table:
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="bold cyan", justify="right")
+    grid.add_column(style="white")
+    grid.add_row("Preset", str(snapshot["preset"]))
+    grid.add_row("Profile", str(snapshot["profile"] or "[dim]none[/dim]"))
+    grid.add_row("Available", str(snapshot["available_count"]))
+    grid.add_row("Blocked", str(snapshot["blocked_count"]))
+    grid.add_row("Policy Steps", ", ".join(snapshot["policy_steps"]) or "[dim]none[/dim]")
+    return grid
+
+
+def _build_tool_resolution_table(
+    rows: list[dict[str, str]],
+    *,
+    title: str,
+    include_reason: bool = False,
+) -> Table:
+    table = Table(title=title, border_style="bright_blue", header_style="bold cyan", expand=False)
+    table.add_column("Tool", style="white", width=28)
+    table.add_column("Category", style="bright_green", width=14)
+    table.add_column("Risk", width=12)
+    table.add_column("Permission", style="dim", width=18)
+    table.add_column("Owner", width=12)
+    if include_reason:
+        table.add_column("Reason", style="yellow", width=36)
+
+    for row in rows:
+        values = [
+            row["name"],
+            row["category"],
+            row["risk"],
+            row["permission"],
+            row["owner"],
+        ]
+        if include_reason:
+            values.append(row["reason"])
+        table.add_row(*values)
+
+    if not rows:
+        empty_values = ["[dim]none[/dim]", "-", "-", "-", "-"]
+        if include_reason:
+            empty_values.append("-")
+        table.add_row(*empty_values)
+    return table
 
 
 def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore | None = None) -> dict:
