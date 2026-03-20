@@ -52,3 +52,4 @@ HEARTBEAT.md
 /src/broodmind/infrastructure/providers/__pycache__
 /src/broodmind/infrastructure/store/__pycache__
 config.json
+/src/broodmind/cli/wizard/__pycache__

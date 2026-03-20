@@ -1,12 +1,29 @@
-import textwrap
 import sys
-from importlib.metadata import PackageNotFoundError, version as get_version
+import textwrap
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as get_version
 
 from rich import print
 from rich.align import Align
 from rich.console import Group
 from rich.table import Table
 from rich.text import Text
+
+BROOD_SILVER = "#d8dde2"
+MIND_GOLD = "#f0c15d"
+WASP_GOLD = "#ead77a"
+SUBTLE_STEEL = "#5f8ea3"
+
+
+def _split_brand_text(block: str) -> Text:
+    lines = block.splitlines()
+    split_at = max(1, int(max(len(line.rstrip()) for line in lines) * 0.58))
+    rendered = Text()
+    for line in lines:
+        rendered.append(line[:split_at], style=BROOD_SILVER)
+        rendered.append(line[split_at:], style=MIND_GOLD)
+        rendered.append("\n")
+    return rendered
 
 
 def print_banner() -> None:
@@ -53,9 +70,6 @@ def print_banner() -> None:
     except PackageNotFoundError:
         current_version = "dev"
 
-    tagline = Text("Multi-agent orchestration", style="italic bright_white")
-    subline = Text("Fast setup. Safe defaults. Clear operations.", style="dim")
-
     output_encoding = (sys.stdout.encoding or "utf-8").lower()
     selected_wasp_text = wasp_text
     selected_banner_text = banner_text
@@ -85,16 +99,19 @@ def print_banner() -> None:
     header.add_column(justify="left", no_wrap=True)
     header.add_column(justify="left", no_wrap=True)
     header.add_row(
-        Text(wasp_centered, style="bright_yellow"),
-        Text(banner_centered, style="bright_cyan"),
+        Text(wasp_centered, style=WASP_GOLD),
+        _split_brand_text(banner_centered.rstrip("\n")),
     )
+
+    tagline = Text("Multi-agent orchestration", style=f"italic {BROOD_SILVER}")
+    subline = Text("RUN YOUR OWN AI HIVE, FAST AND SECURE!", style=MIND_GOLD)
 
     content = Group(
         Align.center(header),
         Text(""),
         Align.center(tagline),
         Align.center(subline),
-        Align.center(Text(f"v{current_version}", style="bold bright_white")),
+        Align.center(Text(f"v{current_version}", style=f"bold {BROOD_SILVER}")),
     )
     print("\n")
     print(Align.center(content))
