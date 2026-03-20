@@ -14,6 +14,12 @@ import structlog
 
 from broodmind.infrastructure.providers.base import InferenceProvider, Message
 from broodmind.runtime.memory.service import MemoryService
+from broodmind.runtime.tool_loop import (
+    _detect_tool_loop,
+    _hash_tool_call,
+    _hash_tool_outcome,
+    _resolve_tool_loop_thresholds,
+)
 from broodmind.runtime.queen.prompt_builder import (
     build_bootstrap_context_prompt,
     build_queen_prompt,
@@ -200,6 +206,8 @@ async def route_or_reply(
             last_error: str | None = None
             had_tool_calls = False
             transient_tool_failures = 0
+            tool_call_history: list[dict[str, str]] = []
+            tool_loop_thresholds = _resolve_tool_loop_thresholds()
             max_attempts = 10
             vision_tool_fallback_used = False
 
@@ -354,8 +362,15 @@ async def route_or_reply(
                     messages.append(assistant_msg)
 
                     for call in tool_calls:
-                        tool_result = await _handle_queen_tool_call(call, active_tool_specs, ctx)
+                        tool_result, tool_meta = await _handle_queen_tool_call(call, active_tool_specs, ctx)
                         tool_result_text = render_tool_result_for_llm(tool_result).text
+                        loop_state = _record_queen_tool_call(
+                            tool_call_history,
+                            call=call,
+                            tool_result=tool_result,
+                            tool_meta=tool_meta,
+                            thresholds=tool_loop_thresholds,
+                        )
                         messages.append(
                             {
                                 "role": "tool",
@@ -364,6 +379,35 @@ async def route_or_reply(
                                 "content": tool_result_text,
                             }
                         )
+                        if loop_state is not None:
+                            logger.warning(
+                                "Queen tool loop detected",
+                                detector=loop_state["detector"],
+                                level=loop_state["level"],
+                                count=loop_state["count"],
+                                message=loop_state["message"],
+                            )
+                            if loop_state["level"] == "critical":
+                                messages.append(
+                                    Message(
+                                        role="system",
+                                        content=(
+                                            "Tool loop breaker triggered. Do not call more tools in this turn. "
+                                            "Summarize what happened, what is blocked, and what the next best step is."
+                                        ),
+                                    )
+                                )
+                                fallback_text = await _complete_text(
+                                    provider,
+                                    messages,
+                                    context="queen_tool_loop_breaker",
+                                )
+                                return await _finalize_response(
+                                    provider=provider,
+                                    messages=messages,
+                                    response_text=fallback_text,
+                                    internal_followup=internal_followup,
+                                )
                         if "error" in tool_result_text.lower() or "failed" in tool_result_text.lower():
                             last_error = tool_result_text
                     continue
@@ -768,7 +812,11 @@ def _shrink_tool_specs_for_retry(tool_specs: list[ToolSpec]) -> list[ToolSpec]:
     return _budget_tool_specs(tool_specs, max_count=reduced)
 
 
-async def _handle_queen_tool_call(call: dict, tools: list[ToolSpec], ctx: dict[str, object]) -> str:
+async def _handle_queen_tool_call(
+    call: dict,
+    tools: list[ToolSpec],
+    ctx: dict[str, object],
+) -> tuple[Any, dict[str, Any]]:
     function = call.get("function") or {}
     name = function.get("name")
     args_raw = function.get("arguments", "{}")
@@ -780,16 +828,58 @@ async def _handle_queen_tool_call(call: dict, tools: list[ToolSpec], ctx: dict[s
     logger.debug("Queen tool call", tool_name=name, args=args)
     for spec in tools:
         if spec.name == name:
-            if spec.is_async:
-                import inspect
-                result = spec.handler(args, ctx)
-                if inspect.isawaitable(result):
-                    result = await result
-            else:
-                result = await asyncio.to_thread(spec.handler, args, ctx)
+            try:
+                if spec.is_async:
+                    import inspect
+
+                    result = spec.handler(args, ctx)
+                    if inspect.isawaitable(result):
+                        result = await result
+                else:
+                    result = await asyncio.to_thread(spec.handler, args, ctx)
+            except Exception as exc:
+                logger.exception("Queen tool execution failed", tool_name=name)
+                return {
+                    "error": f"Tool execution failed: {name}: {exc}"
+                }, {"timed_out": False, "had_error": True}
             logger.debug("Queen tool result", tool_name=name, result_preview=f"{str(result)[:200]}...")
-            return result
-    return f"Unknown tool: {name}"
+            return result, {"timed_out": False, "had_error": False}
+    return {"error": f"Unknown tool: {name}"}, {"timed_out": False, "had_error": True}
+
+
+def _record_queen_tool_call(
+    history: list[dict[str, str]],
+    *,
+    call: dict[str, Any],
+    tool_result: Any,
+    tool_meta: dict[str, Any],
+    thresholds: dict[str, int],
+) -> dict[str, Any] | None:
+    function = call.get("function") or {}
+    tool_name = str(function.get("name") or "")
+    args_raw = function.get("arguments", "{}")
+    try:
+        tool_args = json.loads(args_raw) if isinstance(args_raw, str) else args_raw
+    except Exception:
+        tool_args = {}
+
+    args_hash = _hash_tool_call(tool_name, tool_args)
+    result_hash = _hash_tool_outcome(tool_result, tool_meta)
+    history.append(
+        {
+            "tool_name": tool_name,
+            "args_hash": args_hash,
+            "result_hash": result_hash,
+        }
+    )
+    return _detect_tool_loop(
+        history,
+        tool_name=tool_name,
+        args_hash=args_hash,
+        warning_threshold=thresholds["warning"],
+        critical_threshold=thresholds["critical"],
+        global_breaker_threshold=thresholds["global_breaker"],
+    )
 
 
 def _recover_textual_tool_call(content: str, tools: list[ToolSpec]) -> dict[str, Any] | None:
