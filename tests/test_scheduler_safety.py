@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 from broodmind.runtime.queen.core import Queen
 from broodmind.runtime.scheduler.service import SchedulerService
-from broodmind.tools.tools import _tool_check_schedule, _tool_schedule_task
+from broodmind.tools.tools import _tool_check_schedule, _tool_schedule_task, _tool_scheduler_status
 from broodmind.runtime.workers.contracts import WorkerResult
 
 
@@ -120,6 +120,47 @@ def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
     assert payload["due_count"] == 1
     assert payload["due_tasks"][0]["task_id"] == "daily_digest"
     assert payload["due_tasks"][0]["inputs"] == {"section": "news", "max_items": 5}
+
+
+def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> None:
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "daily_digest",
+                "name": "Daily Digest",
+                "description": "Build digest",
+                "frequency": "Every 30 minutes",
+                "worker_id": "writer",
+                "task_text": "Generate a concise digest",
+                "inputs_json": json.dumps({"section": "news"}),
+                "last_run_at": None,
+                "enabled": 1,
+            },
+            {
+                "id": "nightly_cleanup",
+                "name": "Nightly Cleanup",
+                "description": "Compact memory",
+                "frequency": "Daily at 23:30",
+                "worker_id": None,
+                "task_text": "Compact memory",
+                "inputs_json": "{}",
+                "last_run_at": None,
+                "enabled": 0,
+            },
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+    payload = json.loads(
+        asyncio.run(_tool_scheduler_status({}, {"queen": SimpleNamespace(scheduler=scheduler)}))
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["due_count"] == 1
+    assert payload["disabled_count"] == 1
+    assert payload["next_due_task"]["task_id"] == "daily_digest"
+    assert payload["tasks"][0]["due_now"] is True
+    assert payload["tasks"][0]["next_run_at"] is not None
+    assert any("due now" in hint for hint in payload["hints"])
 
 
 def test_queen_marks_scheduled_task_after_successful_worker_run_even_if_store_lags() -> None:

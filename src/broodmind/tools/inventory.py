@@ -190,6 +190,11 @@ _TOOL_METADATA_BY_NAME: dict[str, ToolMetadata] = {
         profile_tags=("ops",),
         capabilities=("schedule_read", "schedule_tick"),
     ),
+    "scheduler_status": ToolMetadata(
+        category="scheduler",
+        profile_tags=("ops",),
+        capabilities=("schedule_read",),
+    ),
     "schedule_task": ToolMetadata(
         category="scheduler",
         risk="guarded",

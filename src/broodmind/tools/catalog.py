@@ -282,6 +282,27 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             is_async=True,
         ),
         ToolSpec(
+            name="scheduler_status",
+            description="Summarize scheduler state with due tasks, next-run previews, and hints about what the Queen should do next.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "enabled_only": {
+                        "type": "boolean",
+                        "description": "If true, only include enabled tasks.",
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum tasks to include in the preview (default: 20, max: 50).",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=_tool_scheduler_status,
+            is_async=True,
+        ),
+        ToolSpec(
             name="schedule_task",
             description="Add or update a scheduled task. Only the Queen can use this.",
             parameters={
@@ -1038,6 +1059,61 @@ async def _tool_check_schedule(args, ctx) -> str:
             }
             for t in due_tasks
         ],
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def _tool_scheduler_status(args, ctx) -> str:
+    scheduler = ctx["queen"].scheduler
+    enabled_only = bool((args or {}).get("enabled_only", False))
+    limit = max(1, min(50, int((args or {}).get("limit") or 20)))
+    described = scheduler.describe_tasks(enabled_only=enabled_only)
+    preview = described[:limit]
+    due_count = sum(1 for task in described if bool(task.get("due_now")))
+    disabled_count = sum(1 for task in described if int(task.get("enabled", 1) or 0) != 1)
+    hints: list[str] = []
+    if due_count > 0:
+        hints.append(f"{due_count} scheduled task(s) are due now; run check_schedule or dispatch work.")
+    if disabled_count > 0 and not enabled_only:
+        hints.append(f"{disabled_count} scheduled task(s) are disabled and will not run until re-enabled.")
+    if any(task.get("overdue") for task in described):
+        hints.append("At least one scheduled task looks overdue; inspect execution flow or worker failures.")
+    if not hints:
+        hints.append("Scheduler looks healthy. Use next-run previews to plan follow-up work.")
+
+    next_due = next((task for task in described if task.get("next_run_at")), None)
+    payload = {
+        "status": "ok",
+        "enabled_only": enabled_only,
+        "task_count": len(described),
+        "due_count": due_count,
+        "disabled_count": disabled_count,
+        "next_due_task": (
+            {
+                "task_id": next_due.get("id"),
+                "name": next_due.get("name"),
+                "next_run_at": next_due.get("next_run_at"),
+                "due_now": bool(next_due.get("due_now")),
+            }
+            if next_due
+            else None
+        ),
+        "tasks": [
+            {
+                "task_id": task.get("id"),
+                "name": task.get("name"),
+                "frequency": task.get("frequency"),
+                "worker_id": task.get("worker_id"),
+                "enabled": bool(int(task.get("enabled", 1) or 0) == 1),
+                "due_now": bool(task.get("due_now")),
+                "overdue": bool(task.get("overdue")),
+                "next_run_at": task.get("next_run_at"),
+                "last_run_at": task.get("last_run_at"),
+                "description": task.get("description"),
+            }
+            for task in preview
+        ],
+        "hints": hints,
     }
     return json.dumps(payload, ensure_ascii=False)
 

@@ -56,6 +56,7 @@ _ALWAYS_INCLUDE_TOOL_NAMES = {
     "queen_context_reset",
     "queen_context_health",
     "check_schedule",
+    "scheduler_status",
     # Scheduler control loop
     "list_schedule",
     "schedule_task",

@@ -57,6 +57,25 @@ class SchedulerService:
         
         return actionable
 
+    def describe_tasks(self, *, enabled_only: bool = False) -> list[dict[str, Any]]:
+        """Return normalized tasks plus next-run preview and due-state hints."""
+        tasks = self.store.get_scheduled_tasks(enabled_only=enabled_only)
+        now = utc_now()
+        described: list[dict[str, Any]] = []
+        for task in tasks:
+            normalized = self._normalize_task_record(task)
+            preview = self._build_task_preview(normalized, now)
+            normalized.update(preview)
+            described.append(normalized)
+        described.sort(
+            key=lambda item: (
+                0 if bool(item.get("due_now")) else 1,
+                str(item.get("next_run_at") or "9999-99-99T99:99:99"),
+                str(item.get("name") or ""),
+            )
+        )
+        return described
+
     def mark_executed(self, task_id: str) -> None:
         self.store.update_task_last_run(task_id, utc_now())
         self.sync_to_markdown()
@@ -175,3 +194,58 @@ class SchedulerService:
                 logger.warning("Invalid scheduled task inputs_json", task_id=normalized.get("id"))
         normalized["inputs"] = inputs
         return normalized
+
+    def _build_task_preview(self, task: dict[str, Any], now: datetime) -> dict[str, Any]:
+        due_now = bool(int(task.get("enabled", 1)) == 1 and self._should_run(task, now))
+        next_run_at = self._estimate_next_run(task, now)
+        last_run_at = task.get("last_run_at")
+        overdue = False
+        if due_now and last_run_at:
+            try:
+                overdue = next_run_at is not None and next_run_at <= now
+            except TypeError:
+                overdue = True
+        return {
+            "due_now": due_now,
+            "overdue": overdue,
+            "next_run_at": next_run_at.isoformat() if next_run_at else None,
+        }
+
+    def _estimate_next_run(self, task: dict[str, Any], now: datetime) -> datetime | None:
+        freq = str(task.get("frequency", "") or "").lower()
+        last_run_str = task.get("last_run_at")
+        last_run = None
+        if isinstance(last_run_str, str) and last_run_str.strip():
+            try:
+                last_run = datetime.fromisoformat(last_run_str)
+            except ValueError:
+                last_run = None
+
+        minute_match = _EVERY_MINUTES_RE.search(freq)
+        if minute_match:
+            minutes = int(minute_match.group(1))
+            if last_run is None:
+                return now
+            return last_run + timedelta(minutes=minutes)
+
+        hour_match = _EVERY_HOURS_RE.search(freq)
+        if hour_match:
+            hours = int(hour_match.group(1))
+            if last_run is None:
+                return now
+            return last_run + timedelta(hours=hours)
+
+        daily_match = _DAILY_AT_RE.search(freq)
+        if daily_match:
+            target_h = int(daily_match.group(1))
+            target_m = int(daily_match.group(2))
+            target_today = now.replace(hour=target_h, minute=target_m, second=0, microsecond=0)
+            if last_run is None:
+                return target_today if now <= target_today else target_today + timedelta(days=1)
+            if now < target_today:
+                return target_today
+            if last_run < target_today:
+                return target_today
+            return target_today + timedelta(days=1)
+
+        return None
