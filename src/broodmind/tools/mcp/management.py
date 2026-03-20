@@ -124,6 +124,89 @@ def mcp_status(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         indent=2,
     )
 
+def mcp_discover(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+    """Summarize MCP server usability, exposed tools, and suggested next actions."""
+    queen = ctx.get("queen")
+    if not queen or not queen.mcp_manager:
+        return "Error: MCP Manager not initialized."
+
+    server_filter = str(args.get("server_id", "") or "").strip()
+    limit = max(1, min(int(args.get("limit") or 20), 50))
+    statuses = queen.mcp_manager.get_server_statuses()
+    tool_map = getattr(queen.mcp_manager, "_tools", {}) or {}
+
+    server_ids = [server_filter] if server_filter else list(statuses.keys())
+    server_summaries: list[dict[str, Any]] = []
+    for server_id in server_ids:
+        status_payload = statuses.get(server_id)
+        if status_payload is None:
+            continue
+        specs = list(tool_map.get(server_id, []))
+        remote_tools: list[dict[str, Any]] = []
+        for spec in specs[:limit]:
+            remote_name = str(getattr(spec, "remote_tool_name", "") or spec.name)
+            remote_tools.append(
+                {
+                    "generated_name": spec.name,
+                    "remote_name": remote_name,
+                    "description": str(spec.description or "")[:200],
+                    "direct_call_hint": f"Call `{spec.name}` directly, or use mcp_call with server_id='{server_id}' and tool_name='{remote_name}'.",
+                }
+            )
+
+        status = str(status_payload.get("status", "unknown") or "unknown")
+        reason = str(status_payload.get("reason", "") or "")
+        suggested_action = "connect_or_reconnect"
+        if status == "connected" and remote_tools:
+            suggested_action = "call_tool_directly"
+        elif status == "configured":
+            suggested_action = "mcp_connect"
+        elif status == "reconnecting":
+            suggested_action = "wait_for_reconnect"
+        elif status == "error":
+            suggested_action = "inspect_connection_error"
+
+        server_summaries.append(
+            {
+                "server_id": server_id,
+                "name": status_payload.get("name") or server_id,
+                "status": status,
+                "connected": bool(status_payload.get("connected")),
+                "reason": reason,
+                "tool_count": len(specs),
+                "transport": status_payload.get("transport"),
+                "tools": remote_tools,
+                "suggested_action": suggested_action,
+            }
+        )
+
+    connected_servers = [server for server in server_summaries if server["connected"]]
+    unavailable_servers = [server for server in server_summaries if not server["connected"]]
+    hints: list[str] = []
+    if connected_servers:
+        hints.append(
+            f"{len(connected_servers)} MCP server(s) are ready; prefer direct generated tool calls before raw mcp_call."
+        )
+    if unavailable_servers:
+        hints.append(
+            f"{len(unavailable_servers)} MCP server(s) are not ready; inspect status/reason before relying on them."
+        )
+    if not hints:
+        hints.append("No MCP servers are known yet; connect one before planning MCP-backed work.")
+
+    return json.dumps(
+        {
+            "status": "ok",
+            "server_filter": server_filter or None,
+            "server_count": len(server_summaries),
+            "connected_count": len(connected_servers),
+            "unavailable_count": len(unavailable_servers),
+            "servers": server_summaries,
+            "hints": hints,
+        },
+        indent=2,
+    )
+
 async def mcp_call(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     """Call an MCP tool on a specific server."""
     queen = ctx.get("queen")
@@ -224,5 +307,19 @@ def get_mcp_mgmt_tools() -> list[ToolSpec]:
             permission="mcp_exec",
             handler=mcp_call,
             is_async=True,
+        ),
+        ToolSpec(
+            name="mcp_discover",
+            description="Summarize MCP server readiness, exposed tools, and the best next step for using them.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "server_id": {"type": "string", "description": "Optional server ID to focus on."},
+                    "limit": {"type": "integer", "description": "Max tools to preview per server (default 20, max 50)."},
+                },
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=mcp_discover,
         ),
     ]

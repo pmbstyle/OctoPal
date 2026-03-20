@@ -428,6 +428,11 @@ _TOOL_METADATA_BY_NAME: dict[str, ToolMetadata] = {
         capabilities=("mcp_read",),
         profile_tags=("ops",),
     ),
+    "mcp_discover": ToolMetadata(
+        category="mcp",
+        capabilities=("mcp_read",),
+        profile_tags=("ops", "research"),
+    ),
     "mcp_call": ToolMetadata(
         category="mcp",
         risk="guarded",
