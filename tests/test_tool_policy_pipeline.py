@@ -72,3 +72,21 @@ def test_filter_tools_permissions_then_pipeline() -> None:
 
     out = filter_tools(tools, permissions=perms, policy_pipeline_steps=steps)
     assert _names(out) == ["read"]
+
+
+def test_filter_tools_applies_profile_before_policy_pipeline() -> None:
+    tools = [
+        _tool("fs_read", permission="filesystem_read"),
+        _tool("web_search", permission="network"),
+        _tool("service_health", permission="service_read"),
+    ]
+    perms = {"filesystem_read": True, "network": True, "service_read": True}
+    steps = [ToolPolicyPipelineStep(label="deny web", policy=ToolPolicy(deny=["web_search"]))]
+
+    out = filter_tools(
+        tools,
+        permissions=perms,
+        profile_name="research",
+        policy_pipeline_steps=steps,
+    )
+    assert out == []

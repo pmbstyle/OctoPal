@@ -109,14 +109,18 @@ def filter_tools(
     tools: Iterable[ToolSpec],
     *,
     permissions: dict[str, bool],
+    profile_name: str | None = None,
     policy_pipeline_steps: Iterable[ToolPolicyPipelineStep] | None = None,
 ) -> list[ToolSpec]:
     """Filter tools by permissions only. Scope filtering has been removed."""
+    from broodmind.tools.profiles import apply_tool_profile
+
     available: list[ToolSpec] = []
     for tool in tools:
         if not permissions.get(tool.permission, False):
             continue
         available.append(tool)
+    available = apply_tool_profile(available, profile_name)
     return apply_tool_policy_pipeline(available, policy_pipeline_steps)
 
 

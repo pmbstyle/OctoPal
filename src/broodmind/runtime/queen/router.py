@@ -662,6 +662,7 @@ def _get_queen_tools(queen: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str
     tool_specs = filter_tools(
         get_tools(mcp_manager=mcp_manager),
         permissions=perms,
+        profile_name=os.getenv("BROODMIND_QUEEN_TOOL_PROFILE"),
         policy_pipeline_steps=policy_steps,
     )
     max_tools = _env_int("BROODMIND_QUEEN_MAX_TOOL_COUNT", _DEFAULT_MAX_TOOL_COUNT, minimum=8)

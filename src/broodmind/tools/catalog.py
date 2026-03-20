@@ -42,6 +42,7 @@ from broodmind.tools.ops.management import (
     service_logs,
     test_run,
 )
+from broodmind.tools.inventory import annotate_tool_specs
 from broodmind.tools.registry import ToolSpec
 from broodmind.tools.web.fetch import markdown_new_fetch, web_fetch
 from broodmind.tools.web.search import web_search
@@ -942,7 +943,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         if mcp_tools:
             logger.info("Injecting %d MCP tools into registry", len(mcp_tools))
             tools.extend(mcp_tools)
-    return tools
+    return annotate_tool_specs(tools)
 
 
 async def _tool_check_schedule(args, ctx) -> str:
