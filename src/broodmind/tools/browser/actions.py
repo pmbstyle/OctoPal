@@ -165,8 +165,88 @@ async def browser_extract(args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str
         }
 
 
+async def browser_workflow(args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """Run a compact browser workflow made of existing browser actions."""
+    raw_steps = args.get("steps")
+    stop_on_error = bool(args.get("stop_on_error", True))
+    if not isinstance(raw_steps, list) or not raw_steps:
+        return {"ok": False, "error": "steps is required and must be a non-empty array"}
+
+    results: list[dict[str, Any]] = []
+    for index, raw_step in enumerate(raw_steps, start=1):
+        if not isinstance(raw_step, dict):
+            results.append(
+                {
+                    "index": index,
+                    "ok": False,
+                    "error": "Each workflow step must be an object.",
+                }
+            )
+            if stop_on_error:
+                break
+            continue
+
+        action = str(raw_step.get("action") or "").strip().lower()
+        step_args = {key: value for key, value in raw_step.items() if key != "action"}
+        handler = _WORKFLOW_ACTIONS.get(action)
+        if handler is None:
+            results.append(
+                {
+                    "index": index,
+                    "action": action,
+                    "ok": False,
+                    "error": f"Unsupported browser workflow action: {action}",
+                }
+            )
+            if stop_on_error:
+                break
+            continue
+
+        outcome = await handler(step_args, ctx)
+        normalized = _normalize_workflow_outcome(index=index, action=action, outcome=outcome)
+        results.append(normalized)
+        if stop_on_error and not normalized["ok"]:
+            break
+
+    return {
+        "ok": all(step["ok"] for step in results) if results else False,
+        "step_count": len(results),
+        "stop_on_error": stop_on_error,
+        "steps": results,
+    }
+
+
 def _truncate_text(text: str, *, max_chars: int) -> str:
     if len(text) <= max_chars:
         return text
     omitted = len(text) - max_chars
     return text[: max_chars - 32].rstrip() + f"... [truncated {omitted} chars]"
+
+
+def _normalize_workflow_outcome(*, index: int, action: str, outcome: Any) -> dict[str, Any]:
+    if isinstance(outcome, dict):
+        payload = dict(outcome)
+        payload.setdefault("ok", bool(payload.get("ok", True)))
+        payload["index"] = index
+        payload["action"] = action
+        return payload
+
+    text = str(outcome or "")
+    ok = not text.lower().startswith("error")
+    return {
+        "index": index,
+        "action": action,
+        "ok": ok,
+        "message": text,
+    }
+
+
+_WORKFLOW_ACTIONS = {
+    "open": browser_open,
+    "snapshot": browser_snapshot,
+    "click": browser_click,
+    "type": browser_type,
+    "wait_for": browser_wait_for,
+    "extract": browser_extract,
+    "close": browser_close,
+}

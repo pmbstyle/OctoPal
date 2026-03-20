@@ -61,6 +61,7 @@ def test_catalog_classifies_browser_scheduler_database_release_and_template_tool
     tools = {tool.name: tool for tool in get_tools(mcp_manager=None)}
 
     assert tools["browser_open"].metadata.category == "browser"
+    assert tools["browser_workflow"].metadata.category == "browser"
     assert tools["fetch_plan_tool"].metadata.category == "web"
     assert tools["check_schedule"].metadata.category == "scheduler"
     assert tools["scheduler_status"].metadata.category == "scheduler"

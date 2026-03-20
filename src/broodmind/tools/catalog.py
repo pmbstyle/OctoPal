@@ -16,6 +16,7 @@ from broodmind.tools.browser.actions import (
     browser_snapshot,
     browser_type,
     browser_wait_for,
+    browser_workflow,
 )
 from broodmind.tools.memory.canon import manage_canon, search_canon
 from broodmind.tools.filesystem.download import download_file
@@ -609,6 +610,46 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             },
             permission="network",
             handler=lambda args, ctx: browser_extract(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
+            name="browser_workflow",
+            description="Run a short browser workflow as one tool call by sequencing existing browser actions like open, snapshot, click, type, wait_for, extract, and close.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "steps": {
+                        "type": "array",
+                        "description": "Ordered workflow steps.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "action": {
+                                    "type": "string",
+                                    "enum": ["open", "snapshot", "click", "type", "wait_for", "extract", "close"],
+                                },
+                                "url": {"type": "string"},
+                                "ref": {"type": "string"},
+                                "text": {"type": "string"},
+                                "press_enter": {"type": "boolean"},
+                                "state": {"type": "string", "enum": ["attached", "detached", "hidden", "visible"]},
+                                "timeout_ms": {"type": "integer"},
+                                "max_chars": {"type": "integer"},
+                            },
+                            "required": ["action"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "stop_on_error": {
+                        "type": "boolean",
+                        "description": "Stop after the first failed step (default: true).",
+                    },
+                },
+                "required": ["steps"],
+                "additionalProperties": False,
+            },
+            permission="network",
+            handler=lambda args, ctx: browser_workflow(args, ctx),
             is_async=True,
         ),
         ToolSpec(

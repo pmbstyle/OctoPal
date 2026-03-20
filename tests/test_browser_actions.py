@@ -106,3 +106,58 @@ def test_browser_extract_can_use_snapshot_ref(monkeypatch) -> None:
         assert result == {"ok": True, "source": "ref", "ref": "e1", "text": "Save"}
 
     asyncio.run(scenario())
+
+
+def test_browser_workflow_sequences_existing_actions(monkeypatch) -> None:
+    calls: list[tuple[str, dict]] = []
+
+    async def _open(args, ctx):
+        del ctx
+        calls.append(("open", dict(args)))
+        return "Successfully opened https://example.com"
+
+    async def _wait_for(args, ctx):
+        del ctx
+        calls.append(("wait_for", dict(args)))
+        return "Text appeared: Done"
+
+    async def _extract(args, ctx):
+        del ctx
+        calls.append(("extract", dict(args)))
+        return {"ok": True, "source": "page", "text": "Workflow body"}
+
+    monkeypatch.setattr(browser_actions, "browser_open", _open)
+    monkeypatch.setattr(browser_actions, "browser_wait_for", _wait_for)
+    monkeypatch.setattr(browser_actions, "browser_extract", _extract)
+    monkeypatch.setattr(
+        browser_actions,
+        "_WORKFLOW_ACTIONS",
+        {
+            "open": _open,
+            "wait_for": _wait_for,
+            "extract": _extract,
+        },
+    )
+
+    async def scenario() -> None:
+        result = await browser_actions.browser_workflow(
+            {
+                "steps": [
+                    {"action": "open", "url": "https://example.com"},
+                    {"action": "wait_for", "text": "Done"},
+                    {"action": "extract", "max_chars": 200},
+                ]
+            },
+            {"chat_id": 7},
+        )
+        assert result["ok"] is True
+        assert result["step_count"] == 3
+        assert [step["action"] for step in result["steps"]] == ["open", "wait_for", "extract"]
+        assert result["steps"][2]["text"] == "Workflow body"
+        assert calls == [
+            ("open", {"url": "https://example.com"}),
+            ("wait_for", {"text": "Done"}),
+            ("extract", {"max_chars": 200}),
+        ]
+
+    asyncio.run(scenario())
