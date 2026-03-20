@@ -321,6 +321,11 @@ _TOOL_METADATA_BY_NAME: dict[str, ToolMetadata] = {
         profile_tags=("ops",),
         capabilities=("config_read", "audit"),
     ),
+    "gateway_status": ToolMetadata(
+        category="ops",
+        profile_tags=("ops", "communication"),
+        capabilities=("service_observe", "channel_observe"),
+    ),
     "secret_scan": ToolMetadata(
         category="ops",
         profile_tags=("ops",),

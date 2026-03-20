@@ -65,6 +65,7 @@ def test_catalog_classifies_browser_scheduler_database_release_and_template_tool
     assert tools["fetch_plan_tool"].metadata.category == "web"
     assert tools["check_schedule"].metadata.category == "scheduler"
     assert tools["scheduler_status"].metadata.category == "scheduler"
+    assert tools["gateway_status"].metadata.category == "ops"
     assert tools["db_restore"].metadata.category == "database"
     assert tools["rollback_release"].metadata.category == "release"
     assert tools["update_worker_template"].metadata.category == "templates"

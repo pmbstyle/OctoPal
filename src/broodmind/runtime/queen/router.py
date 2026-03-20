@@ -49,6 +49,7 @@ _PRIORITY_TOOL_NAMES = {
     "get_worker_result",
     "get_worker_output_path",
     "worker_yield",
+    "gateway_status",
     "manage_canon",
 }
 _ALWAYS_INCLUDE_TOOL_NAMES = {
