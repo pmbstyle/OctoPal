@@ -1310,6 +1310,7 @@ def _queen_tool_permissions() -> dict[str, bool]:
         "self_control": True,
         "mcp_exec": True,
         "skill_use": True,
+        "skill_exec": True,
         "skill_manage": True,
     }
 

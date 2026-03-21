@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
 import structlog
 
+from broodmind.tools.filesystem.path_safety import WorkspacePathError, resolve_workspace_path
 from broodmind.tools.skills.bundles import (
     SkillBundle,
     discover_skill_bundle_dirs,
@@ -21,6 +25,9 @@ _SKILL_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _DEFAULT_MAX_CHARS = 16_000
 _MAX_CHARS_LIMIT = 200_000
 _REGISTRY_VERSION = 1
+_DEFAULT_SCRIPT_TIMEOUT_SECONDS = 60
+_MAX_SCRIPT_TIMEOUT_SECONDS = 600
+_MAX_SCRIPT_OUTPUT_CHARS = 8_000
 
 
 def ensure_skills_layout(workspace_dir: Path | None = None) -> Path:
@@ -87,6 +94,39 @@ def get_skill_management_tools() -> list[ToolSpec]:
             },
             permission="skill_manage",
             handler=_tool_remove_skill,
+        ),
+        ToolSpec(
+            name="run_skill_script",
+            description="Run a script from a skill bundle scripts/ directory without invoking a shell.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "skill_id": {"type": "string", "description": "Skill id to execute from."},
+                    "script": {"type": "string", "description": "Relative path inside the skill scripts/ directory."},
+                    "args": {
+                        "type": "array",
+                        "description": "Optional string arguments passed to the script.",
+                        "items": {"type": "string"},
+                    },
+                    "workdir": {
+                        "type": "string",
+                        "description": "Optional working directory relative to current base_dir or absolute within workspace.",
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "description": "Execution timeout in seconds (default 60, max 600).",
+                    },
+                    "runner": {
+                        "type": "string",
+                        "description": "Optional explicit runner.",
+                        "enum": ["python", "python3", "node", "bash", "sh", "powershell", "pwsh", "direct"],
+                    },
+                },
+                "required": ["skill_id", "script"],
+                "additionalProperties": False,
+            },
+            permission="skill_exec",
+            handler=_tool_run_skill_script,
         ),
     ]
 
@@ -260,6 +300,94 @@ def _tool_remove_skill(args: dict[str, Any], ctx: dict[str, Any]) -> str:
         },
         ensure_ascii=False,
     )
+
+
+def _tool_run_skill_script(args: dict[str, Any], ctx: dict[str, Any]) -> str:
+    workspace_dir = _workspace_root()
+    skill_id = str(args.get("skill_id", "")).strip()
+    if not _SKILL_ID_RE.fullmatch(skill_id):
+        return "run_skill_script error: skill_id must match ^[a-z0-9][a-z0-9_-]*$."
+
+    skill_data = next((item for item in _load_skill_inventory(workspace_dir) if str(item.get("id", "")) == skill_id), None)
+    if skill_data is None:
+        return f"run_skill_script error: skill '{skill_id}' not found."
+    if not bool(skill_data.get("enabled", True)):
+        return f"run_skill_script error: skill '{skill_id}' is disabled."
+
+    scope = str(skill_data.get("scope", "both")).strip().lower() or "both"
+    caller_scope = _caller_scope(ctx)
+    if scope == "queen" and caller_scope == "worker":
+        return "run_skill_script error: this skill is scoped to queen only."
+    if scope == "worker" and caller_scope == "queen":
+        return "run_skill_script error: this skill is scoped to worker only."
+
+    scripts_dir_raw = str(skill_data.get("scripts_dir", "")).strip()
+    if not scripts_dir_raw:
+        return f"run_skill_script error: skill '{skill_id}' has no scripts directory."
+    scripts_dir = Path(scripts_dir_raw).resolve()
+    if not scripts_dir.exists() or not scripts_dir.is_dir():
+        return f"run_skill_script error: scripts directory is missing for '{skill_id}'."
+
+    script_raw = str(args.get("script", "")).strip()
+    if not script_raw:
+        return "run_skill_script error: script is required."
+    try:
+        script_path = _resolve_skill_script_path(scripts_dir, script_raw)
+    except ValueError as exc:
+        return f"run_skill_script error: {exc}"
+
+    workdir = _resolve_skill_workdir(workspace_dir, ctx, args)
+    if isinstance(workdir, str):
+        return workdir
+
+    args_list = args.get("args")
+    script_args = _normalize_script_args(args_list)
+    if script_args is None:
+        return "run_skill_script error: args must be an array of strings."
+
+    runner = str(args.get("runner", "")).strip().lower()
+    try:
+        command = _build_skill_script_command(script_path, runner)
+    except ValueError as exc:
+        return f"run_skill_script error: {exc}"
+
+    timeout_seconds = _bounded_int(
+        args.get("timeout_seconds"),
+        default=_DEFAULT_SCRIPT_TIMEOUT_SECONDS,
+        low=1,
+        high=_MAX_SCRIPT_TIMEOUT_SECONDS,
+    )
+
+    try:
+        result = subprocess.run(
+            command + script_args,
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            shell=False,
+        )
+    except subprocess.TimeoutExpired:
+        return f"run_skill_script error: script timed out after {timeout_seconds}s."
+    except FileNotFoundError as exc:
+        missing = exc.filename or command[0]
+        return f"run_skill_script error: runner not found: {missing}"
+    except Exception as exc:
+        return f"run_skill_script error: {exc}"
+
+    payload = {
+        "skill_id": skill_id,
+        "script": script_path.relative_to(scripts_dir).as_posix(),
+        "runner": command[0],
+        "command": command + script_args,
+        "workdir": str(workdir),
+        "returncode": int(result.returncode),
+        "stdout": result.stdout[:_MAX_SCRIPT_OUTPUT_CHARS],
+        "stderr": result.stderr[:_MAX_SCRIPT_OUTPUT_CHARS],
+        "stdout_truncated": len(result.stdout) > _MAX_SCRIPT_OUTPUT_CHARS,
+        "stderr_truncated": len(result.stderr) > _MAX_SCRIPT_OUTPUT_CHARS,
+    }
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _run_skill(skill_data: dict[str, Any], args: dict[str, Any], ctx: dict[str, Any]) -> str:
@@ -493,6 +621,89 @@ def _skill_record_from_registry(workspace_dir: Path, raw: dict[str, Any]) -> dic
 def _resolve_scope_value(value: Any) -> str:
     scope = str(value or "both").strip().lower() or "both"
     return scope if scope in {"queen", "worker", "both"} else "both"
+
+
+def _resolve_skill_script_path(scripts_dir: Path, script_raw: str) -> Path:
+    candidate = (scripts_dir / script_raw).resolve()
+    try:
+        candidate.relative_to(scripts_dir)
+    except ValueError as exc:
+        raise ValueError("script must stay inside the skill scripts directory.") from exc
+    if not candidate.exists() or not candidate.is_file():
+        raise ValueError("script file not found.")
+    return candidate
+
+
+def _resolve_skill_workdir(workspace_dir: Path, ctx: dict[str, Any], args: dict[str, Any]) -> Path | str:
+    base_dir = ctx.get("base_dir")
+    candidate_base = base_dir if isinstance(base_dir, Path) else workspace_dir
+    base_path = Path(candidate_base).resolve()
+
+    workdir_raw = str(args.get("workdir", "")).strip()
+    if not workdir_raw:
+        try:
+            base_path.relative_to(workspace_dir)
+        except ValueError:
+            return workspace_dir
+        return base_path
+
+    try:
+        return resolve_workspace_path(base_path, workdir_raw, must_exist=True)
+    except WorkspacePathError as exc:
+        return f"run_skill_script error: invalid workdir: {exc}"
+
+
+def _normalize_script_args(value: Any) -> list[str] | None:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    return [str(item) for item in value]
+
+
+def _build_skill_script_command(script_path: Path, runner: str) -> list[str]:
+    explicit_runner = runner.strip().lower()
+    suffix = script_path.suffix.lower()
+
+    if explicit_runner == "direct":
+        return [str(script_path)]
+
+    if explicit_runner in {"python", "python3"}:
+        executable = sys.executable if explicit_runner == "python" else shutil.which(explicit_runner)
+        if not executable:
+            raise ValueError(f"runner '{explicit_runner}' is not available.")
+        return [executable, str(script_path)]
+
+    if explicit_runner in {"node", "bash", "sh", "powershell", "pwsh"}:
+        executable = shutil.which(explicit_runner)
+        if not executable:
+            raise ValueError(f"runner '{explicit_runner}' is not available.")
+        if explicit_runner in {"powershell", "pwsh"}:
+            return [executable, "-NoProfile", "-File", str(script_path)]
+        return [executable, str(script_path)]
+
+    if explicit_runner:
+        raise ValueError(f"unsupported runner '{explicit_runner}'.")
+
+    if suffix == ".py":
+        return [sys.executable, str(script_path)]
+    if suffix == ".js":
+        executable = shutil.which("node")
+        if not executable:
+            raise ValueError("runner 'node' is not available.")
+        return [executable, str(script_path)]
+    if suffix == ".ps1":
+        executable = shutil.which("pwsh") or shutil.which("powershell")
+        if not executable:
+            raise ValueError("runner 'pwsh' or 'powershell' is not available.")
+        return [executable, "-NoProfile", "-File", str(script_path)]
+    if suffix == ".sh":
+        executable = shutil.which("bash") or shutil.which("sh")
+        if not executable:
+            raise ValueError("runner 'bash' or 'sh' is not available.")
+        return [executable, str(script_path)]
+
+    raise ValueError("runner is required for this script type.")
 
 
 def _slugify(value: str) -> str:

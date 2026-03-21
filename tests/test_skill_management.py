@@ -5,9 +5,11 @@ from pathlib import Path
 
 from broodmind.tools.skills.management import (
     _load_skill_inventory,
+    _tool_run_skill_script,
     _tool_add_skill,
     _tool_list_skills,
     get_registered_skill_tools,
+    get_skill_management_tools,
 )
 
 
@@ -156,3 +158,78 @@ description: Helps write copy
 
     assert [tool.name for tool in tools] == ["skill_writer"]
     assert "Helps write copy" in tools[0].description
+
+
+def test_skill_management_tools_include_run_skill_script() -> None:
+    tools = get_skill_management_tools()
+
+    assert "run_skill_script" in [tool.name for tool in tools]
+
+
+def test_run_skill_script_executes_python_from_bundle_scripts_dir(tmp_path: Path, monkeypatch) -> None:
+    workspace_dir = tmp_path / "workspace"
+    skill_dir = workspace_dir / "skills" / "writer"
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    worker_dir = workspace_dir / "workers" / "copy-worker"
+    worker_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: writer
+description: Helps write copy
+scope: worker
+---
+""",
+        encoding="utf-8",
+    )
+    (scripts_dir / "echo_args.py").write_text(
+        """from __future__ import annotations
+import json
+import os
+import sys
+
+payload = {
+    "cwd": os.getcwd(),
+    "args": sys.argv[1:],
+}
+print(json.dumps(payload))
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+
+    raw = _tool_run_skill_script(
+        {"skill_id": "writer", "script": "echo_args.py", "args": ["hello"], "workdir": "."},
+        {"base_dir": worker_dir, "worker": object()},
+    )
+    payload = json.loads(raw)
+    stdout_payload = json.loads(payload["stdout"])
+
+    assert payload["returncode"] == 0
+    assert payload["runner"].endswith("python.exe") or payload["runner"].endswith("python")
+    assert stdout_payload["args"] == ["hello"]
+    assert Path(stdout_payload["cwd"]).resolve() == worker_dir.resolve()
+
+
+def test_run_skill_script_rejects_path_escape(tmp_path: Path, monkeypatch) -> None:
+    workspace_dir = tmp_path / "workspace"
+    skill_dir = workspace_dir / "skills" / "writer"
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: writer
+description: Helps write copy
+---
+""",
+        encoding="utf-8",
+    )
+    (scripts_dir / "ok.py").write_text("print('ok')\n", encoding="utf-8")
+    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+
+    result = _tool_run_skill_script(
+        {"skill_id": "writer", "script": "../outside.py"},
+        {"base_dir": workspace_dir, "worker": object()},
+    )
+
+    assert "must stay inside the skill scripts directory" in result
