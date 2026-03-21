@@ -293,6 +293,13 @@ description: Helps write copy
                         "source_kind": "clawhub_slug",
                         "trusted": False,
                         "has_scripts": True,
+                        "script_scan": {
+                            "status": "clean",
+                            "scanned_at": "2026-03-21T10:00:00+00:00",
+                            "file_count": 1,
+                            "files": [],
+                            "findings": [],
+                        },
                         "path": str(skill_dir / "SKILL.md"),
                     }
                 ],
@@ -308,6 +315,8 @@ description: Helps write copy
     assert payload["skills"][0]["trusted"] is False
     assert payload["skills"][0]["status"] == "not_ready"
     assert "not trusted yet" in payload["skills"][0]["reasons"][0]
+    assert payload["skills"][0]["scan_status"] == "clean"
+    assert payload["skills"][0]["scan_findings_count"] == 0
 
 
 def test_run_skill_script_blocks_when_skill_is_not_ready(tmp_path: Path, monkeypatch) -> None:
@@ -371,6 +380,13 @@ scope: worker
                         "source_kind": "clawhub_slug",
                         "trusted": False,
                         "has_scripts": True,
+                        "script_scan": {
+                            "status": "review_required",
+                            "scanned_at": "2026-03-21T10:00:00+00:00",
+                            "file_count": 1,
+                            "files": [],
+                            "findings": [{"path": "scripts/noop.py", "rule": "process_execution"}],
+                        },
                         "path": str(skill_dir / "SKILL.md"),
                     }
                 ],

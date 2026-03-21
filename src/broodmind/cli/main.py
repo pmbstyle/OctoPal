@@ -45,6 +45,7 @@ from broodmind.tools.skills.installer import (
     remove_installed_skill,
     set_installed_skill_trust,
     update_installed_skill,
+    verify_installed_skill,
 )
 from broodmind.tools import get_tools, resolve_tool_diagnostics
 from broodmind.tools.registry import ToolPolicy, ToolPolicyPipelineStep, ToolSpec
@@ -1304,15 +1305,19 @@ def skill_list(
     table.add_column("Source")
     table.add_column("Kind")
     table.add_column("Trust")
+    table.add_column("Scan")
     table.add_column("Path")
     for item in installs:
         if not isinstance(item, dict):
             continue
+        scan = item.get("script_scan", {})
+        scan_status = str(scan.get("status", "missing")) if isinstance(scan, dict) else "missing"
         table.add_row(
             str(item.get("skill_id", "")),
             str(item.get("source", "")),
             str(item.get("source_kind", "")),
             "trusted" if bool(item.get("trusted", False)) else "untrusted",
+            scan_status,
             str(item.get("path", "")),
         )
     console.print(table)
@@ -1350,6 +1355,7 @@ def skill_update(
 @skill_app.command("trust")
 def skill_trust(
     skill_id: str = typer.Argument(..., help="Installer-managed skill id."),
+    force: bool = typer.Option(False, "--force", help="Allow trusting a skill even when scan findings require manual review."),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
 ) -> None:
     """Mark an installer-managed skill as trusted for script execution."""
@@ -1359,6 +1365,7 @@ def skill_trust(
             skill_id,
             workspace_dir=settings.workspace_dir.resolve(),
             trusted=True,
+            force=force,
         )
     except Exception as exc:
         if json_output:
@@ -1399,6 +1406,37 @@ def skill_untrust(
         return
 
     console.print(f"[bold green][V] Untrusted skill[/bold green] {payload['skill_id']}")
+
+
+@skill_app.command("verify")
+def skill_verify(
+    skill_id: str = typer.Argument(..., help="Installer-managed skill id."),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+) -> None:
+    """Scan installed skill scripts and refresh the verification report."""
+    settings = load_settings()
+    try:
+        payload = verify_installed_skill(
+            skill_id,
+            workspace_dir=settings.workspace_dir.resolve(),
+        )
+    except Exception as exc:
+        if json_output:
+            typer.echo(json.dumps({"status": "error", "message": str(exc), "skill_id": skill_id}, ensure_ascii=False))
+        else:
+            console.print(f"[bold red]Skill verify failed:[/bold red] {exc}")
+        raise typer.Exit(code=1) from None
+
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+        return
+
+    scan = payload.get("script_scan", {})
+    findings = scan.get("findings", []) if isinstance(scan, dict) else []
+    console.print(f"[bold green][V] Verified skill[/bold green] {payload['skill_id']}")
+    console.print(f"[dim]Scan status:[/dim] {scan.get('status', 'missing')}")
+    console.print(f"[dim]Files scanned:[/dim] {scan.get('file_count', 0)}")
+    console.print(f"[dim]Findings:[/dim] {len(findings)}")
 
 
 @skill_app.command("remove")

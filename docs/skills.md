@@ -110,6 +110,7 @@ Lifecycle commands:
 uv run broodmind skill install <source>
 uv run broodmind skill list
 uv run broodmind skill update <skill-id>
+uv run broodmind skill verify <skill-id>
 uv run broodmind skill trust <skill-id>
 uv run broodmind skill untrust <skill-id>
 uv run broodmind skill remove <skill-id>
@@ -132,6 +133,12 @@ When you want to allow script execution for an imported skill:
 uv run broodmind skill trust <skill-id>
 ```
 
+If the verification scan reports findings that need manual review, trust will ask you to confirm intent explicitly:
+
+```bash
+uv run broodmind skill trust <skill-id> --force
+```
+
 To block script execution again:
 
 ```bash
@@ -139,6 +146,26 @@ uv run broodmind skill untrust <skill-id>
 ```
 
 This trust flag only affects script execution. The skill guidance in `SKILL.md` can still be read and used.
+
+### Verification scan
+
+Installer-managed skills now keep a lightweight verification report in `installed.json`.
+
+The scan currently records:
+
+- hashes and sizes for files inside `scripts/`
+- heuristic findings for network calls
+- process spawning and shell execution
+- destructive file operations
+- runtime package installation
+
+Refresh the report at any time with:
+
+```bash
+uv run broodmind skill verify <skill-id>
+```
+
+This is intentionally a review aid, not a sandbox or malware detector. It helps surface the obvious things before a human decides to trust the imported scripts.
 
 ## ClawHub compatibility
 

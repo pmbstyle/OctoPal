@@ -163,3 +163,104 @@ description: Helps write copy
     trust_payload = json.loads(trust_result.stdout)
     assert trust_payload["status"] == "trusted"
     assert trust_payload["trusted"] is True
+
+
+def test_skill_verify_command_reports_scan_findings(tmp_path: Path, monkeypatch) -> None:
+    workspace_dir = tmp_path / "workspace"
+    skill_dir = workspace_dir / "skills" / "writer"
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: writer
+description: Helps write copy
+---
+""",
+        encoding="utf-8",
+    )
+    (scripts_dir / "fetch.py").write_text(
+        "import requests\nrequests.get('https://example.com')\n",
+        encoding="utf-8",
+    )
+    (workspace_dir / "skills" / "installed.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "installs": [
+                    {
+                        "skill_id": "writer",
+                        "source": "zanblayde/agent-commons",
+                        "source_kind": "clawhub_slug",
+                        "trusted": False,
+                        "has_scripts": True,
+                        "path": str(skill_dir / "SKILL.md"),
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "broodmind.cli.main.load_settings",
+        lambda: SimpleNamespace(workspace_dir=workspace_dir),
+    )
+
+    result = runner.invoke(app, ["skill", "verify", "writer", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "verified"
+    assert payload["script_scan"]["status"] == "review_required"
+
+
+def test_skill_trust_requires_force_when_scan_has_findings(tmp_path: Path, monkeypatch) -> None:
+    workspace_dir = tmp_path / "workspace"
+    skill_dir = workspace_dir / "skills" / "writer"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: writer
+description: Helps write copy
+---
+""",
+        encoding="utf-8",
+    )
+    (workspace_dir / "skills" / "installed.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "installs": [
+                    {
+                        "skill_id": "writer",
+                        "source": "zanblayde/agent-commons",
+                        "source_kind": "clawhub_slug",
+                        "trusted": False,
+                        "has_scripts": True,
+                        "path": str(skill_dir / "SKILL.md"),
+                        "script_scan": {
+                            "status": "review_required",
+                            "scanned_at": "2026-03-21T10:00:00+00:00",
+                            "file_count": 1,
+                            "files": [],
+                            "findings": [{"path": "scripts/fetch.py", "rule": "network_access"}],
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "broodmind.cli.main.load_settings",
+        lambda: SimpleNamespace(workspace_dir=workspace_dir),
+    )
+
+    blocked = runner.invoke(app, ["skill", "trust", "writer", "--json"])
+    assert blocked.exit_code == 1
+    blocked_payload = json.loads(blocked.stdout)
+    assert blocked_payload["status"] == "error"
+
+    allowed = runner.invoke(app, ["skill", "trust", "writer", "--force", "--json"])
+    assert allowed.exit_code == 0
+    allowed_payload = json.loads(allowed.stdout)
+    assert allowed_payload["status"] == "trusted"

@@ -11,6 +11,7 @@ from broodmind.tools.skills.installer import (
     remove_installed_skill,
     set_installed_skill_trust,
     update_installed_skill,
+    verify_installed_skill,
 )
 
 
@@ -41,6 +42,7 @@ description: Helps write copy
     assert installs["count"] == 1
     assert installs["installs"][0]["source_kind"] == "local_dir"
     assert installs["installs"][0]["trusted"] is True
+    assert installs["installs"][0]["script_scan"]["status"] == "no_scripts"
 
 
 def test_install_skill_from_local_zip_extracts_bundle(tmp_path: Path) -> None:
@@ -206,3 +208,34 @@ description: Helps write copy
     assert payload["status"] == "trusted"
     installs = list_installed_skill_sources(workspace_dir)
     assert installs["installs"][0]["trusted"] is True
+
+
+def test_verify_installed_skill_records_scan_findings(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    source_dir = tmp_path / "writer"
+    scripts_dir = source_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (source_dir / "SKILL.md").write_text(
+        """---
+name: writer
+description: Helps write copy
+---
+""",
+        encoding="utf-8",
+    )
+    (scripts_dir / "fetch.py").write_text(
+        "import requests\nrequests.get('https://example.com')\n",
+        encoding="utf-8",
+    )
+
+    install_skill_from_source(str(source_dir), workspace_dir=workspace_dir, trusted=False)
+
+    installed_dir = workspace_dir / "skills" / "writer"
+    if not installed_dir.exists():
+        raise AssertionError("Expected installed bundle directory to exist")
+
+    payload = verify_installed_skill("writer", workspace_dir=workspace_dir)
+
+    assert payload["status"] == "verified"
+    assert payload["script_scan"]["status"] == "review_required"
+    assert payload["script_scan"]["findings"][0]["rule"] == "network_access"

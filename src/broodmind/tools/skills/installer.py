@@ -13,6 +13,7 @@ import httpx
 
 from broodmind.tools.skills.bundles import SkillBundle, load_skill_bundle
 from broodmind.tools.skills.management import ensure_skills_layout
+from broodmind.tools.skills.scanner import scan_skill_bundle
 
 _DEFAULT_CLAWHUB_SITE = "https://clawhub.ai"
 _INSTALL_MANIFEST_VERSION = 1
@@ -185,6 +186,7 @@ def set_installed_skill_trust(
     *,
     workspace_dir: Path,
     trusted: bool,
+    force: bool = False,
 ) -> dict[str, Any]:
     manifest = _read_install_manifest(workspace_dir)
     installs = [item for item in manifest.get("installs", []) if isinstance(item, dict)]
@@ -192,6 +194,17 @@ def set_installed_skill_trust(
     for item in installs:
         if str(item.get("skill_id", "")) != skill_id:
             continue
+        scan = item.get("script_scan")
+        scan_status = str(scan.get("status", "")).strip() if isinstance(scan, dict) else ""
+        if trusted and bool(item.get("has_scripts", False)):
+            if scan_status == "review_required" and not force:
+                raise ValueError(
+                    f"skill '{skill_id}' has script scan findings; run `broodmind skill verify {skill_id}` and re-run trust with --force after review"
+                )
+            if not scan_status:
+                raise ValueError(
+                    f"skill '{skill_id}' has not been verified yet; run `broodmind skill verify {skill_id}` first"
+                )
         item["trusted"] = bool(trusted)
         updated = True
         break
@@ -203,6 +216,41 @@ def set_installed_skill_trust(
         "status": "trusted" if trusted else "untrusted",
         "skill_id": skill_id,
         "trusted": bool(trusted),
+        "manifest_path": str(_install_manifest_path(workspace_dir)),
+    }
+
+
+def verify_installed_skill(skill_id: str, *, workspace_dir: Path) -> dict[str, Any]:
+    manifest = _read_install_manifest(workspace_dir)
+    installs = [item for item in manifest.get("installs", []) if isinstance(item, dict)]
+    updated_record: dict[str, Any] | None = None
+    for item in installs:
+        if str(item.get("skill_id", "")) != skill_id:
+            continue
+        skill_path_raw = str(item.get("path", "")).strip()
+        if not skill_path_raw:
+            raise ValueError(f"skill '{skill_id}' does not have a stored path")
+        skill_path = Path(skill_path_raw).resolve()
+        if not skill_path.exists():
+            raise ValueError(f"installed bundle for '{skill_id}' is missing")
+        bundle = load_skill_bundle(skill_path.parent)
+        if bundle is None:
+            raise ValueError(f"installed bundle for '{skill_id}' is invalid")
+        scan = scan_skill_bundle(bundle)
+        item["has_scripts"] = bool(bundle.scripts_dir)
+        item["script_scan"] = scan
+        updated_record = item
+        break
+    if updated_record is None:
+        raise ValueError(f"skill '{skill_id}' is not installer-managed")
+    manifest["installs"] = installs
+    _write_install_manifest(workspace_dir, manifest)
+    return {
+        "status": "verified",
+        "skill_id": skill_id,
+        "trusted": bool(updated_record.get("trusted", False)),
+        "has_scripts": bool(updated_record.get("has_scripts", False)),
+        "script_scan": updated_record.get("script_scan", {}),
         "manifest_path": str(_install_manifest_path(workspace_dir)),
     }
 
@@ -349,6 +397,7 @@ def _build_install_record(
     trusted: bool | None,
 ) -> dict[str, Any]:
     resolved_trust = _default_trust_for_source(install_source) if trusted is None else bool(trusted)
+    script_scan = scan_skill_bundle(bundle)
     return {
         "skill_id": bundle.id,
         "name": bundle.name,
@@ -359,6 +408,7 @@ def _build_install_record(
         "clawhub_site": clawhub_site.rstrip("/") if install_source.kind == "clawhub_slug" else "",
         "trusted": resolved_trust,
         "has_scripts": bool(bundle.scripts_dir),
+        "script_scan": script_scan,
     }
 
 

@@ -208,6 +208,8 @@ def _tool_list_skills(args: dict[str, Any], ctx: dict[str, Any]) -> str:
                 "has_scripts": bool(raw.get("has_scripts", False)),
                 "installed_source": str(raw.get("installed_source", "")),
                 "installed_source_kind": str(raw.get("installed_source_kind", "")),
+                "scan_status": str(raw.get("scan_status", "")),
+                "scan_findings_count": int(raw.get("scan_findings_count", 0)),
                 **_evaluate_skill_status(raw),
             }
         )
@@ -440,6 +442,8 @@ def _run_skill(skill_data: dict[str, Any], args: dict[str, Any], ctx: dict[str, 
         "has_scripts": bool(skill_data.get("has_scripts", False)),
         "installed_source": str(skill_data.get("installed_source", "")),
         "installed_source_kind": str(skill_data.get("installed_source_kind", "")),
+        "scan_status": str(skill_data.get("scan_status", "")),
+        "scan_findings_count": int(skill_data.get("scan_findings_count", 0)),
         **_evaluate_skill_status(skill_data),
         "task": task,
         "input": input_payload if isinstance(input_payload, (dict, list, str, int, float, bool)) else None,
@@ -712,13 +716,19 @@ def _merge_installed_metadata(skill_data: dict[str, Any], installed_record: dict
         skill_data.setdefault("installer_managed", False)
         skill_data.setdefault("trusted", True)
         skill_data.setdefault("has_scripts", bool(skill_data.get("scripts_dir")))
+        skill_data.setdefault("scan_status", "clean" if bool(skill_data.get("scripts_dir")) else "no_scripts")
+        skill_data.setdefault("scan_findings_count", 0)
         return skill_data
     merged = dict(skill_data)
+    scan = installed_record.get("script_scan")
+    findings = scan.get("findings", []) if isinstance(scan, dict) else []
     merged["installer_managed"] = True
     merged["trusted"] = bool(installed_record.get("trusted", False))
     merged["has_scripts"] = bool(installed_record.get("has_scripts", bool(skill_data.get("scripts_dir"))))
     merged["installed_source"] = str(installed_record.get("source", "")).strip()
     merged["installed_source_kind"] = str(installed_record.get("source_kind", "")).strip()
+    merged["scan_status"] = str(scan.get("status", "missing")) if isinstance(scan, dict) else "missing"
+    merged["scan_findings_count"] = len(findings) if isinstance(findings, list) else 0
     return merged
 
 
