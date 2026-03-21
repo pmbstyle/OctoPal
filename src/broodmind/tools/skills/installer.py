@@ -335,13 +335,16 @@ def _extract_archive(archive_path: Path, destination: Path) -> None:
 
 
 def _discover_bundle_root(root: Path) -> Path:
-    direct_skill = root / "SKILL.md"
-    if direct_skill.exists():
-        return root
+    for candidate_name in ("SKILL.md", "skill.md"):
+        direct_skill = root / candidate_name
+        if direct_skill.exists():
+            return root
 
     candidates: list[Path] = []
-    for skill_file in root.rglob("SKILL.md"):
+    for skill_file in root.rglob("*"):
         if not skill_file.is_file():
+            continue
+        if skill_file.name.lower() != "skill.md":
             continue
         candidates.append(skill_file.parent)
     if len(candidates) == 1:
