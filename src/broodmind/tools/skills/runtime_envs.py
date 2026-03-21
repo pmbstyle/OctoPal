@@ -31,7 +31,7 @@ def detect_skill_runtime(bundle: SkillBundle) -> dict[str, Any]:
     if (has_python_scripts or python_packages) and (has_node_scripts or node_packages):
         return {
             "kind": "mixed",
-            "required": bool(python_packages or node_packages),
+            "required": True,
             "recommended": True,
             "reason": "mixed python and node runtimes are not supported yet",
             "python_packages": python_packages,
@@ -42,8 +42,8 @@ def detect_skill_runtime(bundle: SkillBundle) -> dict[str, Any]:
     if has_python_scripts or python_packages:
         return {
             "kind": "python",
-            "required": bool(python_packages),
-            "recommended": has_python_scripts,
+            "required": True,
+            "recommended": has_python_scripts or bool(python_packages),
             "reason": "",
             "python_packages": python_packages,
             "node_packages": [],
@@ -53,8 +53,8 @@ def detect_skill_runtime(bundle: SkillBundle) -> dict[str, Any]:
     if has_node_scripts or node_packages:
         return {
             "kind": "node",
-            "required": bool(node_packages),
-            "recommended": has_node_scripts,
+            "required": True,
+            "recommended": has_node_scripts or bool(node_packages),
             "reason": "",
             "python_packages": [],
             "node_packages": node_packages,

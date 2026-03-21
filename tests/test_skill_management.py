@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 from broodmind.tools.skills.management import (
@@ -197,6 +198,30 @@ print(json.dumps(payload))
         encoding="utf-8",
     )
     monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setattr(
+        "broodmind.tools.skills.management.get_skill_env_status",
+        lambda skill_id, workspace_dir: {
+            "skill_id": skill_id,
+            "kind": "python",
+            "required": True,
+            "recommended": True,
+            "prepared": True,
+            "status": "prepared",
+            "reason": "",
+            "manifest_path": "",
+            "next_step": "",
+            "python_packages": [],
+            "node_packages": [],
+            "package_manager": "",
+        },
+    )
+    monkeypatch.setattr(
+        "broodmind.tools.skills.management.resolve_skill_runtime_execution",
+        lambda skill_id, workspace_dir, script_path, explicit_runner: {
+            "runner": [sys.executable, str(script_path)],
+            "env": None,
+        },
+    )
 
     raw = _tool_run_skill_script(
         {"skill_id": "writer", "script": "echo_args.py", "args": ["hello"], "workdir": "."},
@@ -226,6 +251,23 @@ description: Helps write copy
     )
     (scripts_dir / "ok.py").write_text("print('ok')\n", encoding="utf-8")
     monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setattr(
+        "broodmind.tools.skills.management.get_skill_env_status",
+        lambda skill_id, workspace_dir: {
+            "skill_id": skill_id,
+            "kind": "python",
+            "required": True,
+            "recommended": True,
+            "prepared": True,
+            "status": "prepared",
+            "reason": "",
+            "manifest_path": "",
+            "next_step": "",
+            "python_packages": [],
+            "node_packages": [],
+            "package_manager": "",
+        },
+    )
 
     result = _tool_run_skill_script(
         {"skill_id": "writer", "script": "../outside.py"},
@@ -439,3 +481,29 @@ metadata:
 
     assert "runtime env is not prepared" in result
     assert "prepare-env job-search" in result
+
+
+def test_run_skill_script_blocks_python_script_without_prepared_env(tmp_path: Path, monkeypatch) -> None:
+    workspace_dir = tmp_path / "workspace"
+    skill_dir = workspace_dir / "skills" / "writer"
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: writer
+description: Helps write copy
+scope: worker
+---
+""",
+        encoding="utf-8",
+    )
+    (scripts_dir / "tool.py").write_text("print('ok')\n", encoding="utf-8")
+    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+
+    result = _tool_run_skill_script(
+        {"skill_id": "writer", "script": "tool.py"},
+        {"base_dir": workspace_dir / "workers", "worker": object()},
+    )
+
+    assert "runtime env is not prepared" in result
+    assert "prepare-env writer" in result

@@ -206,3 +206,26 @@ description: Run TS helpers
     assert status["required"] is True
     assert status["package_manager"] == "npm"
     assert status["node_packages"] == ["chalk@^5.4.0", "tsx@^4.19.0"]
+
+
+def test_get_skill_env_status_requires_env_for_python_script_without_deps(tmp_path: Path) -> None:
+    workspace_dir = tmp_path / "workspace"
+    skill_dir = workspace_dir / "skills" / "writer"
+    scripts_dir = skill_dir / "scripts"
+    scripts_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        """---
+name: writer
+description: Helps write copy
+---
+""",
+        encoding="utf-8",
+    )
+    (scripts_dir / "tool.py").write_text("print('ok')\n", encoding="utf-8")
+
+    status = get_skill_env_status("writer", workspace_dir=workspace_dir)
+
+    assert status["kind"] == "python"
+    assert status["required"] is True
+    assert status["python_packages"] == []
+    assert "prepare-env writer" in status["next_step"]

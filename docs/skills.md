@@ -124,17 +124,18 @@ uv run broodmind skill remove <skill-id>
 
 `update` reinstalls from the stored source recorded in `installed.json`.
 `remove` only affects installer-managed skills and will not delete unmanaged local bundles.
-If a skill includes Python or JS/TS scripts, BroodMind may recommend `skill prepare-env <skill-id>` as the next step.
+If a skill includes Python or JS/TS scripts, BroodMind will recommend `skill prepare-env <skill-id>` as the next step.
 
 ### Isolated runtime envs
 
-Script-backed skills can now use isolated runtime envs stored under:
+Script-backed skills now require isolated runtime envs stored under:
 
 ```text
 workspace/.skill-envs/<skill-id>/
 ```
 
 This keeps the main BroodMind environment clean while still allowing per-skill dependencies.
+Any skill with scripts must be prepared before `run_skill_script` will execute it.
 
 Typical flow:
 
