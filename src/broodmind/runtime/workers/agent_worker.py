@@ -816,20 +816,68 @@ def _is_systemic_tool_bridge_failure(tool_meta: dict[str, Any]) -> bool:
 
 
 def _result_has_error(result: Any) -> bool:
-    if isinstance(result, dict):
-        return isinstance(result.get("error"), str) and bool(result.get("error"))
+    structured = _decode_structured_tool_result(result)
+    if isinstance(structured, dict):
+        if isinstance(structured.get("error"), str) and bool(structured.get("error").strip()):
+            return True
+        status = str(structured.get("status", "")).strip().lower()
+        if status in {"failed", "error"}:
+            return True
+        if structured.get("ok") is False:
+            return True
+        returncode = structured.get("returncode")
+        if isinstance(returncode, int) and returncode != 0:
+            return True
+        if isinstance(returncode, float) and int(returncode) != 0:
+            return True
+        return False
     if isinstance(result, str):
-        lowered = result.lower()
-        return "error" in lowered or "failed" in lowered
+        lowered = result.strip().lower()
+        return (
+            lowered.startswith("error")
+            or lowered.startswith("failed")
+            or "tool execution failed" in lowered
+        )
     return False
 
 
 def _extract_error_text(result: Any) -> str:
-    if isinstance(result, dict) and isinstance(result.get("error"), str):
-        return result["error"]
+    structured = _decode_structured_tool_result(result)
+    if isinstance(structured, dict):
+        if isinstance(structured.get("error"), str) and structured.get("error").strip():
+            return structured["error"]
+        returncode = structured.get("returncode")
+        if isinstance(returncode, (int, float)) and int(returncode) != 0:
+            stderr = structured.get("stderr")
+            if isinstance(stderr, str) and stderr.strip():
+                return stderr
+            stdout = structured.get("stdout")
+            if isinstance(stdout, str) and stdout.strip():
+                return stdout
+            return f"command exited with return code {int(returncode)}"
+        message = structured.get("message")
+        if isinstance(message, str) and message.strip():
+            return message
+        summary = structured.get("summary")
+        if isinstance(summary, str) and summary.strip():
+            return summary
     if isinstance(result, str):
         return result
     return str(result)
+
+
+def _decode_structured_tool_result(result: Any) -> Any:
+    if isinstance(result, dict):
+        return result
+    if not isinstance(result, str):
+        return None
+    stripped = result.strip()
+    if not stripped or stripped[0] not in "{[":
+        return None
+    try:
+        return json.loads(stripped)
+    except Exception:
+        return None
 
 
 def _is_upstream_unavailable_error(text: str) -> bool:
