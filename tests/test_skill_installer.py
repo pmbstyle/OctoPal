@@ -67,7 +67,7 @@ description: Generate images
     assert (workspace_dir / "skills" / "image-lab" / "skill.md").exists()
 
 
-def test_install_skill_reports_next_step_for_python_runtime_env(tmp_path: Path) -> None:
+def test_install_skill_auto_prepares_python_runtime_env(tmp_path: Path, monkeypatch) -> None:
     workspace_dir = tmp_path / "workspace"
     source_dir = tmp_path / "job-search"
     scripts_dir = source_dir / "scripts"
@@ -91,10 +91,21 @@ metadata:
         encoding="utf-8",
     )
     (scripts_dir / "jobspy.py").write_text("print('ok')\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "broodmind.tools.skills.installer.prepare_skill_env",
+        lambda skill_id, workspace_dir: {
+            "status": "prepared",
+            "skill_id": skill_id,
+            "kind": "python",
+        },
+    )
 
     payload = install_skill_from_source(str(source_dir), workspace_dir=workspace_dir)
 
-    assert payload["next_step"] == "uv run broodmind skill prepare-env job-search"
+    assert payload["env_prepared"] is True
+    assert payload["env_kind"] == "python"
+    assert payload["env_error"] == ""
+    assert payload["next_steps"] == []
 
 
 def test_install_skill_from_clawhub_slug_uses_download_adapter(tmp_path: Path, monkeypatch) -> None:
@@ -121,6 +132,14 @@ description: Shared agent helpers
     monkeypatch.setattr(
         "broodmind.tools.skills.installer._download_clawhub_archive",
         _fake_download,
+    )
+    monkeypatch.setattr(
+        "broodmind.tools.skills.installer.prepare_skill_env",
+        lambda skill_id, workspace_dir: {
+            "status": "not_applicable",
+            "skill_id": skill_id,
+            "kind": "",
+        },
     )
 
     payload = install_skill_from_source(

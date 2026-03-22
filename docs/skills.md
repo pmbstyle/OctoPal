@@ -113,10 +113,6 @@ Lifecycle commands:
 uv run broodmind skill install <source>
 uv run broodmind skill list
 uv run broodmind skill update <skill-id>
-uv run broodmind skill verify <skill-id>
-uv run broodmind skill env-status <skill-id>
-uv run broodmind skill prepare-env <skill-id>
-uv run broodmind skill remove-env <skill-id>
 uv run broodmind skill trust <skill-id>
 uv run broodmind skill untrust <skill-id>
 uv run broodmind skill remove <skill-id>
@@ -124,7 +120,7 @@ uv run broodmind skill remove <skill-id>
 
 `update` reinstalls from the stored source recorded in `installed.json`.
 `remove` only affects installer-managed skills and will not delete unmanaged local bundles.
-If a skill includes Python or JS/TS scripts, BroodMind will recommend `skill prepare-env <skill-id>` as the next step.
+For script-backed skills, install and update automatically scan scripts and prepare an isolated runtime env when possible.
 
 ### Isolated runtime envs
 
@@ -135,15 +131,13 @@ workspace/.skill-envs/<skill-id>/
 ```
 
 This keeps the main BroodMind environment clean while still allowing per-skill dependencies.
-Any skill with scripts must be prepared before `run_skill_script` will execute it.
+Any skill with scripts must be prepared before `run_skill_script` will execute it, but installer-managed skills now do this automatically during install and update.
 
 Typical flow:
 
 ```bash
 uv run broodmind skill install <source>
-uv run broodmind skill verify <skill-id>
 uv run broodmind skill trust <skill-id>
-uv run broodmind skill prepare-env <skill-id>
 ```
 
 Python skills can declare packages like:
@@ -214,7 +208,7 @@ This trust flag only affects script execution. The skill guidance in `SKILL.md` 
 
 Installer-managed skills now keep a lightweight verification report in `installed.json`.
 
-The scan currently records:
+Install and update run this scan automatically. The scan currently records:
 
 - hashes and sizes for files inside `scripts/`
 - heuristic findings for network calls
@@ -222,10 +216,11 @@ The scan currently records:
 - destructive file operations
 - runtime package installation
 
-Refresh the report at any time with:
+If you need to repair a local or manually edited skill env, these maintenance commands are still available:
 
 ```bash
-uv run broodmind skill verify <skill-id>
+uv run broodmind skill prepare-env <skill-id>
+uv run broodmind skill remove-env <skill-id>
 ```
 
 This is a review aid, not a sandbox or malware detector.
