@@ -103,6 +103,36 @@ def strip_reaction_tags(text: str) -> str:
     return _REACT_TAG_RE.sub("", normalized_text).strip()
 
 
+def extract_edge_reaction_fallback(text: str, *, max_text_length: int = 48) -> tuple[str | None, str]:
+    """Infer a Telegram reaction from a single short edge emoji when no <react> tag is present."""
+    normalized_text = _ZERO_WIDTH_RE.sub("", text or "").strip()
+    if not normalized_text or "\n" in normalized_text:
+        return None, normalized_text
+
+    emoji_candidates = sorted(
+        set(_TELEGRAM_SUPPORTED_REACTIONS).union(_REACTION_MAPPING.keys()),
+        key=len,
+        reverse=True,
+    )
+
+    for emoji in emoji_candidates:
+        if normalized_text.startswith(emoji):
+            remainder = normalized_text[len(emoji):].strip()
+        elif normalized_text.endswith(emoji):
+            remainder = normalized_text[: -len(emoji)].strip()
+        else:
+            continue
+
+        if len(remainder) > max_text_length:
+            continue
+        if any(other in remainder for other in emoji_candidates):
+            continue
+
+        return normalize_reaction_emoji(emoji), remainder
+
+    return None, normalized_text
+
+
 def escape_html(text: str) -> str:
     """Escape HTML special characters for Telegram HTML parse mode."""
     if not text:

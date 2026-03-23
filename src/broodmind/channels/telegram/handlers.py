@@ -25,6 +25,7 @@ from broodmind.runtime.queen.core import Queen, QueenReply
 from broodmind.runtime.state import update_last_message
 from broodmind.utils import (
     escape_html,
+    extract_edge_reaction_fallback,
     extract_reaction_and_strip,
     normalize_reaction_emoji,
     sanitize_user_facing_text,
@@ -468,11 +469,21 @@ def _flush_pending_turn_factory(
                 update_last_message(settings)
                 final_text = reply.immediate or ""
 
-                emoji, final_text = extract_reaction_and_strip(final_text)
-                effective_emoji = emoji or getattr(reply, "reaction", None)
+                tagged_emoji, final_text = extract_reaction_and_strip(final_text)
+                inferred_emoji = None
+                if not tagged_emoji and not getattr(reply, "reaction", None):
+                    inferred_emoji, final_text = extract_edge_reaction_fallback(final_text)
+                    if inferred_emoji:
+                        logger.debug(
+                            "Inferred terminal reaction from plain-text edge emoji",
+                            chat_id=chat_id,
+                            message_id=reply_to_message_id,
+                            emoji=inferred_emoji,
+                        )
+                effective_emoji = tagged_emoji or getattr(reply, "reaction", None) or inferred_emoji
                 if effective_emoji:
                     logger.debug(
-                        "Detected terminal reaction tag in queen reply",
+                        "Detected terminal reaction in queen reply",
                         chat_id=chat_id,
                         message_id=reply_to_message_id,
                         emoji=effective_emoji,

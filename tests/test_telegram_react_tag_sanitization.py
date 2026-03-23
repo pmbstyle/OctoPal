@@ -6,11 +6,12 @@ import types
 
 from broodmind.infrastructure.config.settings import Settings
 from broodmind.runtime.queen.core import QueenReply
-from broodmind.utils import extract_reaction_and_strip, strip_reaction_tags
+from broodmind.utils import extract_edge_reaction_fallback, extract_reaction_and_strip, strip_reaction_tags
 
 if "telegramify_markdown" not in sys.modules:
     sys.modules["telegramify_markdown"] = types.SimpleNamespace(markdownify=lambda text: text)
 
+from broodmind.channels.telegram import handlers as telegram_handlers
 from broodmind.channels.telegram.handlers import _flush_pending_turn_factory
 
 
@@ -34,6 +35,12 @@ def test_strip_reaction_tags_removes_unknown_react_markup() -> None:
     assert "remains" in cleaned
 
 
+def test_extract_edge_reaction_fallback_handles_short_confirmation_text() -> None:
+    emoji, text = extract_edge_reaction_fallback("Поставила! 👻")
+    assert emoji == "👻"
+    assert text == "Поставила!"
+
+
 def test_telegram_uses_reply_reaction_fallback_when_immediate_loses_tag(tmp_path) -> None:
     class DummyQueen:
         async def handle_message(self, text: str, chat_id: int, images=None, saved_file_paths=None):
@@ -47,12 +54,22 @@ def test_telegram_uses_reply_reaction_fallback_when_immediate_loses_tag(tmp_path
     class DummyBot:
         def __init__(self) -> None:
             self.reactions: list[tuple[int, int, str]] = []
+            self.messages: list[tuple[int, str, int | None]] = []
 
         async def set_message_reaction(self, chat_id: int, message_id: int, reaction):
             self.reactions.append((chat_id, message_id, reaction[0].emoji))
 
         async def send_message(self, chat_id: int, text: str, parse_mode=None, reply_to_message_id=None):
+            self.messages.append((chat_id, text, reply_to_message_id))
             return None
+
+    queued_messages: list[tuple[int, str, int | None]] = []
+
+    async def fake_enqueue_send(bot, chat_id: int, text: str, reply_to_message_id: int | None = None) -> None:
+        queued_messages.append((chat_id, text, reply_to_message_id))
+
+    original_enqueue = telegram_handlers._enqueue_send
+    telegram_handlers._enqueue_send = fake_enqueue_send
 
     settings = Settings(
         BROODMIND_STATE_DIR=tmp_path / "state",
@@ -62,18 +79,85 @@ def test_telegram_uses_reply_reaction_fallback_when_immediate_loses_tag(tmp_path
     bot = DummyBot()
     flush = _flush_pending_turn_factory(DummyQueen(), settings, bot)
 
-    async def scenario() -> None:
-        await flush(
-            211619002,
-            "hello",
-            [],
-            [],
-            {"reply_to_message_id": 4740},
-        )
+    try:
+        async def scenario() -> None:
+            await flush(
+                211619002,
+                "hello",
+                [],
+                [],
+                {"reply_to_message_id": 4740},
+            )
 
-    asyncio.run(scenario())
+        asyncio.run(scenario())
+    finally:
+        telegram_handlers._enqueue_send = original_enqueue
 
     assert bot.reactions == [
         (211619002, 4740, "🤔"),
         (211619002, 4740, "👍"),
+    ]
+    assert queued_messages == [
+        (211619002, "Поставила! Посмотрим, появится ли 👻", 4740),
+    ]
+
+
+def test_telegram_infers_reaction_from_short_text_edge_emoji(tmp_path) -> None:
+    class DummyQueen:
+        async def handle_message(self, text: str, chat_id: int, images=None, saved_file_paths=None):
+            return QueenReply(
+                immediate="Поставила! 👻",
+                followup=None,
+                followup_required=False,
+                reaction=None,
+            )
+
+    class DummyBot:
+        def __init__(self) -> None:
+            self.reactions: list[tuple[int, int, str]] = []
+            self.messages: list[tuple[int, str, int | None]] = []
+
+        async def set_message_reaction(self, chat_id: int, message_id: int, reaction):
+            self.reactions.append((chat_id, message_id, reaction[0].emoji))
+
+        async def send_message(self, chat_id: int, text: str, parse_mode=None, reply_to_message_id=None):
+            self.messages.append((chat_id, text, reply_to_message_id))
+            return None
+
+    queued_messages: list[tuple[int, str, int | None]] = []
+
+    async def fake_enqueue_send(bot, chat_id: int, text: str, reply_to_message_id: int | None = None) -> None:
+        queued_messages.append((chat_id, text, reply_to_message_id))
+
+    original_enqueue = telegram_handlers._enqueue_send
+    telegram_handlers._enqueue_send = fake_enqueue_send
+
+    settings = Settings(
+        BROODMIND_STATE_DIR=tmp_path / "state",
+        BROODMIND_WORKSPACE_DIR=tmp_path / "workspace",
+        BROODMIND_TELEGRAM_PARSE_MODE="MarkdownV2",
+    )
+    bot = DummyBot()
+    flush = _flush_pending_turn_factory(DummyQueen(), settings, bot)
+
+    try:
+        async def scenario() -> None:
+            await flush(
+                211619002,
+                "hello",
+                [],
+                [],
+                {"reply_to_message_id": 4741},
+            )
+
+        asyncio.run(scenario())
+    finally:
+        telegram_handlers._enqueue_send = original_enqueue
+
+    assert bot.reactions == [
+        (211619002, 4741, "🤔"),
+        (211619002, 4741, "👻"),
+    ]
+    assert queued_messages == [
+        (211619002, "Поставила!", 4741),
     ]
