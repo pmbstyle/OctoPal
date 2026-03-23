@@ -141,6 +141,17 @@ def sanitize_user_facing_text(text: str) -> str:
     return cleaned
 
 
+def sanitize_user_facing_text_preserving_reaction(text: str) -> str:
+    """Sanitize user-facing text while keeping a leading reaction tag for channel adapters."""
+    emoji, cleaned = extract_reaction_and_strip(text or "")
+    sanitized = sanitize_user_facing_text(cleaned)
+    if not emoji:
+        return sanitized
+    if sanitized:
+        return f"<react>{emoji}</react> {sanitized}"
+    return f"<react>{emoji}</react>"
+
+
 def _try_parse_json_object(text: str) -> dict | None:
     value = (text or "").strip()
     if not value.startswith("{") or not value.endswith("}"):

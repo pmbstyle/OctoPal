@@ -43,8 +43,10 @@ from broodmind.runtime.scheduler.service import SchedulerService
 from broodmind.runtime.workers.contracts import TaskRequest, WorkerResult
 from broodmind.runtime.workers.runtime import WorkerRuntime
 from broodmind.utils import (
+    extract_reaction_and_strip,
     has_no_user_response_suffix,
     is_control_response,
+    sanitize_user_facing_text_preserving_reaction,
     should_suppress_user_delivery,
     utc_now,
 )
@@ -1401,7 +1403,7 @@ class Queen:
                     self.store.set_chat_bootstrap_hash, chat_id, bootstrap_context.hash, utc_now()
                 )
             return QueenReply(
-                immediate=normalize_plain_text(reply_text),
+                immediate=sanitize_user_facing_text_preserving_reaction(reply_text),
                 followup=None,
                 followup_required=wants_followup,
             )
@@ -1806,15 +1808,22 @@ _FOLLOWUP_REQUIRED_MARKER_NORMALIZED = "FOLLOWUPREQUIRED"
 
 
 def _extract_followup_required_marker(text: str) -> tuple[str, bool]:
-    value = normalize_plain_text(text or "")
+    emoji, cleaned_text = extract_reaction_and_strip(text or "")
+    value = normalize_plain_text(cleaned_text)
     if not value:
+        if emoji:
+            return f"<react>{emoji}</react>", False
         return value, False
 
     trimmed = re.sub(r"[^\w]+$", "", value).strip()
     normalized = re.sub(r"[\s_-]+", "", trimmed).upper()
     if normalized.endswith(_FOLLOWUP_REQUIRED_MARKER_NORMALIZED):
         cleaned = re.sub(r"(?is)(?:\n|\r|\s)*[*_`<>-]*FOLLOWUP[\s_-]*REQUIRED[*_`<>-]*\s*$", "", value).strip()
+        if emoji:
+            cleaned = f"<react>{emoji}</react> {cleaned}".strip()
         return cleaned, True
+    if emoji:
+        value = f"<react>{emoji}</react> {value}".strip()
     return value, False
 
 
