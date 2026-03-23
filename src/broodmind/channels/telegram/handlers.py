@@ -25,6 +25,7 @@ from broodmind.runtime.queen.core import Queen, QueenReply
 from broodmind.runtime.state import update_last_message
 from broodmind.utils import (
     escape_html,
+    extract_edge_reaction_fallback,
     extract_reaction_and_strip,
     normalize_reaction_emoji,
     sanitize_user_facing_text,
@@ -324,25 +325,45 @@ async def _send_chunked(bot: Bot, chat_id: int, text: str, reply_to_message_id: 
 
 
 async def _send_message_safe(bot: Bot, chat_id: int, text: str, reply_to_message_id: int | None = None) -> None:
-    # Prefer HTML for better stability
-    parse_mode = "HTML"
     sanitized = sanitize_user_facing_text(strip_reaction_tags(text))
     if not sanitized:
         logger.debug("Suppressed empty message after Telegram sanitization", chat_id=chat_id)
         return
-    
-    # Escape for HTML mode to prevent parse errors from AI output containing < or >
-    escaped_text = escape_html(sanitized)
-    
+
+    preferred_parse_mode = _TELEGRAM_PARSE_MODE or "MarkdownV2"
+    outbound = sanitized
+
+    if preferred_parse_mode == "MarkdownV2":
+        outbound = _prepare_markdown_v2(sanitized)
+    elif preferred_parse_mode == "HTML":
+        outbound = escape_html(sanitized)
+
     try:
-        await bot.send_message(chat_id, escaped_text, parse_mode=parse_mode, reply_to_message_id=reply_to_message_id)
+        await bot.send_message(
+            chat_id,
+            outbound,
+            parse_mode=preferred_parse_mode,
+            reply_to_message_id=reply_to_message_id,
+        )
     except TelegramBadRequest as exc:
-        # Fallback to plain text if HTML parsing still fails
         logger.warning(
-            "Telegram HTML parse failed; retrying without parse_mode (error=%s)",
+            "Telegram parse failed; retrying with HTML fallback (parse_mode=%s, error=%s)",
+            preferred_parse_mode,
             exc,
         )
-        await bot.send_message(chat_id, sanitized, reply_to_message_id=reply_to_message_id)
+        try:
+            await bot.send_message(
+                chat_id,
+                escape_html(sanitized),
+                parse_mode="HTML",
+                reply_to_message_id=reply_to_message_id,
+            )
+        except TelegramBadRequest as html_exc:
+            logger.warning(
+                "Telegram HTML parse failed; retrying without parse_mode (error=%s)",
+                html_exc,
+            )
+            await bot.send_message(chat_id, sanitized, reply_to_message_id=reply_to_message_id)
 
 
 async def _enqueue_send(bot: Bot, chat_id: int, text: str, reply_to_message_id: int | None = None) -> None:
@@ -448,17 +469,55 @@ def _flush_pending_turn_factory(
                 update_last_message(settings)
                 final_text = reply.immediate or ""
 
-                emoji, final_text = extract_reaction_and_strip(final_text)
-                if emoji and reply_to_message_id is not None:
-                    mapped_emoji = normalize_reaction_emoji(emoji)
+                tagged_emoji, final_text = extract_reaction_and_strip(final_text)
+                inferred_emoji = None
+                if not tagged_emoji and not getattr(reply, "reaction", None):
+                    inferred_emoji, final_text = extract_edge_reaction_fallback(final_text)
+                    if inferred_emoji:
+                        logger.debug(
+                            "Inferred terminal reaction from plain-text edge emoji",
+                            chat_id=chat_id,
+                            message_id=reply_to_message_id,
+                            emoji=inferred_emoji,
+                        )
+                effective_emoji = tagged_emoji or getattr(reply, "reaction", None) or inferred_emoji
+                if effective_emoji:
+                    logger.debug(
+                        "Detected terminal reaction in queen reply",
+                        chat_id=chat_id,
+                        message_id=reply_to_message_id,
+                        emoji=effective_emoji,
+                        reply_reaction=getattr(reply, "reaction", None),
+                    )
+                elif reply_to_message_id is not None:
+                    logger.debug(
+                        "No terminal reaction tag found in queen reply",
+                        chat_id=chat_id,
+                        message_id=reply_to_message_id,
+                        reply_reaction=getattr(reply, "reaction", None),
+                    )
+                if effective_emoji and reply_to_message_id is not None:
+                    mapped_emoji = normalize_reaction_emoji(effective_emoji)
                     try:
                         await bot.set_message_reaction(
                             chat_id=chat_id,
                             message_id=reply_to_message_id,
                             reaction=[ReactionTypeEmoji(emoji=mapped_emoji)],
                         )
+                        logger.debug(
+                            "Applied terminal reaction to Telegram message",
+                            chat_id=chat_id,
+                            message_id=reply_to_message_id,
+                            requested_emoji=effective_emoji,
+                            applied_emoji=mapped_emoji,
+                        )
                     except Exception as exc:
-                        logger.warning("Failed to set terminal reaction", chat_id=chat_id, emoji=emoji, exc_info=True)
+                        logger.warning(
+                            "Failed to set terminal reaction",
+                            chat_id=chat_id,
+                            emoji=effective_emoji,
+                            exc_info=True,
+                        )
                 
                 if final_text:
                     await _enqueue_send(bot, chat_id, final_text, reply_to_message_id=reply_to_message_id)
@@ -501,3 +560,10 @@ def _normalize_parse_mode(raw: str | None) -> str | None:
         return "Markdown"
     logger.warning("Unknown BROODMIND_TELEGRAM_PARSE_MODE value; using plain text (value=%s)", value)
     return None
+
+
+def _prepare_markdown_v2(text: str) -> str:
+    """Convert common markdown into Telegram-safe MarkdownV2."""
+    if not text:
+        return ""
+    return telegramify_markdown.markdownify(text)

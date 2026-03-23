@@ -10,7 +10,7 @@ _TEXTUAL_TOOL_PREVIEW_RE = re.compile(
     r"^(?P<tool>(?:mcp__[\w-]+__)?[a-z][a-z0-9_]{1,63})(?P<rest>(?:,\s*[a-z_][a-z0-9_ -]{0,31}:\s*[^,\n]{1,200})+)$",
     re.IGNORECASE,
 )
-_REACT_TAG_RE = re.compile(r"<react>(.*?)</react>", re.IGNORECASE | re.DOTALL)
+_REACT_TAG_RE = re.compile(r"<\s*react\s*>(.*?)<\s*/\s*react\s*>", re.IGNORECASE | re.DOTALL)
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _THINK_TAG_RE = re.compile(r"</?think>", re.IGNORECASE)
 _TOOL_TAG_RE = re.compile(r"</?(?:tool_call|tool_code|tool_result|step|plan|thought).*?>", re.IGNORECASE)
@@ -19,6 +19,7 @@ _TOOL_RESULT_LINE_RE = re.compile(
     r"(?:^|\n)\s*Tool result \([^)]+\):\s*(?:\{.*?\}|\[.*?\]|.+?)(?=\n|$)",
     re.IGNORECASE | re.DOTALL,
 )
+_ZERO_WIDTH_RE = re.compile(r"[\u200b\u200c\u200d\ufeff\u2060]")
 # Standard Telegram bot reactions (as of Bot API 7.3+)
 _TELEGRAM_SUPPORTED_REACTIONS = {
     "👍", "👎", "❤", "🔥", "🥰", "👏", "😁", "🤔", "🤯", "😱", "🤬", "😢", "🎉", "🤩", "🤮", "💩",
@@ -88,16 +89,48 @@ def normalize_reaction_emoji(emoji: str) -> str:
 
 
 def extract_reaction_and_strip(text: str) -> tuple[str | None, str]:
-    match = _REACT_TAG_RE.search(text or "")
+    normalized_text = _ZERO_WIDTH_RE.sub("", text or "")
+    match = _REACT_TAG_RE.search(normalized_text)
     if not match:
-        return None, text or ""
+        return None, normalized_text
     emoji = (match.group(1) or "").strip() or None
-    cleaned = _REACT_TAG_RE.sub("", text or "").strip()
+    cleaned = _REACT_TAG_RE.sub("", normalized_text).strip()
     return emoji, cleaned
 
 
 def strip_reaction_tags(text: str) -> str:
-    return _REACT_TAG_RE.sub("", text or "").strip()
+    normalized_text = _ZERO_WIDTH_RE.sub("", text or "")
+    return _REACT_TAG_RE.sub("", normalized_text).strip()
+
+
+def extract_edge_reaction_fallback(text: str, *, max_text_length: int = 48) -> tuple[str | None, str]:
+    """Infer a Telegram reaction from a single short edge emoji when no <react> tag is present."""
+    normalized_text = _ZERO_WIDTH_RE.sub("", text or "").strip()
+    if not normalized_text or "\n" in normalized_text:
+        return None, normalized_text
+
+    emoji_candidates = sorted(
+        set(_TELEGRAM_SUPPORTED_REACTIONS).union(_REACTION_MAPPING.keys()),
+        key=len,
+        reverse=True,
+    )
+
+    for emoji in emoji_candidates:
+        if normalized_text.startswith(emoji):
+            remainder = normalized_text[len(emoji):].strip()
+        elif normalized_text.endswith(emoji):
+            remainder = normalized_text[: -len(emoji)].strip()
+        else:
+            continue
+
+        if len(remainder) > max_text_length:
+            continue
+        if any(other in remainder for other in emoji_candidates):
+            continue
+
+        return normalize_reaction_emoji(emoji), remainder
+
+    return None, normalized_text
 
 
 def escape_html(text: str) -> str:
@@ -139,6 +172,17 @@ def sanitize_user_facing_text(text: str) -> str:
 
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
+
+
+def sanitize_user_facing_text_preserving_reaction(text: str) -> str:
+    """Sanitize user-facing text while keeping a leading reaction tag for channel adapters."""
+    emoji, cleaned = extract_reaction_and_strip(text or "")
+    sanitized = sanitize_user_facing_text(cleaned)
+    if not emoji:
+        return sanitized
+    if sanitized:
+        return f"<react>{emoji}</react> {sanitized}"
+    return f"<react>{emoji}</react>"
 
 
 def _try_parse_json_object(text: str) -> dict | None:

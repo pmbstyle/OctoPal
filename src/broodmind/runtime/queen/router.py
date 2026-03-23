@@ -30,8 +30,10 @@ from broodmind.tools.diagnostics import ToolResolutionReport, resolve_tool_diagn
 from broodmind.tools.registry import ToolPolicy, ToolPolicyPipelineStep, ToolSpec
 from broodmind.tools.tools import get_tools
 from broodmind.utils import (
+    extract_reaction_and_strip,
     looks_like_textual_tool_invocation,
     sanitize_user_facing_text,
+    sanitize_user_facing_text_preserving_reaction,
     should_suppress_user_delivery,
 )
 
@@ -1147,10 +1149,11 @@ async def _finalize_response(
     *,
     internal_followup: bool,
 ) -> str:
-    cleaned = normalize_plain_text(response_text or "")
+    cleaned = sanitize_user_facing_text_preserving_reaction(response_text or "")
     if not cleaned:
         return cleaned
-    if looks_like_textual_tool_invocation(cleaned):
+    _, cleaned_visible_text = extract_reaction_and_strip(cleaned)
+    if looks_like_textual_tool_invocation(cleaned_visible_text):
         logger.warning("Final response collapsed to textual tool invocation; attempting rewrite", preview=cleaned[:120])
         rewrite_messages = list(messages)
         rewrite_messages.append(
@@ -1164,14 +1167,15 @@ async def _finalize_response(
                 ),
             )
         )
-        rewritten = normalize_plain_text(
+        rewritten = sanitize_user_facing_text_preserving_reaction(
             await _complete_text(
                 provider,
                 rewrite_messages,
                 context="rewrite_textual_tool_invocation",
             )
         )
-        if rewritten and not looks_like_textual_tool_invocation(rewritten):
+        _, rewritten_visible_text = extract_reaction_and_strip(rewritten)
+        if rewritten and not looks_like_textual_tool_invocation(rewritten_visible_text):
             return rewritten
         if internal_followup:
             return "NO_USER_RESPONSE"

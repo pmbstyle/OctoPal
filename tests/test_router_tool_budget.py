@@ -572,3 +572,20 @@ def test_finalize_response_preserves_control_token_without_rewrite() -> None:
         assert result == "NO_USER_RESPONSE"
 
     asyncio.run(scenario())
+
+
+def test_finalize_response_preserves_reaction_only_reply() -> None:
+    class DummyProvider:
+        async def complete(self, messages, **kwargs):
+            raise AssertionError("reaction-only reply should not trigger rewrite")
+
+    async def scenario() -> None:
+        result = await _finalize_response(
+            DummyProvider(),
+            [Message(role="system", content="Rewrite if needed.")],
+            "<react>👍</react>",
+            internal_followup=False,
+        )
+        assert result == "<react>👍</react>"
+
+    asyncio.run(scenario())

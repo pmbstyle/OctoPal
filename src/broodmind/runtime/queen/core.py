@@ -43,8 +43,10 @@ from broodmind.runtime.scheduler.service import SchedulerService
 from broodmind.runtime.workers.contracts import TaskRequest, WorkerResult
 from broodmind.runtime.workers.runtime import WorkerRuntime
 from broodmind.utils import (
+    extract_reaction_and_strip,
     has_no_user_response_suffix,
     is_control_response,
+    sanitize_user_facing_text_preserving_reaction,
     should_suppress_user_delivery,
     utc_now,
 )
@@ -1373,6 +1375,7 @@ class Queen:
                             break
                     if not removed:
                         raise
+            initial_reaction_emoji, _ = extract_reaction_and_strip(reply_text or "")
             reply_text, wants_followup = _extract_followup_required_marker(reply_text)
             if not track_progress:
                 reply_text = _coerce_control_plane_reply(reply_text)
@@ -1400,10 +1403,20 @@ class Queen:
                 await asyncio.to_thread(
                     self.store.set_chat_bootstrap_hash, chat_id, bootstrap_context.hash, utc_now()
                 )
+            immediate_text = sanitize_user_facing_text_preserving_reaction(reply_text)
+            reaction_emoji, _ = extract_reaction_and_strip(reply_text or "")
+            reaction_emoji = reaction_emoji or initial_reaction_emoji
+            logger.debug(
+                "QueenReply prepared for channel delivery",
+                chat_id=chat_id,
+                has_react_tag="<react>" in immediate_text.lower(),
+                reaction=reaction_emoji,
+            )
             return QueenReply(
-                immediate=normalize_plain_text(reply_text),
+                immediate=immediate_text,
                 followup=None,
                 followup_required=wants_followup,
+                reaction=reaction_emoji,
             )
         finally:
             if correlation_token is not None:
@@ -1806,15 +1819,22 @@ _FOLLOWUP_REQUIRED_MARKER_NORMALIZED = "FOLLOWUPREQUIRED"
 
 
 def _extract_followup_required_marker(text: str) -> tuple[str, bool]:
-    value = normalize_plain_text(text or "")
+    emoji, cleaned_text = extract_reaction_and_strip(text or "")
+    value = normalize_plain_text(cleaned_text)
     if not value:
+        if emoji:
+            return f"<react>{emoji}</react>", False
         return value, False
 
     trimmed = re.sub(r"[^\w]+$", "", value).strip()
     normalized = re.sub(r"[\s_-]+", "", trimmed).upper()
     if normalized.endswith(_FOLLOWUP_REQUIRED_MARKER_NORMALIZED):
         cleaned = re.sub(r"(?is)(?:\n|\r|\s)*[*_`<>-]*FOLLOWUP[\s_-]*REQUIRED[*_`<>-]*\s*$", "", value).strip()
+        if emoji:
+            cleaned = f"<react>{emoji}</react> {cleaned}".strip()
         return cleaned, True
+    if emoji:
+        value = f"<react>{emoji}</react> {value}".strip()
     return value, False
 
 
@@ -2008,3 +2028,4 @@ class QueenReply:
     immediate: str
     followup: asyncio.Task[str] | None
     followup_required: bool = False
+    reaction: str | None = None
