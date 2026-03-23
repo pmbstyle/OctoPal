@@ -155,6 +155,63 @@ def test_queen_handle_message_preserves_react_tag_for_channels(monkeypatch) -> N
     asyncio.run(scenario())
 
 
+def test_queen_handle_message_preserves_reaction_when_output_is_only_react_tag(monkeypatch) -> None:
+    class DummyApprovals:
+        bot = None
+
+    class DummyMemory:
+        async def add_message(self, role: str, text: str, metadata: dict):
+            return None
+
+    class DummyStore:
+        def list_memory_entries_by_chat(self, chat_id: int, limit: int):
+            return []
+
+        def set_chat_bootstrap_hash(self, chat_id: int, value: str, updated_at) -> None:
+            return None
+
+    async def fake_bootstrap_context(store, chat_id: int):
+        from broodmind.runtime.queen.prompt_builder import BootstrapContext
+
+        return BootstrapContext(content="", hash="", files=[])
+
+    async def fake_route_or_reply(
+        queen,
+        provider,
+        memory,
+        user_text: str,
+        chat_id: int,
+        bootstrap_context: str,
+        show_typing: bool = True,
+        saved_file_paths=None,
+        include_wakeup: bool = True,
+        images=None,
+    ):
+        return "<react>👍</react>"
+
+    import broodmind.runtime.queen.core as queen_core
+
+    monkeypatch.setattr(queen_core, "build_bootstrap_context_prompt", fake_bootstrap_context)
+    monkeypatch.setattr(queen_core, "route_or_reply", fake_route_or_reply)
+
+    queen = Queen(
+        provider=object(),
+        store=DummyStore(),
+        policy=object(),
+        runtime=object(),
+        approvals=DummyApprovals(),
+        memory=DummyMemory(),
+        canon=object(),
+    )
+
+    async def scenario() -> None:
+        reply = await queen.handle_message("hello", 123)
+        assert reply.immediate == "<react>👍</react>"
+        assert reply.reaction == "👍"
+
+    asyncio.run(scenario())
+
+
 def test_recent_task_reservations_are_scoped_by_chat_and_correlation() -> None:
     class _Memory:
         async def add_message(self, role: str, content: str, metadata: dict):

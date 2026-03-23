@@ -1375,6 +1375,7 @@ class Queen:
                             break
                     if not removed:
                         raise
+            initial_reaction_emoji, _ = extract_reaction_and_strip(reply_text or "")
             reply_text, wants_followup = _extract_followup_required_marker(reply_text)
             if not track_progress:
                 reply_text = _coerce_control_plane_reply(reply_text)
@@ -1404,6 +1405,7 @@ class Queen:
                 )
             immediate_text = sanitize_user_facing_text_preserving_reaction(reply_text)
             reaction_emoji, _ = extract_reaction_and_strip(reply_text or "")
+            reaction_emoji = reaction_emoji or initial_reaction_emoji
             logger.debug(
                 "QueenReply prepared for channel delivery",
                 chat_id=chat_id,
