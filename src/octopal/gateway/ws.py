@@ -8,7 +8,7 @@ from typing import Any
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, status
 import structlog
 
-from octopal.runtime.queen.core import Queen, QueenReply
+from octopal.runtime.octo.core import Octo, OctoReply
 from octopal.utils import get_tailscale_ips, should_suppress_user_delivery
 
 logger = structlog.get_logger(__name__)
@@ -84,10 +84,10 @@ def register_ws_routes(app: FastAPI) -> None:
         connection_id = f"ws-{uuid.uuid4().hex}"
         session_chat_id = _resolve_ws_chat_id(settings)
 
-        queen: Queen | None = getattr(app.state, "queen", None)
-        if not queen:
-            logger.error("Queen not initialized in app state")
-            await socket.send_json({"type": "error", "message": "Queen not initialized"})
+        octo: Octo | None = getattr(app.state, "octo", None)
+        if not octo:
+            logger.error("Octo not initialized in app state")
+            await socket.send_json({"type": "error", "message": "Octo not initialized"})
             await socket.close(code=status.WS_1011_INTERNAL_ERROR)
             return
         
@@ -104,8 +104,8 @@ def register_ws_routes(app: FastAPI) -> None:
         async def _ws_typing(chat_id: int, active: bool) -> None:
             await socket.send_json({"type": "typing", "active": active})
 
-        # Switch Queen to use WebSocket for output
-        claimed = queen.set_output_channel(
+        # Switch Octo to use WebSocket for output
+        claimed = octo.set_output_channel(
             True,
             send=_ws_send,
             progress=_ws_progress,
@@ -132,7 +132,7 @@ def register_ws_routes(app: FastAPI) -> None:
                     if isinstance(payload_chat_id, int) and payload_chat_id > 0:
                         chat_id = payload_chat_id
 
-                    task = asyncio.create_task(_handle_message(socket, queen, approvals, message, chat_id))
+                    task = asyncio.create_task(_handle_message(socket, octo, approvals, message, chat_id))
                     tasks.add(task)
                     task.add_done_callback(lambda t: tasks.discard(t))
                     continue
@@ -150,31 +150,31 @@ def register_ws_routes(app: FastAPI) -> None:
             logger.info("WebSocket disconnected", host=client_host)
         finally:
             # Switch back to Telegram when WS closes
-            queen.set_output_channel(False, owner_id=connection_id)
+            octo.set_output_channel(False, owner_id=connection_id)
             for task in tasks:
                 task.cancel()
 
 
 async def _handle_message(
     socket: WebSocket,
-    queen: Queen,
+    octo: Octo,
     approvals: WsApprovalManager,
     payload: dict[str, Any],
     chat_id: int,
 ) -> None:
     text = str(payload.get("text", ""))
     try:
-        response = await queen.handle_message(
+        response = await octo.handle_message(
             text,
             chat_id,
             approval_requester=approvals.request_approval,
             is_ws=True,
         )
     except Exception as exc:
-        logger.exception("Queen failed to handle WS message")
+        logger.exception("Octo failed to handle WS message")
         response = f"Error: {exc}"
 
-    text_out = response.immediate if isinstance(response, QueenReply) else str(response)
+    text_out = response.immediate if isinstance(response, OctoReply) else str(response)
     if should_suppress_user_delivery(text_out):
         logger.debug("Suppressed control response for WebSocket reply", chat_id=chat_id)
         return

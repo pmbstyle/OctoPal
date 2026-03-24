@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from octopal.runtime.queen.core import Queen
+from octopal.runtime.octo.core import Octo
 from octopal.runtime.scheduler.service import SchedulerService
 from octopal.tools.tools import _tool_check_schedule, _tool_schedule_task, _tool_scheduler_status
 from octopal.runtime.workers.contracts import WorkerResult
@@ -79,7 +79,7 @@ def test_schedule_task_rejects_invalid_frequency(tmp_path: Path) -> None:
             "frequency": "Every often",
             "task": "Generate digest",
         },
-        {"queen": SimpleNamespace(scheduler=scheduler)},
+        {"octo": SimpleNamespace(scheduler=scheduler)},
     )
     assert result.startswith("schedule_task error:")
 
@@ -115,7 +115,7 @@ def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
     )
     scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
     payload = json.loads(
-        asyncio.run(_tool_check_schedule({}, {"queen": SimpleNamespace(scheduler=scheduler)}))
+        asyncio.run(_tool_check_schedule({}, {"octo": SimpleNamespace(scheduler=scheduler)}))
     )
     assert payload["due_count"] == 1
     assert payload["due_tasks"][0]["task_id"] == "daily_digest"
@@ -151,7 +151,7 @@ def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> No
     )
     scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
     payload = json.loads(
-        asyncio.run(_tool_scheduler_status({}, {"queen": SimpleNamespace(scheduler=scheduler)}))
+        asyncio.run(_tool_scheduler_status({}, {"octo": SimpleNamespace(scheduler=scheduler)}))
     )
 
     assert payload["status"] == "ok"
@@ -163,11 +163,11 @@ def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> No
     assert any("due now" in hint for hint in payload["hints"])
 
 
-def test_queen_marks_scheduled_task_after_successful_worker_run_even_if_store_lags() -> None:
+def test_octo_marks_scheduled_task_after_successful_worker_run_even_if_store_lags() -> None:
     async def _run(worker_status: str | None) -> list[str]:
         store = _StoreStub(worker_status=worker_status)
         scheduler = SchedulerService(store=store, workspace_dir=Path("."))
-        queen = Queen(
+        octo = Octo(
             provider=object(),
             store=store,
             policy=object(),
@@ -177,7 +177,7 @@ def test_queen_marks_scheduled_task_after_successful_worker_run_even_if_store_la
             canon=object(),
             scheduler=scheduler,
         )
-        await queen._start_worker_async(
+        await octo._start_worker_async(
             worker_id="writer",
             task="Generate digest",
             chat_id=0,

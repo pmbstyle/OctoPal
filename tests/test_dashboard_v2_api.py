@@ -28,7 +28,7 @@ def test_dashboard_v2_routes_return_contract_envelopes(tmp_path) -> None:
     cases = [
         ("/api/dashboard/v2/overview", "dashboard.v2.overview"),
         ("/api/dashboard/v2/incidents", "dashboard.v2.incidents"),
-        ("/api/dashboard/v2/queen", "dashboard.v2.queen"),
+        ("/api/dashboard/v2/octo", "dashboard.v2.octo"),
         ("/api/dashboard/v2/workers", "dashboard.v2.workers"),
         ("/api/dashboard/v2/system", "dashboard.v2.system"),
         ("/api/dashboard/v2/actions", "dashboard.v2.actions"),
@@ -125,7 +125,7 @@ def test_dashboard_v2_uses_whatsapp_metrics_for_active_channel(tmp_path) -> None
                     "chat_mappings": 2,
                     "updated_at": utc_now().isoformat(),
                 },
-                "queen": {
+                "octo": {
                     "followup_queues": 0,
                     "internal_queues": 0,
                     "followup_tasks": 0,
@@ -153,12 +153,12 @@ def test_dashboard_v2_uses_whatsapp_metrics_for_active_channel(tmp_path) -> None
     assert overview_payload["system"]["active_channel"] == "WhatsApp"
     assert overview_payload["system"]["active_channel_id"] == "whatsapp"
 
-    queen = client.get("/api/dashboard/v2/queen", headers=headers)
-    assert queen.status_code == 200
-    queen_payload = queen.json()
-    assert queen_payload["queues"]["active_channel"] == "whatsapp"
-    assert queen_payload["queues"]["active_channel_label"] == "WhatsApp"
-    assert queen_payload["queues"]["channel_connected"] == 1
-    assert queen_payload["queues"]["channel_chat_mappings"] == 2
-    assert queen_payload["queues"]["channel_queue_depth"] == 0
-    assert queen_payload["queues"]["channel_send_tasks"] is None
+    octo = client.get("/api/dashboard/v2/octo", headers=headers)
+    assert octo.status_code == 200
+    octo_payload = octo.json()
+    assert octo_payload["queues"]["active_channel"] == "whatsapp"
+    assert octo_payload["queues"]["active_channel_label"] == "WhatsApp"
+    assert octo_payload["queues"]["channel_connected"] == 1
+    assert octo_payload["queues"]["channel_chat_mappings"] == 2
+    assert octo_payload["queues"]["channel_queue_depth"] == 0
+    assert octo_payload["queues"]["channel_send_tasks"] is None

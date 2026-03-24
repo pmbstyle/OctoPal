@@ -31,7 +31,7 @@ def test_gateway_status_summarizes_runtime_and_channel_state(monkeypatch, tmp_pa
         tool_catalog,
         "read_metrics_snapshot",
         lambda _state_dir: {
-            "queen": {
+            "octo": {
                 "followup_queues": 2,
                 "internal_queues": 1,
                 "followup_tasks": 1,
@@ -64,7 +64,7 @@ def test_gateway_status_summarizes_runtime_and_channel_state(monkeypatch, tmp_pa
     assert payload["status"] == "ok"
     assert payload["running"] is True
     assert payload["gateway"]["active_channel"] == "telegram"
-    assert payload["queen"]["followup_queues"] == 2
+    assert payload["octo"]["followup_queues"] == 2
     assert payload["channel"]["queue_depth"] == 4
     assert payload["exec"]["sessions_running"] == 1
     assert payload["mcp"]["servers_connected"] == 1

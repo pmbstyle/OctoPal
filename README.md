@@ -9,12 +9,12 @@
 Octopal is a local AI hive that runs autonomous workers to complete tasks for you.
 It acts as a persistent AI operator that can plan work, spawn specialized agents, and manage long-running workflows.
 
-The **Queen** is the long-running coordinator: it holds memory, plans work, chooses tools, manages context, and delegates execution.
+The **Octo** is the long-running coordinator: it holds memory, plans work, chooses tools, manages context, and delegates execution.
 **Workers** are short-lived specialists with limited permissions, bounded context, and task-specific tool access.
 
 Octopal is designed for persistent assistant workflows, not just single prompts. It combines conversation channels, reusable workers, scheduling, memory, canon, policy controls, and an ops dashboard into one local system you can run on your own machine or server.
 
-This separation improves safety and reliability: sensitive context stays with the Queen, while workers receive only the minimal context needed to complete a task.
+This separation improves safety and reliability: sensitive context stays with the Octo, while workers receive only the minimal context needed to complete a task.
 
 ## 🪛 What It Can Do
 
@@ -34,7 +34,7 @@ User
    │
 Channels (Telegram / WhatsApp / WS)
    │
- Queen
+ Octo
    │
  Worker Pool
    │
@@ -48,11 +48,11 @@ Channels (Telegram / WhatsApp / WS)
 User:
 "Research the latest Gemini model and write a summary."
 
-Queen:
+Octo:
 1. Spawns Web Researcher
 2. Researcher fetches sources
 3. Writer worker generates summary
-4. Queen stores canon entry
+4. Octo stores canon entry
 5. Result returned to user
 
 ## 🚀 Quick Start
@@ -215,15 +215,15 @@ Octopal works from a specified directory and has no access to your system compon
 
 ### 🧠 Delegation-driven architecture
 
-The Queen, which holds all system context and sensitive data, never communicates with the outside world on its own.
-Instead, the Queen delegates tasks to workers with limited context and predefined tool/skill sets.
+The Octo, which holds all system context and sensitive data, never communicates with the outside world on its own.
+Instead, the Octo delegates tasks to workers with limited context and predefined tool/skill sets.
 Workers can spawn subworkers for multi-step tasks. Workers can only return response of their tasks or question/error responses. 
 
-- the Queen delegates external operations to workers, which ensures context isolation, enhances security, and provides async task execution
+- the Octo delegates external operations to workers, which ensures context isolation, enhances security, and provides async task execution
 - workers execute in an isolated environment, which gets deleted after each execution
 - workers can act as orchestrators and create sub-workers for multi-tasking
 - workers operate with a predefined set of tools, MCP, and skills in their config as well as `max_thinking_steps` and `execution_timeout`
-- the Queen can create new workers for a specific task (ex. use a skill to work with an external resource)
+- the Octo can create new workers for a specific task (ex. use a skill to work with an external resource)
 - Prebuilt worker templates include:
   - Web Researcher
   - Web Fetcher
@@ -237,7 +237,7 @@ Workers can spawn subworkers for multi-step tasks. Workers can only return respo
 
 ### 📃 Multilayer memory system
 
-The Queen operates with a local vector database to store communication history and file-based context:
+The Octo operates with a local vector database to store communication history and file-based context:
 
 - **MEMORY.md** – working memory and durable context; important facts, current state, and notes the system may need across sessions
 - **memory/canon/** – curated long-term knowledge that has been reviewed and promoted into trusted reference material
@@ -258,7 +258,7 @@ Communication channels, by default, provide full support of functions like:
 - message reactions
 - 5s grace window for user messages.
 
-  You can send a followback message before the Queen executes it - this helps to prevent typos, wrong commands, etc.
+  You can send a followback message before the Octo executes it - this helps to prevent typos, wrong commands, etc.
 
 ### ⚙️ Web dashboard
 

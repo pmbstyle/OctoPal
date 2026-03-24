@@ -23,7 +23,7 @@ const navItems = [
   { to: "/", label: "Control" },
   { to: "/overview", label: "Overview" },
   { to: "/workers", label: "Workers" },
-  { to: "/queen", label: "Queen" },
+  { to: "/octo", label: "Octo" },
   { to: "/incidents", label: "Incidents" },
   { to: "/system", label: "System" },
   { to: "/actions", label: "Actions" },
@@ -80,7 +80,7 @@ export function AppShell() {
             Operations Control Center
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Live view for queen activity, worker pool, queue pressure and system health.
+            Live view for octo activity, worker pool, queue pressure and system health.
           </p>
         </header>
         <GlobalFiltersBar filters={filters} onChange={setFilters} />

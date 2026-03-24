@@ -1,7 +1,7 @@
 """
 Simplified Worker Runtime
 
-Queen creates tasks -> Runtime looks up worker template -> Launches agent worker
+Octo creates tasks -> Runtime looks up worker template -> Launches agent worker
 """
 from __future__ import annotations
 
@@ -52,7 +52,7 @@ class WorkerRuntime:
     launcher: WorkerLauncher
     settings: Settings
     mcp_manager: MCPManager | None = None
-    queen: Any | None = None
+    octo: Any | None = None
     _running: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
 
     async def run_task(
@@ -177,7 +177,7 @@ class WorkerRuntime:
             if config_obj.worker_llm_default.provider_id or config_obj.worker_llm_default.model:
                 worker_config = config_obj.worker_llm_default
 
-        # 3. If still none, fallback to Queen's LLM config
+        # 3. If still none, fallback to Octo's LLM config
         if not worker_config:
             worker_config = config_obj.llm
 
@@ -474,11 +474,11 @@ class WorkerRuntime:
                 log_method = getattr(logger, level, logger.debug)
                 log_method("Worker %s: %s", spec.id, message)
                 return None
-            if msg_type == "queen_tool_call":
-                if not self.queen:
+            if msg_type == "octo_tool_call":
+                if not self.octo:
                     await self._write_to_worker(
                         process,
-                        {"type": "queen_tool_result", "ok": False, "error": "Queen runtime bridge unavailable."},
+                        {"type": "octo_tool_result", "ok": False, "error": "Octo runtime bridge unavailable."},
                     )
                     return None
 
@@ -495,12 +495,12 @@ class WorkerRuntime:
                     if spec_tool is None:
                         await self._write_to_worker(
                             process,
-                            {"type": "queen_tool_result", "ok": False, "error": f"Unknown queen tool: {tool_name}"},
+                            {"type": "octo_tool_result", "ok": False, "error": f"Unknown octo tool: {tool_name}"},
                         )
                         return None
 
                     tool_ctx: dict[str, Any] = {
-                        "queen": self.queen,
+                        "octo": self.octo,
                         "chat_id": 0,
                         "base_dir": self.workspace_dir,
                         "worker": SimpleNamespace(spec=spec),
@@ -513,12 +513,12 @@ class WorkerRuntime:
                         result = await asyncio.to_thread(spec_tool.handler, arguments, tool_ctx)
                     await self._write_to_worker(
                         process,
-                        {"type": "queen_tool_result", "ok": True, "result": result},
+                        {"type": "octo_tool_result", "ok": True, "result": result},
                     )
                 except Exception as exc:
                     await self._write_to_worker(
                         process,
-                        {"type": "queen_tool_result", "ok": False, "error": str(exc)},
+                        {"type": "octo_tool_result", "ok": False, "error": str(exc)},
                     )
                 return None
             if msg_type == "mcp_call":

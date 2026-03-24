@@ -6,9 +6,9 @@ import os
 import structlog
 from aiogram import Bot, Dispatcher
 
-from octopal.runtime.app import build_queen
+from octopal.runtime.app import build_octo
 from octopal.infrastructure.config.settings import Settings
-from octopal.runtime.queen.core import Queen, QueenReply
+from octopal.runtime.octo.core import Octo, OctoReply
 from octopal.channels.telegram.approvals import ApprovalManager
 from octopal.channels.telegram.handlers import register_handlers
 from octopal.utils import is_heartbeat_ok, is_control_response
@@ -19,27 +19,27 @@ logger = structlog.get_logger(__name__)
 def build_dispatcher(settings: Settings, bot: Bot) -> Dispatcher:
     os.environ.setdefault("OCTOPAL_STATE_DIR", str(settings.state_dir))
     os.environ.setdefault("OCTOPAL_WORKSPACE_DIR", str(settings.workspace_dir))
-    queen = build_queen(settings)
-    queen.approvals = ApprovalManager(bot=bot)
+    octo = build_octo(settings)
+    octo.approvals = ApprovalManager(bot=bot)
 
     dp = Dispatcher()
-    register_handlers(dp, queen, queen.approvals, settings, bot)
-    return dp, queen
+    register_handlers(dp, octo, octo.approvals, settings, bot)
+    return dp, octo
 
 
-async def _heartbeat_poker(queen: Queen, interval_seconds: int, chat_id: int):
-    """Periodically triggers the queen's heartbeat logic."""
+async def _heartbeat_poker(octo: Octo, interval_seconds: int, chat_id: int):
+    """Periodically triggers the octo's heartbeat logic."""
     logger.info("Starting application-level heartbeat with interval=%ss", interval_seconds)
     while True:
         await asyncio.sleep(interval_seconds)
         logger.info("Triggering internal heartbeat for chat_id=%s", chat_id)
         try:
-            context_hint = await queen.build_heartbeat_context_hint(chat_id)
+            context_hint = await octo.build_heartbeat_context_hint(chat_id)
             heartbeat_prompt = (
                 "This is a heartbeat trigger. Use `check_schedule` to identify and execute any due tasks.\n\n"
                 f"{context_hint}"
             )
-            reply = await queen.handle_message(
+            reply = await octo.handle_message(
                 heartbeat_prompt,
                 chat_id,
                 show_typing=False,
@@ -48,7 +48,7 @@ async def _heartbeat_poker(queen: Queen, interval_seconds: int, chat_id: int):
                 include_wakeup=False,
             )
             # Heartbeat replies are control-plane responses; don't send them to Telegram chat.
-            if isinstance(reply, QueenReply):
+            if isinstance(reply, OctoReply):
                 text = (reply.immediate or "").strip()
                 if is_control_response(text):
                     logger.debug("Heartbeat processed successfully (control response acknowledged)", response=text)
@@ -64,20 +64,20 @@ async def _heartbeat_poker(queen: Queen, interval_seconds: int, chat_id: int):
             logger.exception("Internal heartbeat execution failed")
 
 
-async def run_bot(settings: Settings, existing_queen: Queen | None = None) -> None:
+async def run_bot(settings: Settings, existing_octo: Octo | None = None) -> None:
     bot = Bot(token=settings.telegram_bot_token)
-    if existing_queen:
+    if existing_octo:
         dp = Dispatcher()
         from octopal.channels.telegram.approvals import ApprovalManager
         from octopal.channels.telegram.handlers import register_handlers
 
         approvals = ApprovalManager(bot=bot)
-        # Update queen's approval bot
-        existing_queen.approvals = approvals
-        register_handlers(dp, existing_queen, approvals, settings, bot)
-        queen = existing_queen
+        # Update octo's approval bot
+        existing_octo.approvals = approvals
+        register_handlers(dp, existing_octo, approvals, settings, bot)
+        octo = existing_octo
     else:
-        dp, queen = build_dispatcher(settings, bot)
+        dp, octo = build_dispatcher(settings, bot)
 
     # Parse allowed chat IDs from settings
     allowed_chat_ids = []
@@ -89,17 +89,17 @@ async def run_bot(settings: Settings, existing_queen: Queen | None = None) -> No
         except ValueError:
             logger.error("Invalid ALLOWED_TELEGRAM_CHAT_IDS format - must be comma-separated integers")
 
-    # Initialize queen system before starting polling
-    logger.info("Initializing queen system")
-    await queen.initialize_system(bot, allowed_chat_ids=allowed_chat_ids)
-    logger.info("Queen system initialization complete")
+    # Initialize octo system before starting polling
+    logger.info("Initializing octo system")
+    await octo.initialize_system(bot, allowed_chat_ids=allowed_chat_ids)
+    logger.info("Octo system initialization complete")
 
     # Start application-level heartbeat if configured
     heartbeat_task = None
     if settings.heartbeat_interval_seconds > 0 and allowed_chat_ids:
         heartbeat_task = asyncio.create_task(
             _heartbeat_poker(
-                queen,
+                octo,
                 settings.heartbeat_interval_seconds,
                 allowed_chat_ids[0],  # Use the first allowed chat as the context
             )
@@ -119,5 +119,5 @@ async def run_bot(settings: Settings, existing_queen: Queen | None = None) -> No
             except asyncio.CancelledError:
                 logger.info("Stopped internal heartbeat task.")
 
-        logger.info("Stopping queen background tasks")
-        await queen.stop_background_tasks()
+        logger.info("Stopping octo background tasks")
+        await octo.stop_background_tasks()

@@ -16,10 +16,10 @@ from octopal.channels.whatsapp.ids import (
     whatsapp_chat_id,
 )
 from octopal.infrastructure.config.settings import Settings
-from octopal.runtime.app import build_queen
+from octopal.runtime.app import build_octo
 from octopal.runtime.metrics import update_component_gauges
 from octopal.runtime.pending_turns import PendingTurnAggregator
-from octopal.runtime.queen.core import Queen
+from octopal.runtime.octo.core import Octo
 from octopal.runtime.state import update_last_message
 from octopal.utils import (
     extract_reaction_and_strip,
@@ -36,7 +36,7 @@ class WhatsAppRuntime:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.bridge = WhatsAppBridgeController(settings)
-        self.queen: Queen = build_queen(settings)
+        self.octo: Octo = build_octo(settings)
         self._number_by_chat_id: dict[int, str] = {}
         self._lock_by_chat_id: dict[int, asyncio.Lock] = {}
         self._pending_turns = PendingTurnAggregator(
@@ -45,7 +45,7 @@ class WhatsAppRuntime:
         )
         self._publish_metrics()
 
-    def attach_queen_output(self) -> None:
+    def attach_octo_output(self) -> None:
         async def _internal_send(chat_id: int, text: str) -> None:
             if should_suppress_user_delivery(text):
                 return
@@ -87,15 +87,15 @@ class WhatsAppRuntime:
         async def _internal_typing_control(chat_id: int, active: bool) -> None:
             logger.debug("WhatsApp typing indicator not implemented", chat_id=chat_id, active=active)
 
-        self.queen.internal_send = _internal_send
-        self.queen.internal_progress_send = _internal_progress_send
-        self.queen.internal_typing_control = _internal_typing_control
-        self.queen._tg_send = _internal_send
-        self.queen._tg_progress = _internal_progress_send
-        self.queen._tg_typing = _internal_typing_control
+        self.octo.internal_send = _internal_send
+        self.octo.internal_progress_send = _internal_progress_send
+        self.octo.internal_typing_control = _internal_typing_control
+        self.octo._tg_send = _internal_send
+        self.octo._tg_progress = _internal_progress_send
+        self.octo._tg_typing = _internal_typing_control
 
-    async def start(self) -> Queen:
-        self.attach_queen_output()
+    async def start(self) -> Octo:
+        self.attach_octo_output()
         callback_url = (
             f"http://127.0.0.1:{self.settings.gateway_port}/api/channels/whatsapp/inbound"
         )
@@ -103,17 +103,17 @@ class WhatsAppRuntime:
         allowed_numbers = parse_allowed_whatsapp_numbers(self.settings.allowed_whatsapp_numbers)
         for number in allowed_numbers:
             self._number_by_chat_id[whatsapp_chat_id(number)] = number
-        await self.queen.initialize_system(
+        await self.octo.initialize_system(
             bot=None,
             allowed_chat_ids=[whatsapp_chat_id(number) for number in allowed_numbers],
         )
         self._publish_metrics(connected=True)
-        return self.queen
+        return self.octo
 
     async def stop(self) -> None:
         self.bridge.stop()
         await self._pending_turns.stop()
-        await self.queen.stop_background_tasks()
+        await self.octo.stop_background_tasks()
         self._publish_metrics(connected=False)
 
     async def handle_inbound(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -245,7 +245,7 @@ class WhatsAppRuntime:
                 logger.debug("Failed to set WhatsApp thinking reaction", chat_id=chat_id)
 
         async with lock:
-            reply = await self.queen.handle_message(
+            reply = await self.octo.handle_message(
                 text,
                 chat_id,
                 images=images,
@@ -278,7 +278,7 @@ class WhatsAppRuntime:
                     )
 
             if final_text and not should_suppress_user_delivery(final_text):
-                await self.queen.internal_send(chat_id, final_text)
+                await self.octo.internal_send(chat_id, final_text)
 
 
 def _chunk_text(text: str, limit: int) -> list[str]:

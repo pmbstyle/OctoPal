@@ -4,9 +4,9 @@ from typing import Any
 
 
 async def manage_canon(args: dict[str, Any], ctx: dict[str, Any]) -> str:
-    """Queen tool to manage canonical memory."""
-    queen = ctx["queen"]
-    canon = queen.canon
+    """Octo tool to manage canonical memory."""
+    octo = ctx["octo"]
+    canon = octo.canon
 
     action = args.get("action")
     filename = args.get("filename")
@@ -38,9 +38,9 @@ async def manage_canon(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     return f"Unknown action: {action}"
 
 async def search_canon(args: dict[str, Any], ctx: dict[str, Any]) -> str:
-    """Queen tool to search canonical memory."""
-    queen = ctx["queen"]
-    canon = queen.canon
+    """Octo tool to search canonical memory."""
+    octo = ctx["octo"]
+    canon = octo.canon
 
     query = args.get("query")
     if not query:

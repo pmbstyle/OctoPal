@@ -119,68 +119,68 @@ _TOOL_METADATA_BY_NAME: dict[str, ToolMetadata] = {
         profile_tags=("research", "communication", "minimal"),
         capabilities=("memory_read", "search"),
     ),
-    "queen_context_health": ToolMetadata(
+    "octo_context_health": ToolMetadata(
         category="runtime",
         profile_tags=("minimal", "ops"),
         capabilities=("self_observe",),
     ),
-    "queen_context_reset": ToolMetadata(
+    "octo_context_reset": ToolMetadata(
         category="runtime",
         risk="guarded",
         profile_tags=("ops",),
         capabilities=("self_observe", "self_recover"),
     ),
-    "queen_opportunity_scan": ToolMetadata(
+    "octo_opportunity_scan": ToolMetadata(
         category="runtime",
         profile_tags=("ops", "research"),
         capabilities=("self_observe", "planning"),
     ),
-    "queen_self_queue_add": ToolMetadata(
+    "octo_self_queue_add": ToolMetadata(
         category="runtime",
         risk="guarded",
         profile_tags=("ops", "communication"),
         capabilities=("self_queue_write",),
     ),
-    "queen_self_queue_list": ToolMetadata(
+    "octo_self_queue_list": ToolMetadata(
         category="runtime",
         profile_tags=("ops", "communication"),
         capabilities=("self_queue_read",),
     ),
-    "queen_self_queue_take": ToolMetadata(
+    "octo_self_queue_take": ToolMetadata(
         category="runtime",
         risk="guarded",
         profile_tags=("ops", "communication"),
         capabilities=("self_queue_write",),
     ),
-    "queen_self_queue_update": ToolMetadata(
+    "octo_self_queue_update": ToolMetadata(
         category="runtime",
         risk="guarded",
         profile_tags=("ops", "communication"),
         capabilities=("self_queue_write",),
     ),
-    "queen_experiment_log": ToolMetadata(
+    "octo_experiment_log": ToolMetadata(
         category="memory",
         risk="guarded",
         profile_tags=("ops",),
         capabilities=("memory_write", "self_improve"),
     ),
-    "queen_memchain_status": ToolMetadata(
+    "octo_memchain_status": ToolMetadata(
         category="runtime",
         profile_tags=("ops",),
         capabilities=("self_observe", "integrity_read"),
     ),
-    "queen_memchain_verify": ToolMetadata(
+    "octo_memchain_verify": ToolMetadata(
         category="runtime",
         profile_tags=("ops",),
         capabilities=("self_observe", "integrity_verify"),
     ),
-    "queen_memchain_record": ToolMetadata(
+    "octo_memchain_record": ToolMetadata(
         category="runtime",
         risk="guarded",
         profile_tags=("ops",),
         capabilities=("integrity_write",),
     ),
-    "queen_memchain_init": ToolMetadata(
+    "octo_memchain_init": ToolMetadata(
         category="runtime",
         risk="guarded",
         profile_tags=("ops",),

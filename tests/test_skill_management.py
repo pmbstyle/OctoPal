@@ -68,7 +68,7 @@ description: Generate images from prompts
                         "name": "Image Lab Override",
                         "description": "Registry override wins",
                         "path": "skills/image-lab/SKILL.md",
-                        "scope": "queen",
+                        "scope": "octo",
                         "enabled": False,
                     }
                 ],
@@ -85,7 +85,7 @@ description: Generate images from prompts
     assert inventory[0]["source"] == "registry"
     assert inventory[0]["name"] == "image-lab"
     assert inventory[0]["description"] == "Generate images from prompts"
-    assert inventory[0]["scope"] == "queen"
+    assert inventory[0]["scope"] == "octo"
     assert inventory[0]["enabled"] is False
 
 

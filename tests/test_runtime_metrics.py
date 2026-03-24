@@ -10,14 +10,14 @@ def test_update_component_gauges_writes_and_merges_metrics(tmp_path: Path, monke
     state_dir = tmp_path / "state"
     monkeypatch.setenv("OCTOPAL_STATE_DIR", str(state_dir))
 
-    update_component_gauges("queen", {"queued": 3})
+    update_component_gauges("octo", {"queued": 3})
     update_component_gauges("workers", {"active": 2})
 
     snapshot = read_metrics_snapshot(state_dir)
 
-    assert snapshot["queen"]["queued"] == 3
+    assert snapshot["octo"]["queued"] == 3
     assert snapshot["workers"]["active"] == 2
-    assert snapshot["queen"]["updated_at"]
+    assert snapshot["octo"]["updated_at"]
     assert snapshot["workers"]["updated_at"]
 
 

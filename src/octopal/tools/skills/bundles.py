@@ -320,7 +320,7 @@ def _resolve_scope(
     scope = str(frontmatter.get("scope", "")).strip().lower()
     if not scope and isinstance(registry_entry, dict):
         scope = str(registry_entry.get("scope", "")).strip().lower()
-    return scope if scope in {"queen", "worker", "both"} else "both"
+    return scope if scope in {"octo", "worker", "both"} else "both"
 
 
 def _existing_child_dir(bundle_dir: Path, name: str) -> Path | None:

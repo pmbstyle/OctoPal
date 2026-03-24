@@ -5,14 +5,14 @@ from fastapi import FastAPI
 from octopal.infrastructure.config.settings import Settings
 from octopal.gateway.dashboard import register_dashboard_routes
 from octopal.gateway.ws import register_ws_routes
-from octopal.runtime.queen.core import Queen
+from octopal.runtime.octo.core import Octo
 from octopal.tools.skills.management import ensure_skills_layout
 from octopal.channels.whatsapp.routes import register_whatsapp_routes
 
-def build_app(settings: Settings, queen: Queen | None = None) -> FastAPI:
+def build_app(settings: Settings, octo: Octo | None = None) -> FastAPI:
     """Build the FastAPI app for the Octopal Gateway.
     
-    It reuses the shared Queen instance for WebSocket communication.
+    It reuses the shared Octo instance for WebSocket communication.
     """
     os.environ.setdefault("OCTOPAL_STATE_DIR", str(settings.state_dir))
     os.environ.setdefault("OCTOPAL_WORKSPACE_DIR", str(settings.workspace_dir))
@@ -20,16 +20,16 @@ def build_app(settings: Settings, queen: Queen | None = None) -> FastAPI:
     app = FastAPI(title="Octopal Gateway")
     
     app.state.settings = settings
-    app.state.queen = queen
+    app.state.octo = octo
     
     # Expose necessary components if any route needs them
-    if queen:
-        app.state.store = queen.store
-        app.state.policy = queen.policy
-        app.state.runtime = queen.runtime
-        app.state.provider = queen.provider
-        app.state.memory = queen.memory
-        app.state.canon = queen.canon
+    if octo:
+        app.state.store = octo.store
+        app.state.policy = octo.policy
+        app.state.runtime = octo.runtime
+        app.state.provider = octo.provider
+        app.state.memory = octo.memory
+        app.state.canon = octo.canon
     
     register_ws_routes(app)
     register_dashboard_routes(app)

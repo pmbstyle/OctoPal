@@ -14,8 +14,8 @@ _MAX_TEXT_LEN = 280
 _MAX_EVIDENCE_ITEMS = 6
 
 
-async def queen_experiment_log(args: dict[str, Any], ctx: dict[str, Any]) -> str:
-    """Append a compact Queen self-improvement observation to experiments/results.jsonl."""
+async def octo_experiment_log(args: dict[str, Any], ctx: dict[str, Any]) -> str:
+    """Append a compact Octo self-improvement observation to experiments/results.jsonl."""
     workspace_dir = Path(ctx.get("base_dir") or Path("workspace")).resolve()
     experiments_dir = workspace_dir / "experiments"
     experiments_dir.mkdir(parents=True, exist_ok=True)

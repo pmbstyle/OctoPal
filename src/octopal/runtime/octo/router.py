@@ -20,9 +20,9 @@ from octopal.runtime.tool_loop import (
     _hash_tool_outcome,
     _resolve_tool_loop_thresholds,
 )
-from octopal.runtime.queen.prompt_builder import (
+from octopal.runtime.octo.prompt_builder import (
     build_bootstrap_context_prompt,
-    build_queen_prompt,
+    build_octo_prompt,
 )
 from octopal.runtime.tool_payloads import render_tool_result_for_llm
 from octopal.runtime.workers.contracts import WorkerResult
@@ -43,9 +43,9 @@ _MAX_VERIFY_CONTEXT_CHARS = 20000
 _DEFAULT_MAX_TOOL_COUNT = 64
 _MIN_TOOL_COUNT_ON_OVERFLOW = 12
 _PRIORITY_TOOL_NAMES = {
-    "queen_context_reset",
-    "queen_context_health",
-    "queen_experiment_log",
+    "octo_context_reset",
+    "octo_context_health",
+    "octo_experiment_log",
     "check_schedule",
     "start_worker",
     "get_worker_result",
@@ -56,9 +56,9 @@ _PRIORITY_TOOL_NAMES = {
     "manage_canon",
 }
 _ALWAYS_INCLUDE_TOOL_NAMES = {
-    # Queen self-control baseline
-    "queen_context_reset",
-    "queen_context_health",
+    # Octo self-control baseline
+    "octo_context_reset",
+    "octo_context_health",
     "check_schedule",
     "scheduler_status",
     # Scheduler control loop
@@ -119,7 +119,7 @@ def _build_saved_image_fallback_text(user_text: str, saved_paths: list[str]) -> 
 
 
 async def route_or_reply(
-    queen: Any,
+    octo: Any,
     provider: InferenceProvider,
     memory: MemoryService,
     user_text: str,
@@ -135,32 +135,32 @@ async def route_or_reply(
     """Core routing logic: decide whether to use tools or reply to user."""
     # Internal chat_id (<= 0) should not trigger typing indicators.
     if chat_id > 0 and show_typing:
-        await queen.set_typing(chat_id, True)
+        await octo.set_typing(chat_id, True)
 
-    await queen.set_thinking(True)
+    await octo.set_thinking(True)
     try:
-        partial_callback = _build_partial_callback(queen=queen, chat_id=chat_id)
-        is_ws = getattr(queen, "is_ws_active", False)
+        partial_callback = _build_partial_callback(octo=octo, chat_id=chat_id)
+        is_ws = getattr(octo, "is_ws_active", False)
         wake_notice = ""
-        if include_wakeup and hasattr(queen, "peek_context_wakeup"):
-            wake_notice = str(queen.peek_context_wakeup(chat_id) or "")
-        mcp_manager = getattr(queen, "mcp_manager", None)
+        if include_wakeup and hasattr(octo, "peek_context_wakeup"):
+            wake_notice = str(octo.peek_context_wakeup(chat_id) or "")
+        mcp_manager = getattr(octo, "mcp_manager", None)
         if mcp_manager is not None:
             try:
                 await mcp_manager.ensure_configured_servers_connected()
             except Exception:
                 logger.warning("Failed to refresh configured MCP servers before routing", exc_info=True)
 
-        queen_tools, ctx = _get_queen_tools(queen, chat_id)
-        logger.info("Queen tools fetched: count=%d", len(queen_tools))
-        tool_policy_summary = _build_queen_tool_policy_summary(
-            queen_tools,
+        octo_tools, ctx = _get_octo_tools(octo, chat_id)
+        logger.info("Octo tools fetched: count=%d", len(octo_tools))
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
             ctx.get("tool_resolution_report"),
         )
-        messages = await build_queen_prompt(
-            store=queen.store,
+        messages = await build_octo_prompt(
+            store=octo.store,
             memory=memory,
-            canon=queen.canon,
+            canon=octo.canon,
             user_text=user_text,
             chat_id=chat_id,
             bootstrap_context=bootstrap_context,
@@ -183,11 +183,11 @@ async def route_or_reply(
             )
         _log_system_prompt(messages, "route")
 
-        plan = await _build_plan(provider, messages, bool(queen_tools))
+        plan = await _build_plan(provider, messages, bool(octo_tools))
         if plan:
             await _persist_plan(memory, chat_id, plan)
             logger.info(
-                "Queen plan ready",
+                "Octo plan ready",
                 mode=plan["mode"],
                 steps=len(plan.get("steps", [])),
             )
@@ -215,7 +215,7 @@ async def route_or_reply(
         tool_capable = getattr(provider, "complete_with_tools", None)
 
         if callable(tool_capable):
-            active_tool_specs = list(queen_tools)
+            active_tool_specs = list(octo_tools)
             tools = [spec.to_openai_tool() for spec in active_tool_specs]
             last_error: str | None = None
             had_tool_calls = False
@@ -376,9 +376,9 @@ async def route_or_reply(
                     messages.append(assistant_msg)
 
                     for call in tool_calls:
-                        tool_result, tool_meta = await _handle_queen_tool_call(call, active_tool_specs, ctx)
+                        tool_result, tool_meta = await _handle_octo_tool_call(call, active_tool_specs, ctx)
                         tool_result_text = render_tool_result_for_llm(tool_result).text
-                        loop_state = _record_queen_tool_call(
+                        loop_state = _record_octo_tool_call(
                             tool_call_history,
                             call=call,
                             tool_result=tool_result,
@@ -395,7 +395,7 @@ async def route_or_reply(
                         )
                         if loop_state is not None:
                             logger.warning(
-                                "Queen tool loop detected",
+                                "Octo tool loop detected",
                                 detector=loop_state["detector"],
                                 level=loop_state["level"],
                                 count=loop_state["count"],
@@ -414,7 +414,7 @@ async def route_or_reply(
                                 fallback_text = await _complete_text(
                                     provider,
                                     messages,
-                                    context="queen_tool_loop_breaker",
+                                    context="octo_tool_loop_breaker",
                                 )
                                 return await _finalize_response(
                                     provider=provider,
@@ -427,7 +427,7 @@ async def route_or_reply(
                     continue
 
                 if content_raw:
-                    logger.debug("Queen output", output=content_raw)
+                    logger.debug("Octo output", output=content_raw)
                     return await _finalize_response(
                         provider=provider,
                         messages=messages,
@@ -518,7 +518,7 @@ async def route_or_reply(
             context="plain_completion",
             on_partial=partial_callback,
         )
-        logger.debug("Queen output", output=response_raw)
+        logger.debug("Octo output", output=response_raw)
         return await _finalize_response(
             provider=provider,
             messages=messages,
@@ -529,14 +529,14 @@ async def route_or_reply(
         logger.exception("Error in route_or_reply")
         raise
     finally:
-        await queen.set_thinking(False)
+        await octo.set_thinking(False)
         if chat_id > 0 and show_typing:
             logger.debug("Toggling typing indicator off", chat_id=chat_id)
-            await queen.set_typing(chat_id, False)
+            await octo.set_typing(chat_id, False)
 
 
-async def route_worker_result_back_to_queen(
-    queen: Any,
+async def route_worker_result_back_to_octo(
+    octo: Any,
     chat_id: int,
     task_text: str,
     result: WorkerResult,
@@ -572,18 +572,18 @@ async def route_worker_result_back_to_queen(
         "Interpretation rules:\n"
         "- `summary` is internal worker/runtime text and is not user-facing by default.\n"
         "- Never forward transport/debug/auth/orchestration text to the user.\n"
-        "- If you answer the user, write a clean Queen response in plain language.\n\n"
+        "- If you answer the user, write a clean Octo response in plain language.\n\n"
         "If the output is truncated and you need specific details, use `get_worker_output_path`.\n"
         "If there are knowledge_proposals, review them and use `manage_canon` to save them if valid.\n"
         "If a user-facing response is required now, provide it in plain text.\n"
         "If no user-facing response is needed, return exactly: NO_USER_RESPONSE"
     )
 
-    bootstrap_context = await build_bootstrap_context_prompt(queen.store, chat_id)
+    bootstrap_context = await build_bootstrap_context_prompt(octo.store, chat_id)
     reply_text = await route_or_reply(
-        queen,
-        queen.provider,
-        queen.memory,
+        octo,
+        octo.provider,
+        octo.memory,
         worker_result_prompt,
         chat_id,
         bootstrap_context.content,
@@ -634,7 +634,7 @@ def should_force_worker_followup(result: WorkerResult) -> bool:
 
 
 def build_forced_worker_followup(result: WorkerResult) -> str:
-    """Build a concise Queen-style fallback when routing suppresses a useful update."""
+    """Build a concise Octo-style fallback when routing suppresses a useful update."""
     lead = _build_generic_worker_completion_message(result)
     if lead == "Task finished.":
         return ""
@@ -679,14 +679,14 @@ def _log_system_prompt(messages: list[Message], label: str) -> None:
     system_lengths = [len(m.content) for m in messages if m.role == "system" and m.content]
     if system_lengths:
         logger.debug(
-            "Queen system prompt",
+            "Octo system prompt",
             label=label,
             parts=len(system_lengths),
             total_chars=sum(system_lengths),
         )
 
 
-def _get_queen_tools(queen: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, object]]:
+def _get_octo_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, object]]:
     perms = {
         "filesystem_read": True,
         "filesystem_write": True,
@@ -708,13 +708,13 @@ def _get_queen_tools(queen: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str
     }
     ctx = {
         "base_dir": Path(os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")).resolve(),
-        "queen": queen,
+        "octo": octo,
         "chat_id": chat_id
     }
-    mcp_manager = getattr(queen, "mcp_manager", None)
+    mcp_manager = getattr(octo, "mcp_manager", None)
     policy_steps = [
         ToolPolicyPipelineStep(
-            label="queen.raw_fetch_denylist",
+            label="octo.raw_fetch_denylist",
             policy=ToolPolicy(deny=["web_fetch", "markdown_new_fetch", "fetch_plan_tool"]),
         )
     ]
@@ -831,7 +831,7 @@ def _shrink_tool_specs_for_retry(tool_specs: list[ToolSpec]) -> list[ToolSpec]:
     return _budget_tool_specs(tool_specs, max_count=reduced)
 
 
-async def _handle_queen_tool_call(
+async def _handle_octo_tool_call(
     call: dict,
     tools: list[ToolSpec],
     ctx: dict[str, object],
@@ -844,7 +844,7 @@ async def _handle_queen_tool_call(
     except Exception:
         args = {}
 
-    logger.debug("Queen tool call", tool_name=name, args=args)
+    logger.debug("Octo tool call", tool_name=name, args=args)
     for spec in tools:
         if spec.name == name:
             try:
@@ -857,19 +857,19 @@ async def _handle_queen_tool_call(
                 else:
                     result = await asyncio.to_thread(spec.handler, args, ctx)
             except Exception as exc:
-                logger.exception("Queen tool execution failed", tool_name=name)
+                logger.exception("Octo tool execution failed", tool_name=name)
                 return {
                     "error": f"Tool execution failed: {name}: {exc}"
                 }, {"timed_out": False, "had_error": True}
-            logger.debug("Queen tool result", tool_name=name, result_preview=f"{str(result)[:200]}...")
+            logger.debug("Octo tool result", tool_name=name, result_preview=f"{str(result)[:200]}...")
             return result, {"timed_out": False, "had_error": False}
-    blocked_payload = _resolve_queen_policy_block(tool_name=str(name or ""), ctx=ctx)
+    blocked_payload = _resolve_octo_policy_block(tool_name=str(name or ""), ctx=ctx)
     if blocked_payload is not None:
         return blocked_payload, {"timed_out": False, "had_error": True, "error_type": "policy_block"}
     return {"error": f"Unknown tool: {name}"}, {"timed_out": False, "had_error": True}
 
 
-def _record_queen_tool_call(
+def _record_octo_tool_call(
     history: list[dict[str, str]],
     *,
     call: dict[str, Any],
@@ -904,7 +904,7 @@ def _record_queen_tool_call(
     )
 
 
-def _build_queen_tool_policy_summary(
+def _build_octo_tool_policy_summary(
     active_tools: list[ToolSpec],
     report: ToolResolutionReport | None,
 ) -> str:
@@ -938,7 +938,7 @@ def _build_queen_tool_policy_summary(
     )
 
 
-def _resolve_queen_policy_block(tool_name: str, ctx: dict[str, object]) -> dict[str, Any] | None:
+def _resolve_octo_policy_block(tool_name: str, ctx: dict[str, object]) -> dict[str, Any] | None:
     normalized_name = str(tool_name or "").strip().lower()
     if not normalized_name:
         return None
@@ -955,7 +955,7 @@ def _resolve_queen_policy_block(tool_name: str, ctx: dict[str, object]) -> dict[
             "tool": entry.tool.name,
             "reason": entry.reasons[0] if entry.reasons else "blocked_by_policy",
             "risk": entry.tool.metadata.risk,
-            "message": f"Tool '{entry.tool.name}' is blocked by the current Queen tool policy.",
+            "message": f"Tool '{entry.tool.name}' is blocked by the current Octo tool policy.",
             "hint": _policy_block_hint(entry.tool),
         }
     return None
@@ -1418,12 +1418,12 @@ def _message_shape(messages: list[dict[str, str]]) -> list[dict[str, Any]]:
 
 def _build_partial_callback(
     *,
-    queen: Any,
+    octo: Any,
     chat_id: int,
 ) -> Callable[[str], Awaitable[None]] | None:
-    if chat_id <= 0 or not getattr(queen, "is_ws_active", False):
+    if chat_id <= 0 or not getattr(octo, "is_ws_active", False):
         return None
-    sender = getattr(queen, "internal_progress_send", None)
+    sender = getattr(octo, "internal_progress_send", None)
     if not callable(sender):
         return None
 

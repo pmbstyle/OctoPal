@@ -23,7 +23,7 @@ from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.logging import correlation_id_var
 from octopal.runtime.metrics import update_component_gauges
 from octopal.runtime.pending_turns import PendingTurnAggregator
-from octopal.runtime.queen.core import Queen, QueenReply
+from octopal.runtime.octo.core import Octo, OctoReply
 from octopal.runtime.state import update_last_message
 from octopal.utils import (
     escape_html,
@@ -133,7 +133,7 @@ def _is_duplicate_inbound_payload(chat_id: int, sender_id: int | None, fingerpri
 
 
 def register_handlers(
-    dp: Dispatcher, queen: Queen, approvals: ApprovalManager, settings: Settings, bot: Bot
+    dp: Dispatcher, octo: Octo, approvals: ApprovalManager, settings: Settings, bot: Bot
 ) -> None:
     global _TELEGRAM_PARSE_MODE, _TYPING_LOCK, _PENDING_TURNS
     _TELEGRAM_PARSE_MODE = _normalize_parse_mode(settings.telegram_parse_mode)
@@ -141,7 +141,7 @@ def register_handlers(
         _TYPING_LOCK = asyncio.Lock()
     _PENDING_TURNS = PendingTurnAggregator(
         grace_seconds=getattr(settings, "user_message_grace_seconds", 5.0),
-        flush_callback=_flush_pending_turn_factory(queen, settings, bot),
+        flush_callback=_flush_pending_turn_factory(octo, settings, bot),
     )
     allowed_chat_ids = parse_allowed_chat_ids(settings.allowed_telegram_chat_ids)
 
@@ -186,14 +186,14 @@ def register_handlers(
                     _TYPING_REFS[chat_id] = count
         _publish_runtime_metrics()
 
-    queen.internal_send = _internal_send
-    queen.internal_progress_send = _internal_progress_send
-    queen.internal_typing_control = _internal_typing_control
+    octo.internal_send = _internal_send
+    octo.internal_progress_send = _internal_progress_send
+    octo.internal_typing_control = _internal_typing_control
 
-    # Re-initialize the Queen's default (Telegram) output hooks if needed
-    queen._tg_send = _internal_send
-    queen._tg_progress = _internal_progress_send
-    queen._tg_typing = _internal_typing_control
+    # Re-initialize the Octo's default (Telegram) output hooks if needed
+    octo._tg_send = _internal_send
+    octo._tg_progress = _internal_progress_send
+    octo._tg_typing = _internal_typing_control
 
     import importlib.metadata
 
@@ -228,10 +228,10 @@ def register_handlers(
         if not is_allowed_chat(message.chat.id, allowed_chat_ids):
             await _reject_unauthorized_message(message)
             return
-        active_workers = await asyncio.to_thread(queen.store.get_active_workers)
+        active_workers = await asyncio.to_thread(octo.store.get_active_workers)
         status_text = (
             f"**System Status**\n"
-            f"Thinking: {'Yes' if queen._thinking_count > 0 else 'No'}\n"
+            f"Thinking: {'Yes' if octo._thinking_count > 0 else 'No'}\n"
             f"Active Workers: {len(active_workers)}\n"
             f"Current Time: {utc_now().isoformat()}\n"
         )
@@ -246,7 +246,7 @@ def register_handlers(
         if not is_allowed_chat(message.chat.id, allowed_chat_ids):
             await _reject_unauthorized_message(message)
             return
-        templates = await asyncio.to_thread(queen.store.list_worker_templates)
+        templates = await asyncio.to_thread(octo.store.list_worker_templates)
         if not templates:
             await message.answer("No worker templates found.")
             return
@@ -266,7 +266,7 @@ def register_handlers(
             limit = int(command.args)
             limit = max(50, min(limit, 1000))
 
-        entries = await asyncio.to_thread(queen.store.list_memory_entries, limit=limit)
+        entries = await asyncio.to_thread(octo.store.list_memory_entries, limit=limit)
 
         unique_chats = set()
         role_counts = {}
@@ -363,7 +363,7 @@ def register_handlers(
             if text.startswith("! ") or text.startswith("> "):
                 clean_text = text[2:].strip()
                 if clean_text:
-                    await queen.memory.add_message(
+                    await octo.memory.add_message(
                         "user",
                         f"[SILENT LOG] {clean_text}",
                         {"chat_id": message.chat.id, "silent": True, "has_images": bool(images)}
@@ -515,7 +515,7 @@ async def _typing_loop_by_id(bot: Bot, chat_id: int, stop: asyncio.Event) -> Non
 
 
 def _flush_pending_turn_factory(
-    queen: Queen,
+    octo: Octo,
     settings: Settings,
     bot: Bot,
 ):
@@ -542,7 +542,7 @@ def _flush_pending_turn_factory(
 
         async with lock:
             try:
-                reply = await queen.handle_message(
+                reply = await octo.handle_message(
                     text,
                     chat_id,
                     images=images,
@@ -558,7 +558,7 @@ def _flush_pending_turn_factory(
                 )
                 return
 
-            if isinstance(reply, QueenReply):
+            if isinstance(reply, OctoReply):
                 update_last_message(settings)
                 final_text = reply.immediate or ""
 
@@ -576,7 +576,7 @@ def _flush_pending_turn_factory(
                 effective_emoji = tagged_emoji or getattr(reply, "reaction", None) or inferred_emoji
                 if effective_emoji:
                     logger.debug(
-                        "Detected terminal reaction in queen reply",
+                        "Detected terminal reaction in octo reply",
                         chat_id=chat_id,
                         message_id=reply_to_message_id,
                         emoji=effective_emoji,
@@ -584,7 +584,7 @@ def _flush_pending_turn_factory(
                     )
                 elif reply_to_message_id is not None:
                     logger.debug(
-                        "No terminal reaction tag found in queen reply",
+                        "No terminal reaction tag found in octo reply",
                         chat_id=chat_id,
                         message_id=reply_to_message_id,
                         reply_reaction=getattr(reply, "reaction", None),

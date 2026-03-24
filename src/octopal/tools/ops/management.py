@@ -493,7 +493,7 @@ def self_control(args: dict[str, Any], ctx: dict[str, Any]) -> str:
         "created_at": datetime.now(UTC).isoformat(),
         "action": action,
         "reason": str(args.get("reason", "")).strip(),
-        "requested_by": "queen",
+        "requested_by": "octo",
     }
     _append_jsonl(req_file, item)
     return _json({"status": "requested", "request": item})

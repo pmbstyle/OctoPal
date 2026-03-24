@@ -3,7 +3,7 @@ import type { ChangeEvent } from "react";
 
 export type DashboardFilters = {
   windowMinutes: 15 | 60 | 240 | 1440;
-  service: "all" | "gateway" | "queen" | "telegram" | "exec_run" | "mcp" | "workers";
+  service: "all" | "gateway" | "octo" | "telegram" | "exec_run" | "mcp" | "workers";
   environment: "all" | "local" | "dev" | "staging" | "prod";
   token: string;
 };

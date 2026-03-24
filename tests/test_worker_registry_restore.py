@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from octopal.runtime.queen.core import Queen
+from octopal.runtime.octo.core import Octo
 
 
 class _DummyRuntime:
@@ -59,7 +59,7 @@ def _worker(
     )
 
 
-def test_queen_restores_worker_registry_and_reconciles_stale_children() -> None:
+def test_octo_restores_worker_registry_and_reconciles_stale_children() -> None:
     parent = _worker("parent-1", status="completed", lineage_id="lin-1")
     child = _worker(
         "child-1",
@@ -78,7 +78,7 @@ def test_queen_restores_worker_registry_and_reconciles_stale_children() -> None:
     root_active = _worker("root-1", status="running", lineage_id="lin-root")
 
     store = _DummyStore([parent, child, orphan, root_active])
-    queen = Queen(
+    octo = Octo(
         provider=object(),
         store=store,  # type: ignore[arg-type]
         policy=object(),
@@ -88,9 +88,9 @@ def test_queen_restores_worker_registry_and_reconciles_stale_children() -> None:
         canon=object(),  # type: ignore[arg-type]
     )
 
-    assert queen._worker_children.get("parent-1") == {"child-1"}
-    assert queen._lineage_children_total.get("lin-1") == 1
-    active_set = queen._lineage_children_active.get("lin-1")
+    assert octo._worker_children.get("parent-1") == {"child-1"}
+    assert octo._lineage_children_total.get("lin-1") == 1
+    active_set = octo._lineage_children_active.get("lin-1")
     assert active_set is None or active_set == set()
 
     reconciled_ids = {worker_id for worker_id, status in store.status_updates if status == "stopped"}

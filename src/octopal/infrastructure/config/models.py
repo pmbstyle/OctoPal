@@ -85,7 +85,7 @@ class OctopalConfig(BaseModel):
     user_channel: str = DEFAULT_USER_CHANNEL
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
-    # Queen LLM settings
+    # Octo LLM settings
     llm: LLMConfig = Field(default_factory=LLMConfig)
 
     # Worker LLM settings

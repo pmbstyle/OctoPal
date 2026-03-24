@@ -39,7 +39,7 @@ class Worker:
             reason = response.get("reason", "denied")
             raise RuntimeError(f"Intent denied: {reason}")
         if response.get("type") != "permit":
-            raise RuntimeError("Unexpected response from Queen")
+            raise RuntimeError("Unexpected response from Octo")
 
         permit = Permit.model_validate(response.get("permit", {}))
         normalized = normalize_payload(request.type, request.payload)
@@ -88,21 +88,21 @@ class Worker:
             raise ToolBridgeError.from_payload(response, default_bridge="mcp")
         return response.get("result")
 
-    async def call_queen_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
+    async def call_octo_tool(self, tool_name: str, arguments: dict[str, Any]) -> Any:
         await self._write_message(
             {
-                "type": "queen_tool_call",
+                "type": "octo_tool_call",
                 "tool_name": tool_name,
                 "arguments": arguments,
             }
         )
         response = await self._read_message()
-        if response.get("type") != "queen_tool_result":
-            raise RuntimeError("Unexpected response from Queen tool bridge")
+        if response.get("type") != "octo_tool_result":
+            raise RuntimeError("Unexpected response from Octo tool bridge")
         if not bool(response.get("ok", False)):
             raise ToolBridgeError(
-                str(response.get("error") or "Queen tool call failed"),
-                bridge="queen",
+                str(response.get("error") or "Octo tool call failed"),
+                bridge="octo",
                 tool_name=tool_name,
             )
         return response.get("result")
@@ -115,7 +115,7 @@ class Worker:
     async def _read_message(self) -> dict[str, Any]:
         line = await asyncio.to_thread(sys.stdin.readline)
         if not line:
-            raise RuntimeError("No response from Queen")
+            raise RuntimeError("No response from Octo")
         return json.loads(line)
 
 

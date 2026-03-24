@@ -51,7 +51,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-octopal = ["*.md", "runtime/queen/prompts/*.md"]
+octopal = ["*.md", "runtime/octo/prompts/*.md"]
 
 [tool.black]
 line-length = 100

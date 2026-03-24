@@ -70,7 +70,7 @@ def test_route_compacts_tool_messages_before_next_tool_round(monkeypatch) -> Non
         async def add_message(self, role, content, metadata=None):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         store = object()
         canon = object()
         internal_progress_send = None
@@ -85,7 +85,7 @@ def test_route_compacts_tool_messages_before_next_tool_round(monkeypatch) -> Non
         def peek_context_wakeup(self, chat_id: int) -> str:
             return ""
 
-    async def fake_build_queen_prompt(**kwargs):
+    async def fake_build_octo_prompt(**kwargs):
         return [Message(role="user", content=str(kwargs["user_text"]))]
 
     async def fake_build_plan(provider, messages, has_tools):
@@ -97,10 +97,10 @@ def test_route_compacts_tool_messages_before_next_tool_round(monkeypatch) -> Non
             "results": [{"idx": idx, "body": "payload-" + ("x" * 800)} for idx in range(120)],
         }
 
-    import octopal.runtime.queen.router as router
+    import octopal.runtime.octo.router as router
     from octopal.tools.registry import ToolSpec
 
-    def fake_get_queen_tools(queen, chat_id):
+    def fake_get_octo_tools(octo, chat_id):
         return (
             [
                 ToolSpec(
@@ -111,17 +111,17 @@ def test_route_compacts_tool_messages_before_next_tool_round(monkeypatch) -> Non
                     handler=dummy_tool,
                 )
             ],
-            {"queen": queen, "chat_id": chat_id},
+            {"octo": octo, "chat_id": chat_id},
         )
 
-    monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
-    monkeypatch.setattr(router, "_get_queen_tools", fake_get_queen_tools)
+    monkeypatch.setattr(router, "_get_octo_tools", fake_get_octo_tools)
 
     async def scenario() -> None:
         provider = DummyProvider()
         response = await router.route_or_reply(
-            DummyQueen(),
+            DummyOcto(),
             provider,
             DummyMemory(),
             "check this",

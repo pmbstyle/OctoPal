@@ -76,7 +76,7 @@ def get_skill_management_tools() -> list[ToolSpec]:
                     "scope": {
                         "type": "string",
                         "description": "Where the skill should be available.",
-                        "enum": ["queen", "worker", "both"],
+                        "enum": ["octo", "worker", "both"],
                     },
                     "enabled": {"type": "boolean", "description": "Whether the skill is enabled (default true)."},
                 },
@@ -190,7 +190,7 @@ def get_registered_skill_tools() -> list[ToolSpec]:
                     f"Apply internal skill '{name}'. "
                     f"{description}"
                     + (" Use run_skill_script for bundled scripts." if bool(raw.get("has_scripts", False)) or bool(raw.get("scripts_dir", "")) else "")
-                    + (f" Scope: {scope}." if scope in {"queen", "worker", "both"} else "")
+                    + (f" Scope: {scope}." if scope in {"octo", "worker", "both"} else "")
                 ),
                 parameters={
                     "type": "object",
@@ -284,8 +284,8 @@ def _tool_add_skill(args: dict[str, Any], ctx: dict[str, Any]) -> str:
 
     if not path_raw:
         return "add_skill error: path is required."
-    if scope not in {"queen", "worker", "both"}:
-        return "add_skill error: scope must be one of queen, worker, both."
+    if scope not in {"octo", "worker", "both"}:
+        return "add_skill error: scope must be one of octo, worker, both."
 
     resolved_skill = _resolve_skill_file(workspace_dir, path_raw)
     if resolved_skill is None:
@@ -371,9 +371,9 @@ def _tool_run_skill_script(args: dict[str, Any], ctx: dict[str, Any]) -> str:
 
     scope = str(skill_data.get("scope", "both")).strip().lower() or "both"
     caller_scope = _caller_scope(ctx)
-    if scope == "queen" and caller_scope == "worker":
-        return "run_skill_script error: this skill is scoped to queen only."
-    if scope == "worker" and caller_scope == "queen":
+    if scope == "octo" and caller_scope == "worker":
+        return "run_skill_script error: this skill is scoped to octo only."
+    if scope == "worker" and caller_scope == "octo":
         return "run_skill_script error: this skill is scoped to worker only."
 
     scripts_dir_raw = str(skill_data.get("scripts_dir", "")).strip()
@@ -456,9 +456,9 @@ def _run_skill(skill_data: dict[str, Any], args: dict[str, Any], ctx: dict[str, 
     workspace_dir = _workspace_root()
     scope = str(skill_data.get("scope", "both")).strip().lower() or "both"
     caller_scope = _caller_scope(ctx)
-    if scope == "queen" and caller_scope == "worker":
-        return "skill error: this skill is scoped to queen only."
-    if scope == "worker" and caller_scope == "queen":
+    if scope == "octo" and caller_scope == "worker":
+        return "skill error: this skill is scoped to octo only."
+    if scope == "worker" and caller_scope == "octo":
         return "skill error: this skill is scoped to worker only."
 
     skill_path = _resolve_registered_skill_path(workspace_dir, skill_data)
@@ -518,8 +518,8 @@ def _run_skill(skill_data: dict[str, Any], args: dict[str, Any], ctx: dict[str, 
 
 
 def _caller_scope(ctx: dict[str, Any]) -> str:
-    if "queen" in ctx:
-        return "queen"
+    if "octo" in ctx:
+        return "octo"
     if "worker" in ctx:
         return "worker"
     return "unknown"
@@ -748,7 +748,7 @@ def _skill_record_from_registry(workspace_dir: Path, raw: dict[str, Any]) -> dic
 
 def _resolve_scope_value(value: Any) -> str:
     scope = str(value or "both").strip().lower() or "both"
-    return scope if scope in {"queen", "worker", "both"} else "both"
+    return scope if scope in {"octo", "worker", "both"} else "both"
 
 
 def _evaluate_skill_status(skill_data: dict[str, Any]) -> dict[str, Any]:

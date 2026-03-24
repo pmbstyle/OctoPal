@@ -38,7 +38,7 @@ def test_normalize_log_entry_respects_service_filter() -> None:
     assert entry["service"] == "telegram"
 
     blocked = _normalize_log_entry(
-        '{"timestamp":"2026-03-01T00:00:00+00:00","level":"info","event":"queen loop tick"}',
+        '{"timestamp":"2026-03-01T00:00:00+00:00","level":"info","event":"octo loop tick"}',
         filters=filters,
     )
     assert blocked is None

@@ -2,9 +2,9 @@ import asyncio
 import pytest
 from datetime import timedelta
 
-from octopal.runtime.queen import core as queen_core
-from octopal.runtime.queen.core import (
-    Queen,
+from octopal.runtime.octo import core as octo_core
+from octopal.runtime.octo.core import (
+    Octo,
     _build_worker_result_timeout_followup,
     _enqueue_batched_worker_followup,
     _coerce_control_plane_reply,
@@ -12,7 +12,7 @@ from octopal.runtime.queen.core import (
     _merge_worker_followup_texts,
     _schedule_worker_followup_flush,
 )
-from octopal.runtime.queen.router import (
+from octopal.runtime.octo.router import (
     build_forced_worker_followup,
     should_force_worker_followup,
     should_send_worker_followup,
@@ -106,7 +106,7 @@ def test_followup_required_marker_is_not_set_for_normal_reply():
 
 
 def test_pending_conversational_closure_expires():
-    queen = Queen(
+    octo = Octo(
         approvals=None,
         memory=None,
         canon=None,
@@ -116,14 +116,14 @@ def test_pending_conversational_closure_expires():
         runtime=None,
     )
     correlation_id = "corr-expired"
-    queen._pending_conversational_closure_by_correlation[correlation_id] = (
+    octo._pending_conversational_closure_by_correlation[correlation_id] = (
         utc_now() - timedelta(seconds=4000)
     )
-    assert queen.has_pending_conversational_closure(correlation_id) is False
+    assert octo.has_pending_conversational_closure(correlation_id) is False
 
 
 def test_suppressed_turn_followups_expire():
-    queen = Queen(
+    octo = Octo(
         approvals=None,
         memory=None,
         canon=None,
@@ -133,14 +133,14 @@ def test_suppressed_turn_followups_expire():
         runtime=None,
     )
     correlation_id = "suppressed-expired"
-    queen._suppressed_followups_by_correlation[correlation_id] = (
+    octo._suppressed_followups_by_correlation[correlation_id] = (
         utc_now() - timedelta(seconds=4000)
     )
-    assert queen.should_suppress_turn_followups(correlation_id) is False
+    assert octo.should_suppress_turn_followups(correlation_id) is False
 
 
 def test_suppressed_turn_followups_can_be_marked_and_cleared():
-    queen = Queen(
+    octo = Octo(
         approvals=None,
         memory=None,
         canon=None,
@@ -150,10 +150,10 @@ def test_suppressed_turn_followups_can_be_marked_and_cleared():
         runtime=None,
     )
     correlation_id = "heartbeat-turn"
-    queen.suppress_turn_followups(correlation_id)
-    assert queen.should_suppress_turn_followups(correlation_id) is True
-    queen.clear_suppressed_turn_followups(correlation_id)
-    assert queen.should_suppress_turn_followups(correlation_id) is False
+    octo.suppress_turn_followups(correlation_id)
+    assert octo.should_suppress_turn_followups(correlation_id) is True
+    octo.clear_suppressed_turn_followups(correlation_id)
+    assert octo.should_suppress_turn_followups(correlation_id) is False
 
 
 def test_no_user_response_suffix_detection():
@@ -265,8 +265,8 @@ def test_merge_worker_followup_texts_deduplicates_and_joins_updates():
 
 @pytest.mark.asyncio
 async def test_batched_worker_followups_send_single_combined_message(monkeypatch):
-    monkeypatch.setattr(queen_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 1.0)
-    queen_core._WORKER_FOLLOWUP_BATCHES.clear()
+    monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 1.0)
+    octo_core._WORKER_FOLLOWUP_BATCHES.clear()
 
     sent_messages = []
     memory_messages = []
@@ -278,7 +278,7 @@ async def test_batched_worker_followups_send_single_combined_message(monkeypatch
     async def _send(chat_id, text):
         sent_messages.append((chat_id, text))
 
-    queen = Queen(
+    octo = Octo(
         approvals=None,
         memory=DummyMemory(),
         canon=None,
@@ -289,9 +289,9 @@ async def test_batched_worker_followups_send_single_combined_message(monkeypatch
         internal_send=_send,
     )
 
-    await _enqueue_batched_worker_followup(queen, 123, "corr-1", "Первый апдейт.")
-    await _enqueue_batched_worker_followup(queen, 123, "corr-1", "Второй апдейт.")
-    await queen_core._flush_worker_followup_batch(queen, 123, "corr-1")
+    await _enqueue_batched_worker_followup(octo, 123, "corr-1", "Первый апдейт.")
+    await _enqueue_batched_worker_followup(octo, 123, "corr-1", "Второй апдейт.")
+    await octo_core._flush_worker_followup_batch(octo, 123, "corr-1")
 
     assert sent_messages == [(123, "Первый апдейт.\n\nВторой апдейт.")]
     assert memory_messages == [
@@ -301,13 +301,13 @@ async def test_batched_worker_followups_send_single_combined_message(monkeypatch
             {"chat_id": 123, "worker_followup": True, "batched_count": 2},
         )
     ]
-    assert queen_core._WORKER_FOLLOWUP_BATCHES == {}
+    assert octo_core._WORKER_FOLLOWUP_BATCHES == {}
 
 
 @pytest.mark.asyncio
 async def test_batched_worker_followups_wait_for_pending_internal_results(monkeypatch):
-    monkeypatch.setattr(queen_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
-    queen_core._WORKER_FOLLOWUP_BATCHES.clear()
+    monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
+    octo_core._WORKER_FOLLOWUP_BATCHES.clear()
 
     sent_messages = []
 
@@ -318,7 +318,7 @@ async def test_batched_worker_followups_wait_for_pending_internal_results(monkey
     async def _send(chat_id, text):
         sent_messages.append((chat_id, text))
 
-    queen = Queen(
+    octo = Octo(
         approvals=None,
         memory=DummyMemory(),
         canon=None,
@@ -329,32 +329,32 @@ async def test_batched_worker_followups_wait_for_pending_internal_results(monkey
         internal_send=_send,
     )
 
-    queen.mark_internal_result_pending("corr-queue")
-    queen.mark_internal_result_pending("corr-queue")
+    octo.mark_internal_result_pending("corr-queue")
+    octo.mark_internal_result_pending("corr-queue")
 
-    await _enqueue_batched_worker_followup(queen, 321, "corr-queue", "Первый апдейт.")
+    await _enqueue_batched_worker_followup(octo, 321, "corr-queue", "Первый апдейт.")
     await asyncio.sleep(0.03)
     assert sent_messages == []
 
-    queen.mark_internal_result_processed("corr-queue")
-    _schedule_worker_followup_flush(queen, 321, "corr-queue")
-    await _enqueue_batched_worker_followup(queen, 321, "corr-queue", "Второй апдейт.")
+    octo.mark_internal_result_processed("corr-queue")
+    _schedule_worker_followup_flush(octo, 321, "corr-queue")
+    await _enqueue_batched_worker_followup(octo, 321, "corr-queue", "Второй апдейт.")
     await asyncio.sleep(0.03)
     assert sent_messages == []
 
-    queen.mark_internal_result_processed("corr-queue")
-    _schedule_worker_followup_flush(queen, 321, "corr-queue")
+    octo.mark_internal_result_processed("corr-queue")
+    _schedule_worker_followup_flush(octo, 321, "corr-queue")
     await asyncio.sleep(0.03)
 
     assert sent_messages == [(321, "Первый апдейт.\n\nВторой апдейт.")]
 
 
-def test_queen_does_not_have_web_fetch():
-    from octopal.runtime.queen.router import _get_queen_tools
-    class DummyQueen:
+def test_octo_does_not_have_web_fetch():
+    from octopal.runtime.octo.router import _get_octo_tools
+    class DummyOcto:
         store = None
 
-    tool_specs, _ = _get_queen_tools(DummyQueen(), 0)
+    tool_specs, _ = _get_octo_tools(DummyOcto(), 0)
     tool_names = [spec.name for spec in tool_specs]
     assert "web_fetch" not in tool_names
     # Sanity check: verify some other tools ARE there

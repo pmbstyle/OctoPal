@@ -63,6 +63,6 @@ def test_configure_llm_quick_mode_can_keep_recommended_base_url(monkeypatch) -> 
         lambda *args, **kwargs: next(confirm_answers),
     )
 
-    _configure_llm(config, "Queen", llm, advanced=False)
+    _configure_llm(config, "Octo", llm, advanced=False)
 
     assert llm.api_base == "https://openrouter.ai/api/v1"

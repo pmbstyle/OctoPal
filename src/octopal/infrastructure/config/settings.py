@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     heartbeat_interval_seconds: int = Field(900, alias="OCTOPAL_HEARTBEAT_INTERVAL_SECONDS")
     user_message_grace_seconds: float = Field(5.0, alias="OCTOPAL_USER_MESSAGE_GRACE_SECONDS")
 
-    # Comma-separated list of Telegram chat IDs allowed to interact with the queen
+    # Comma-separated list of Telegram chat IDs allowed to interact with the octo
     # Get your chat ID by messaging @userinfobot on Telegram
     allowed_telegram_chat_ids: str = Field("", alias="ALLOWED_TELEGRAM_CHAT_IDS")
     telegram_parse_mode: str = Field("MarkdownV2", alias="OCTOPAL_TELEGRAM_PARSE_MODE")
@@ -185,7 +185,7 @@ def load_config() -> OctopalConfig:
         ]
     config.telegram.parse_mode = temp_settings.telegram_parse_mode
 
-    # LLM (Queen) - try to resolve from LiteLLM settings first
+    # LLM (Octo) - try to resolve from LiteLLM settings first
     config.llm.provider_id = temp_settings.litellm_provider_id
     config.llm.model = temp_settings.litellm_model
     config.llm.api_key = temp_settings.litellm_api_key
@@ -307,7 +307,7 @@ def _sync_settings_from_config(settings: Settings, config: OctopalConfig) -> Non
     updates["allowed_telegram_chat_ids"] = ",".join(config.telegram.allowed_chat_ids)
     updates["telegram_parse_mode"] = config.telegram.parse_mode
 
-    # LLM (Queen)
+    # LLM (Octo)
     updates["litellm_provider_id"] = config.llm.provider_id
     updates["litellm_model"] = config.llm.model
     updates["litellm_api_key"] = config.llm.api_key

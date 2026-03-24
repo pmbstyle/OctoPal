@@ -30,12 +30,12 @@ class BootstrapContext:
 
 
 async def _load_system_prompt_file() -> str:
-    """Loads the content of queen_system.md."""
+    """Loads the content of octo_system.md."""
 
     global _QUEEN_SYSTEM_PROMPT_CONTENT
 
     if not _QUEEN_SYSTEM_PROMPT_CONTENT:
-        prompt_path = Path(__file__).parent / "prompts" / "queen_system.md"
+        prompt_path = Path(__file__).parent / "prompts" / "octo_system.md"
 
         try:
             _QUEEN_SYSTEM_PROMPT_CONTENT = await asyncio.to_thread(
@@ -43,13 +43,13 @@ async def _load_system_prompt_file() -> str:
             )
 
         except FileNotFoundError:
-            _QUEEN_SYSTEM_PROMPT_CONTENT = "You are the Octopal Queen. Your configuration files are missing. Tell the user that you are missing the configuration files and ask them to create them."
+            _QUEEN_SYSTEM_PROMPT_CONTENT = "You are the Octopal Octo. Your configuration files are missing. Tell the user that you are missing the configuration files and ask them to create them."
 
     return _QUEEN_SYSTEM_PROMPT_CONTENT
 
 
 async def get_prompt_section(title: str) -> list[str]:
-    """Extracts a section from the queen_system.md file by its ## title."""
+    """Extracts a section from the octo_system.md file by its ## title."""
 
     content = await _load_system_prompt_file()
 
@@ -264,7 +264,7 @@ def _prune_recent_history_window(
     }
 
 
-async def build_queen_prompt(
+async def build_octo_prompt(
     store: Store,
     memory: MemoryService,
     canon: CanonService,

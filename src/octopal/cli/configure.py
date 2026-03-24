@@ -411,7 +411,7 @@ def _configure_llm(
             )
 
         # Runtime settings (global for now, but could be per-provider)
-        if label == "Queen":
+        if label == "Octo":
             master_config.litellm.timeout = IntPrompt.ask("Request timeout (sec)", default=int(master_config.litellm.timeout))
             master_config.litellm.num_retries = IntPrompt.ask("Max retries", default=master_config.litellm.num_retries)
 
@@ -465,7 +465,7 @@ def _configure_storage(config: OctopalConfig, prompter) -> None:
     prompter.note(
         "Storage",
         [
-            "Workspace holds the Queen and worker scratch area.",
+            "Workspace holds the Octo and worker scratch area.",
             "State directory is where Octopal stores logs, DB files, and runtime state.",
         ],
     )
@@ -610,16 +610,16 @@ def _build_sections(config: OctopalConfig, advanced: bool, prompter) -> list[Wiz
             run=lambda cfg: _configure_user_channel(cfg, advanced, prompter),
         ),
         WizardSection(
-            key="queen-llm",
-            title="Queen LLM",
+            key="octo-llm",
+            title="Octo LLM",
             render_status=lambda cfg: f"{cfg.llm.provider_id or 'unset'} / {cfg.llm.model or 'unset'}",
-            run=lambda cfg: _configure_llm(cfg, "Queen", cfg.llm, advanced, prompter),
+            run=lambda cfg: _configure_llm(cfg, "Octo", cfg.llm, advanced, prompter),
         ),
         WizardSection(
             key="worker-llm",
             title="Worker LLM",
             render_status=lambda cfg: (
-                "Using Queen defaults"
+                "Using Octo defaults"
                 if not cfg.worker_llm_default.provider_id
                 else f"{cfg.worker_llm_default.provider_id} / {cfg.worker_llm_default.model or 'unset'}"
             ),
@@ -727,12 +727,12 @@ def _print_review(config: OctopalConfig) -> None:
 
     # Summarize key points
     llm_info = f"{config.llm.provider_id} / {config.llm.model}"
-    table.add_row("Queen LLM", llm_info)
+    table.add_row("Octo LLM", llm_info)
 
     if config.worker_llm_default.provider_id:
         table.add_row("Worker LLM", f"{config.worker_llm_default.provider_id} / {config.worker_llm_default.model}")
     else:
-        table.add_row("Worker LLM", "[dim]Using Queen defaults[/dim]")
+        table.add_row("Worker LLM", "[dim]Using Octo defaults[/dim]")
 
     if config.worker_llm_overrides:
         table.add_row("Overrides", f"{len(config.worker_llm_overrides)} templates")
@@ -745,7 +745,7 @@ def _print_review(config: OctopalConfig) -> None:
 
 def _print_next_steps(config: OctopalConfig) -> None:
     console.print("\n[bold]Suggested next steps:[/bold]")
-    console.print("  [magenta]octopal start[/magenta] - Launch the Queen")
+    console.print("  [magenta]octopal start[/magenta] - Launch the Octo")
     console.print("  [magenta]octopal status[/magenta] - Check connectivity")
 
 

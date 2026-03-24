@@ -40,7 +40,7 @@ def test_build_kpis_sets_expected_status_levels() -> None:
 def test_derive_overall_health_prioritizes_critical_reasons() -> None:
     services = [
         {"id": "gateway", "name": "Gateway", "status": "ok", "reason": "running"},
-        {"id": "queen", "name": "Queen", "status": "warning", "reason": "queue pressure rising"},
+        {"id": "octo", "name": "Octo", "status": "warning", "reason": "queue pressure rising"},
     ]
 
     status, reasons = _derive_overall_health(

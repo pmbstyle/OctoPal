@@ -4,7 +4,7 @@ import { ActionsPage } from "./pages/ActionsPage";
 import { ControlCenterPage } from "./pages/ControlCenterPage";
 import { IncidentsPage } from "./pages/IncidentsPage";
 import { OverviewPage } from "./pages/OverviewPage";
-import { QueenPage } from "./pages/QueenPage";
+import { OctoPage } from "./pages/OctoPage";
 import { SystemPage } from "./pages/SystemPage";
 import { WorkersPage } from "./pages/WorkersPage";
 import { AppShell } from "./ui/AppShell";
@@ -29,8 +29,8 @@ export const appRouter = createBrowserRouter([
         element: <IncidentsPage />,
       },
       {
-        path: "queen",
-        element: <QueenPage />,
+        path: "octo",
+        element: <OctoPage />,
       },
       {
         path: "workers",

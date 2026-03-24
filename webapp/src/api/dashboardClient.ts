@@ -4,8 +4,8 @@ type OverviewResponse =
   paths["/api/dashboard/v2/overview"]["get"]["responses"]["200"]["content"]["application/json"];
 type IncidentsResponse =
   paths["/api/dashboard/v2/incidents"]["get"]["responses"]["200"]["content"]["application/json"];
-type QueenResponse =
-  paths["/api/dashboard/v2/queen"]["get"]["responses"]["200"]["content"]["application/json"];
+type OctoResponse =
+  paths["/api/dashboard/v2/octo"]["get"]["responses"]["200"]["content"]["application/json"];
 type WorkersResponse =
   paths["/api/dashboard/v2/workers"]["get"]["responses"]["200"]["content"]["application/json"];
 type SystemResponse =
@@ -38,7 +38,7 @@ type ActionRequest = {
 
 export type DashboardQueryParams = {
   windowMinutes: 15 | 60 | 240 | 1440;
-  service: "all" | "gateway" | "queen" | "telegram" | "exec_run" | "mcp" | "workers";
+  service: "all" | "gateway" | "octo" | "telegram" | "exec_run" | "mcp" | "workers";
   environment: "all" | "local" | "dev" | "staging" | "prod";
   token?: string;
 };
@@ -88,8 +88,8 @@ export async function fetchIncidents(params: DashboardQueryParams): Promise<Inci
   return fetchJson<IncidentsResponse>(withQuery("/api/dashboard/v2/incidents", params), params.token);
 }
 
-export async function fetchQueen(params: DashboardQueryParams): Promise<QueenResponse> {
-  return fetchJson<QueenResponse>(withQuery("/api/dashboard/v2/queen", params), params.token);
+export async function fetchOcto(params: DashboardQueryParams): Promise<OctoResponse> {
+  return fetchJson<OctoResponse>(withQuery("/api/dashboard/v2/octo", params), params.token);
 }
 
 export async function fetchWorkers(params: DashboardQueryParams): Promise<WorkersResponse> {

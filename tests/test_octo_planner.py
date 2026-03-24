@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from octopal.runtime.queen.router import _extract_json_object, _normalize_plan_payload
+from octopal.runtime.octo.router import _extract_json_object, _normalize_plan_payload
 
 
 def test_extract_json_object_handles_plain_json() -> None:

@@ -2,7 +2,7 @@
 Simplified Worker Contracts
 
 Workers are pre-defined agents with system prompts.
-Queen assigns tasks to workers with input data.
+Octo assigns tasks to workers with input data.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ class WorkerTemplate(BaseModel):
 
 
 class TaskRequest(BaseModel):
-    """Task from Queen to worker."""
+    """Task from Octo to worker."""
     model_config = ConfigDict(frozen=True)
 
     worker_id: str  # Which worker template to use
@@ -88,13 +88,13 @@ class KnowledgeProposal(BaseModel):
 
 
 class WorkerResult(BaseModel):
-    """Worker result with optional questions for Queen."""
+    """Worker result with optional questions for Octo."""
     model_config = ConfigDict(frozen=True)
 
     status: Literal["completed", "failed"] = "completed"
     summary: str
     output: dict[str, Any] | None = None
-    questions: list[str] = Field(default_factory=list)  # Questions for Queen
+    questions: list[str] = Field(default_factory=list)  # Questions for Octo
     knowledge_proposals: list[KnowledgeProposal] = Field(default_factory=list)
     thinking_steps: int = 0
     tools_used: list[str] = Field(default_factory=list)

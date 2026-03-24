@@ -5,7 +5,7 @@ import sys
 import types
 
 from octopal.infrastructure.config.settings import Settings
-from octopal.runtime.queen.core import QueenReply
+from octopal.runtime.octo.core import OctoReply
 from octopal.utils import extract_edge_reaction_fallback, extract_reaction_and_strip, strip_reaction_tags
 
 if "telegramify_markdown" not in sys.modules:
@@ -42,9 +42,9 @@ def test_extract_edge_reaction_fallback_handles_short_confirmation_text() -> Non
 
 
 def test_telegram_uses_reply_reaction_fallback_when_immediate_loses_tag(tmp_path) -> None:
-    class DummyQueen:
+    class DummyOcto:
         async def handle_message(self, text: str, chat_id: int, images=None, saved_file_paths=None):
-            return QueenReply(
+            return OctoReply(
                 immediate="Поставила! Посмотрим, появится ли 👻",
                 followup=None,
                 followup_required=False,
@@ -77,7 +77,7 @@ def test_telegram_uses_reply_reaction_fallback_when_immediate_loses_tag(tmp_path
         OCTOPAL_TELEGRAM_PARSE_MODE="MarkdownV2",
     )
     bot = DummyBot()
-    flush = _flush_pending_turn_factory(DummyQueen(), settings, bot)
+    flush = _flush_pending_turn_factory(DummyOcto(), settings, bot)
 
     try:
         async def scenario() -> None:
@@ -103,9 +103,9 @@ def test_telegram_uses_reply_reaction_fallback_when_immediate_loses_tag(tmp_path
 
 
 def test_telegram_infers_reaction_from_short_text_edge_emoji(tmp_path) -> None:
-    class DummyQueen:
+    class DummyOcto:
         async def handle_message(self, text: str, chat_id: int, images=None, saved_file_paths=None):
-            return QueenReply(
+            return OctoReply(
                 immediate="Поставила! 👻",
                 followup=None,
                 followup_required=False,
@@ -138,7 +138,7 @@ def test_telegram_infers_reaction_from_short_text_edge_emoji(tmp_path) -> None:
         OCTOPAL_TELEGRAM_PARSE_MODE="MarkdownV2",
     )
     bot = DummyBot()
-    flush = _flush_pending_turn_factory(DummyQueen(), settings, bot)
+    flush = _flush_pending_turn_factory(DummyOcto(), settings, bot)
 
     try:
         async def scenario() -> None:

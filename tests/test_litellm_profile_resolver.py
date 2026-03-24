@@ -89,14 +89,14 @@ def test_resolver_supports_local_ollama_without_api_key() -> None:
     assert profile.api_key is None
 
 
-def test_worker_override_does_not_inherit_queen_unified_api_key_for_other_provider() -> None:
+def test_worker_override_does_not_inherit_octo_unified_api_key_for_other_provider() -> None:
     settings = _base_settings(
         litellm_provider_id="zai",
         litellm_model="glm-5",
-        litellm_api_key="queen-zai-key",
+        litellm_api_key="octo-zai-key",
         openrouter_api_key=None,
         config_obj=OctopalConfig(
-            llm=LLMConfig(provider_id="zai", model="glm-5", api_key="queen-zai-key"),
+            llm=LLMConfig(provider_id="zai", model="glm-5", api_key="octo-zai-key"),
             worker_llm_default=LLMConfig(provider_id="openrouter", model="anthropic/claude-sonnet-4"),
         ),
     )

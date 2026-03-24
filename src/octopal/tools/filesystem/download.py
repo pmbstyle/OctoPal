@@ -34,7 +34,7 @@ async def download_file(args: dict[str, Any], ctx: dict[str, Any]) -> str:
         return json.dumps({"error": "download_file error: filename must not contain directory components."})
 
     # Determine the base directory from the context
-    # The 'base_dir' in the context is the root workspace for the Queen.
+    # The 'base_dir' in the context is the root workspace for the Octo.
     # A worker should have a more specific 'worker_dir' in its context if it differs.
     # For now, we'll assume a common 'downloads' folder in the main workspace.
     base_dir: Path = ctx.get("base_dir")

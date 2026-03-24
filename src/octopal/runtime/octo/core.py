@@ -28,14 +28,14 @@ from octopal.runtime.memory.memchain import memchain_record
 from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.metrics import update_component_gauges
 from octopal.runtime.policy.engine import PolicyEngine
-from octopal.runtime.queen.prompt_builder import (
+from octopal.runtime.octo.prompt_builder import (
     build_bootstrap_context_prompt,
 )
-from octopal.runtime.queen.router import (
+from octopal.runtime.octo.router import (
     build_forced_worker_followup,
     normalize_plain_text,
     route_or_reply,
-    route_worker_result_back_to_queen,
+    route_worker_result_back_to_octo,
     should_force_worker_followup,
     should_send_worker_followup,
 )
@@ -59,7 +59,7 @@ _INTERNAL_TASKS: dict[int, asyncio.Task] = {}
 _WORKER_FOLLOWUP_BATCHES: dict[tuple[int, str], "_PendingWorkerFollowupBatch"] = {}
 _QUEUE_IDLE_TIMEOUT_SECONDS = 300.0
 # Worker-result follow-up can include multiple provider retries and a fallback
-# pass through Queen, so it needs a wider budget than a single LLM request.
+# pass through Octo, so it needs a wider budget than a single LLM request.
 _WORKER_RESULT_ROUTING_TIMEOUT_SECONDS = 900.0
 _RESET_CONFIRM_THRESHOLD = 2
 _RESET_CONFIDENCE_MIN = 0.7
@@ -73,7 +73,7 @@ class _PendingWorkerFollowupBatch:
 
 
 def _build_worker_result_timeout_followup(result: WorkerResult) -> str:
-    """Return a minimal user-facing fallback when Queen routing times out."""
+    """Return a minimal user-facing fallback when Octo routing times out."""
     lead = "Worker finished, but the follow-up routing step timed out."
 
     lines = [lead]
@@ -297,7 +297,7 @@ def _resolve_worker_timeout_seconds(
 
 def _publish_runtime_metrics(thinking_count: int = 0) -> None:
     update_component_gauges(
-        "queen",
+        "octo",
         {
             "followup_queues": len(_FOLLOWUP_QUEUES),
             "followup_tasks": len(_FOLLOWUP_TASKS),
@@ -369,7 +369,7 @@ def _merge_worker_followup_texts(texts: list[str]) -> str:
 
 
 async def _send_worker_followup(
-    queen: "Queen",
+    octo: "Octo",
     chat_id: int,
     correlation_id: str | None,
     text: str,
@@ -379,16 +379,16 @@ async def _send_worker_followup(
     if not should_send_worker_followup(text):
         logger.info("Internal worker follow-up skipped", chat_id=chat_id, reason="no_user_response")
         return
-    if queen.internal_send:
-        await queen.internal_send(chat_id, text)
-        queen.clear_pending_conversational_closure(correlation_id)
+    if octo.internal_send:
+        await octo.internal_send(chat_id, text)
+        octo.clear_pending_conversational_closure(correlation_id)
         logger.info(
             "Internal worker follow-up sent",
             chat_id=chat_id,
             text_len=len(text),
             batched_count=batched_count,
         )
-        await queen.memory.add_message(
+        await octo.memory.add_message(
             "assistant",
             text,
             {
@@ -406,7 +406,7 @@ async def _send_worker_followup(
         )
 
 
-async def _flush_worker_followup_batch(queen: "Queen", chat_id: int, correlation_id: str) -> None:
+async def _flush_worker_followup_batch(octo: "Octo", chat_id: int, correlation_id: str) -> None:
     try:
         await asyncio.sleep(_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS)
         batch_key = (chat_id, correlation_id)
@@ -423,7 +423,7 @@ async def _flush_worker_followup_batch(queen: "Queen", chat_id: int, correlation
             )
             return
         await _send_worker_followup(
-            queen,
+            octo,
             chat_id,
             correlation_id,
             final_text,
@@ -435,14 +435,14 @@ async def _flush_worker_followup_batch(queen: "Queen", chat_id: int, correlation
         logger.exception("Failed to flush batched worker follow-up", chat_id=chat_id)
 
 
-def _schedule_worker_followup_flush(queen: "Queen", chat_id: int, correlation_id: str | None) -> None:
+def _schedule_worker_followup_flush(octo: "Octo", chat_id: int, correlation_id: str | None) -> None:
     if not correlation_id:
         return
     batch_key = (chat_id, correlation_id)
     batch = _WORKER_FOLLOWUP_BATCHES.get(batch_key)
     if batch is None:
         return
-    if not queen.should_flush_worker_followups(correlation_id):
+    if not octo.should_flush_worker_followups(correlation_id):
         existing_task = batch.task
         if existing_task and not existing_task.done():
             existing_task.cancel()
@@ -451,17 +451,17 @@ def _schedule_worker_followup_flush(queen: "Queen", chat_id: int, correlation_id
     existing_task = batch.task
     if existing_task and not existing_task.done():
         existing_task.cancel()
-    batch.task = asyncio.create_task(_flush_worker_followup_batch(queen, chat_id, correlation_id))
+    batch.task = asyncio.create_task(_flush_worker_followup_batch(octo, chat_id, correlation_id))
 
 
 async def _enqueue_batched_worker_followup(
-    queen: "Queen",
+    octo: "Octo",
     chat_id: int,
     correlation_id: str | None,
     text: str,
 ) -> None:
     if not correlation_id:
-        await _send_worker_followup(queen, chat_id, correlation_id, text)
+        await _send_worker_followup(octo, chat_id, correlation_id, text)
         return
 
     loop = asyncio.get_running_loop()
@@ -477,14 +477,14 @@ async def _enqueue_batched_worker_followup(
         batch = _PendingWorkerFollowupBatch(texts=[], loop=loop)
         _WORKER_FOLLOWUP_BATCHES[batch_key] = batch
     batch.texts.append(text)
-    _schedule_worker_followup_flush(queen, chat_id, correlation_id)
+    _schedule_worker_followup_flush(octo, chat_id, correlation_id)
 
 
-async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> None:
+async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> None:
     """Process completed worker results.
 
     Worker results are logged and stored in memory but NOT automatically sent to the user.
-    The queen decides what to communicate based on worker results.
+    The octo decides what to communicate based on worker results.
     """
     while True:
         correlation_id: str | None = None
@@ -500,7 +500,7 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
             )
             # Add worker result to memory for context, but don't auto-send
             if result.summary:
-                await queen.memory.add_message(
+                await octo.memory.add_message(
                     "system",
                     f"Worker completed: {result.summary}",
                     {"worker_result": True, "task": task_text, "chat_id": chat_id}
@@ -511,7 +511,7 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
                 if raw_error is not None:
                     output_error = str(raw_error).strip()
             if output_error:
-                await queen.memory.add_message(
+                await octo.memory.add_message(
                     "system",
                     f"Worker error: {output_error}",
                     {"worker_result": True, "task": task_text, "chat_id": chat_id}
@@ -520,19 +520,19 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
             if chat_id <= 0:
                 logger.info("Skipping user follow-up for internal chat", chat_id=chat_id)
             else:
-                # Always route worker result back through Queen decision logic.
+                # Always route worker result back through Octo decision logic.
                 # User delivery is a separate concern from internal decision-making.
                 try:
                     final_text = await asyncio.wait_for(
-                        route_worker_result_back_to_queen(queen, chat_id, task_text, result),
+                        route_worker_result_back_to_octo(octo, chat_id, task_text, result),
                         timeout=_WORKER_RESULT_ROUTING_TIMEOUT_SECONDS,
                     )
                 except TimeoutError:
                     logger.warning("Worker-result routing timed out", chat_id=chat_id)
                     final_text = _build_worker_result_timeout_followup(result)
 
-                pending_closure = queen.has_pending_conversational_closure(correlation_id)
-                suppress_followup = queen.should_suppress_turn_followups(correlation_id)
+                pending_closure = octo.has_pending_conversational_closure(correlation_id)
+                suppress_followup = octo.should_suppress_turn_followups(correlation_id)
                 if (
                     not should_send_worker_followup(final_text)
                     and (should_force_worker_followup(result) or pending_closure)
@@ -541,7 +541,7 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
                     final_text = build_forced_worker_followup(result)
 
                 if suppress_followup:
-                    queen.clear_pending_conversational_closure(correlation_id)
+                    octo.clear_pending_conversational_closure(correlation_id)
                     logger.info(
                         "Internal worker follow-up skipped",
                         chat_id=chat_id,
@@ -549,7 +549,7 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
                     )
                 elif should_send_worker_followup(final_text):
                     await _enqueue_batched_worker_followup(
-                        queen,
+                        octo,
                         chat_id,
                         correlation_id,
                         final_text,
@@ -560,8 +560,8 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
         except Exception:
             logger.exception("Failed to process internal worker result")
         finally:
-            queen.mark_internal_result_processed(correlation_id)
-            _schedule_worker_followup_flush(queen, chat_id, correlation_id)
+            octo.mark_internal_result_processed(correlation_id)
+            _schedule_worker_followup_flush(octo, chat_id, correlation_id)
             queue.task_done()
     _INTERNAL_TASKS.pop(chat_id, None)
     if queue.empty():
@@ -570,7 +570,7 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
 
 
 def _enqueue_internal_result(
-    queen: Queen,
+    octo: Octo,
     chat_id: int,
     task_text: str,
     result: WorkerResult,
@@ -589,15 +589,15 @@ def _enqueue_internal_result(
         queue = asyncio.Queue()
         _INTERNAL_QUEUES[chat_id] = queue
     if chat_id not in _INTERNAL_TASKS or _INTERNAL_TASKS[chat_id].done():
-        _INTERNAL_TASKS[chat_id] = asyncio.create_task(_internal_worker(queen, chat_id, queue))
-    queen.mark_internal_result_pending(correlation_id)
+        _INTERNAL_TASKS[chat_id] = asyncio.create_task(_internal_worker(octo, chat_id, queue))
+    octo.mark_internal_result_pending(correlation_id)
     queue.put_nowait((task_text, result, correlation_id))
     logger.info("Queued internal worker result", chat_id=chat_id, queue_size=queue.qsize())
     _publish_runtime_metrics()
 
 
 @dataclass
-class Queen:
+class Octo:
     provider: InferenceProvider
     store: Store
     policy: PolicyEngine
@@ -783,13 +783,13 @@ class Queen:
             self.internal_progress_send = progress
             self.internal_typing_control = typing
             self._ws_owner = owner_id or "ws-default"
-            logger.info("Queen switched to WebSocket output channel")
+            logger.info("Octo switched to WebSocket output channel")
         else:
             self.internal_send = self._tg_send
             self.internal_progress_send = self._tg_progress
             self.internal_typing_control = self._tg_typing
             self._ws_owner = None
-            logger.info("Queen switched to Telegram output channel")
+            logger.info("Octo switched to Telegram output channel")
 
         # Update system status file if possible
         try:
@@ -1031,7 +1031,7 @@ class Queen:
 
     async def initialize_system(self, bot=None, allowed_chat_ids: list[int] | None = None) -> None:
         system_chat_id = 0
-        logger.info("Queen waking up")
+        logger.info("Octo waking up")
         self.start_background_tasks()
 
         # Load and connect MCP servers
@@ -1046,7 +1046,7 @@ class Queen:
         original_send = self.internal_send
         chat_ids = allowed_chat_ids or []
         if chat_ids and (bot or callable(original_send)):
-            logger.info("Queen will send initialization message", count=len(chat_ids))
+            logger.info("Octo will send initialization message", count=len(chat_ids))
             logger.debug("Allowed chat_ids", chat_ids=chat_ids)
             async def send_to_allowed_chats(chat_id, text):
                 for target_chat_id in chat_ids:
@@ -1061,7 +1061,7 @@ class Queen:
                         logger.warning("Failed to send to chat_id", chat_id=target_chat_id, error=e)
             self.internal_send = send_to_allowed_chats
         else:
-            logger.warning("No allowed user channel recipients configured; queen will not send ready message.")
+            logger.warning("No allowed user channel recipients configured; octo will not send ready message.")
             self.internal_send = None
         try:
             bootstrap_context = await build_bootstrap_context_prompt(self.store, system_chat_id)
@@ -1075,19 +1075,19 @@ class Queen:
             )
             if should_suppress_user_delivery(result):
                 result = (
-                    "Queen is online. Initialization is complete and I am ready for your tasks."
+                    "Octo is online. Initialization is complete and I am ready for your tasks."
                 )
-            logger.info("Queen wake up complete", result_preview=f"{result[:60]}..." if result else "empty")
+            logger.info("Octo wake up complete", result_preview=f"{result[:60]}..." if result else "empty")
 
-            # Send the Queen's own response to allowed chats if configured.
+            # Send the Octo's own response to allowed chats if configured.
             if result and self.internal_send and chat_ids:
                 try:
                     await self.internal_send(system_chat_id, result)
-                    logger.info("Queen initialization response sent")
+                    logger.info("Octo initialization response sent")
                 except Exception as e:
-                    logger.warning("Failed to send queen initialization response", error=e)
+                    logger.warning("Failed to send octo initialization response", error=e)
         except Exception:
-            logger.exception("Queen failed to complete wake-up task")
+            logger.exception("Octo failed to complete wake-up task")
         finally:
             self.internal_send = original_send
 
@@ -1236,7 +1236,7 @@ class Queen:
         if not title or not task:
             return {"status": "error", "message": "title and task are required"}
         priority = max(1, min(5, int((args or {}).get("priority", 3) or 3)))
-        source = str((args or {}).get("source", "queen") or "queen").strip()[:64]
+        source = str((args or {}).get("source", "octo") or "octo").strip()[:64]
         queue = self._self_queue_by_chat.setdefault(chat_id, [])
         item = {
             "task_id": str(uuid4()),
@@ -1303,7 +1303,7 @@ class Queen:
                     impact="high",
                     effort="low",
                     confidence=0.93,
-                    next_action="Call queen_context_reset(mode='soft') with concise handoff.",
+                    next_action="Call octo_context_reset(mode='soft') with concise handoff.",
                 )
             )
         if no_progress >= 3 or repetition >= 0.70:
@@ -1431,7 +1431,7 @@ class Queen:
             f"- RESET_SOON if any: size>={_RESET_SOON_THRESHOLDS['context_size_estimate']}, repetition>={_RESET_SOON_THRESHOLDS['repetition_score']:.2f}, "
             f"error_streak>={_RESET_SOON_THRESHOLDS['error_streak']}, no_progress>={_RESET_SOON_THRESHOLDS['no_progress_turns']}.\n"
             "- Also RESET_SOON if 2+ WATCH signals persist for 2+ heartbeats.\n"
-            "If context_health is RESET_SOON, call `queen_context_reset` with mode='soft' and a concise handoff."
+            "If context_health is RESET_SOON, call `octo_context_reset` with mode='soft' and a concise handoff."
         )
 
     def _register_progress(self, chat_id: int, reason: str) -> None:
@@ -1471,7 +1471,7 @@ class Queen:
                 "confidence": confidence,
                 "requires_confirmation_for": requires_confirm_reasons,
                 "message": (
-                    "Reset blocked until confirmation. Re-run queen_context_reset with confirm=true "
+                    "Reset blocked until confirmation. Re-run octo_context_reset with confirm=true "
                     "to proceed."
                 ),
                 "health": health,
@@ -1506,7 +1506,7 @@ class Queen:
                 memchain_record,
                 workspace_dir,
                 reason="context_reset",
-                meta={"mode": mode, "chat_id": chat_id, "source": "queen_context_reset"},
+                meta={"mode": mode, "chat_id": chat_id, "source": "octo_context_reset"},
             )
         except Exception as exc:
             logger.warning("Memchain record failed during context reset", chat_id=chat_id, error=str(exc))
@@ -1531,7 +1531,7 @@ class Queen:
                 id=str(uuid4()),
                 ts=utc_now(),
                 level="info",
-                event_type="queen.context_reset",
+                event_type="octo.context_reset",
                 data={
                     "chat_id": chat_id,
                     "mode": mode,
@@ -1570,10 +1570,10 @@ class Queen:
         persist_to_memory: bool = True,
         track_progress: bool = True,
         include_wakeup: bool = True,
-    ) -> QueenReply:
+    ) -> OctoReply:
         if not is_ws and self._ws_active:
             logger.info("Ignoring Telegram message while WebSocket is active", chat_id=chat_id)
-            return QueenReply(
+            return OctoReply(
                 immediate="I'm currently active on WebSocket. Please use the WebSocket client or wait until it's closed.",
                 followup=None,
             )
@@ -1599,7 +1599,7 @@ class Queen:
             bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
             if bootstrap_context.files:
                 files_summary = ", ".join([f"{name} ({size} chars)" for name, size in bootstrap_context.files])
-                logger.debug("Queen bootstrap files", files=files_summary, hash=bootstrap_context.hash)
+                logger.debug("Octo bootstrap files", files=files_summary, hash=bootstrap_context.hash)
             route_kwargs: dict[str, Any] = {
                 "show_typing": show_typing,
                 "images": images,
@@ -1636,7 +1636,7 @@ class Queen:
             if not track_progress:
                 reply_text = _coerce_control_plane_reply(reply_text)
                 wants_followup = False
-            logger.info("Queen response ready")
+            logger.info("Octo response ready")
             if persist_to_memory:
                 await self.memory.add_message("assistant", reply_text, {"chat_id": chat_id, "heartbeat": not track_progress})
             if track_progress:
@@ -1663,12 +1663,12 @@ class Queen:
             reaction_emoji, _ = extract_reaction_and_strip(reply_text or "")
             reaction_emoji = reaction_emoji or initial_reaction_emoji
             logger.debug(
-                "QueenReply prepared for channel delivery",
+                "OctoReply prepared for channel delivery",
                 chat_id=chat_id,
                 has_react_tag="<react>" in immediate_text.lower(),
                 reaction=reaction_emoji,
             )
-            return QueenReply(
+            return OctoReply(
                 immediate=immediate_text,
                 followup=None,
                 followup_required=wants_followup,
@@ -2214,7 +2214,7 @@ def _persist_context_reset_files(workspace_dir: Path, handoff: dict[str, Any]) -
 
 def _render_handoff_markdown(handoff: dict[str, Any]) -> str:
     lines = [
-        "# Queen Handoff",
+        "# Octo Handoff",
         "",
         f"- created_at: {handoff.get('created_at', '')}",
         f"- mode: {handoff.get('mode', 'soft')}",
@@ -2290,7 +2290,7 @@ def _build_wakeup_message(handoff: dict[str, Any], handoff_path: str) -> str:
 
 
 @dataclass
-class QueenReply:
+class OctoReply:
     immediate: str
     followup: asyncio.Task[str] | None
     followup_required: bool = False

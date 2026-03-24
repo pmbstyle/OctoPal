@@ -31,7 +31,7 @@ def resolve_litellm_profile(
     config_override: LLMConfig | None = None,
 ) -> ResolvedLiteLLMProfile:
     # Prefer config_override if provided, otherwise fallback to settings.config_obj.llm
-    # (Queen default) or legacy settings.
+    # (Octo default) or legacy settings.
     config = config_override or (settings.config_obj.llm if settings.config_obj else None)
 
     provider_id, source = _resolve_provider_id(settings, config)

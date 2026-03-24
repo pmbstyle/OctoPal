@@ -466,10 +466,10 @@
         }
       }
     },
-    "/api/dashboard/v2/queen": {
+    "/api/dashboard/v2/octo": {
       "get": {
-        "summary": "Dashboard V2 Queen",
-        "operationId": "dashboard_v2_queen_api_dashboard_v2_queen_get",
+        "summary": "Dashboard V2 Octo",
+        "operationId": "dashboard_v2_octo_api_dashboard_v2_octo_get",
         "parameters": [
           {
             "name": "last",
@@ -522,7 +522,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DashboardQueenV2"
+                  "$ref": "#/components/schemas/DashboardOctoV2"
                 }
               }
             }
@@ -981,7 +981,7 @@
         ],
         "title": "DashboardOverviewV2"
       },
-      "DashboardQueenV2": {
+      "DashboardOctoV2": {
         "properties": {
           "contract_version": {
             "type": "string",
@@ -996,10 +996,10 @@
             "type": "object",
             "title": "Filters"
           },
-          "queen": {
+          "octo": {
             "additionalProperties": true,
             "type": "object",
-            "title": "Queen"
+            "title": "Octo"
           },
           "queues": {
             "additionalProperties": true,
@@ -1023,12 +1023,12 @@
           "contract_version",
           "generated_at",
           "filters",
-          "queen",
+          "octo",
           "queues",
           "control",
           "health"
         ],
-        "title": "DashboardQueenV2"
+        "title": "DashboardOctoV2"
       },
       "DashboardSystemV2": {
         "properties": {

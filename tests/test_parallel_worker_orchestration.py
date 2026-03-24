@@ -44,7 +44,7 @@ def test_start_workers_parallel_launches_multiple() -> None:
                     return item
             return None
 
-    class _Queen:
+    class _Octo:
         def __init__(self) -> None:
             self.store = _Store()
             self._i = 0
@@ -63,7 +63,7 @@ def test_start_workers_parallel_launches_multiple() -> None:
                 ],
                 "max_parallel": 2,
             },
-            {"queen": _Queen(), "chat_id": 123},
+            {"octo": _Octo(), "chat_id": 123},
         )
         return json.loads(payload)
 
@@ -119,12 +119,12 @@ def test_synthesize_worker_results_reports_completed_failed_and_pending() -> Non
         def get_worker(self, worker_id: str):
             return records.get(worker_id)
 
-    class _Queen:
+    class _Octo:
         store = _Store()
 
     payload = _tool_synthesize_worker_results(
         {"worker_ids": ["w1", "w2", "w3", "missing"]},
-        {"queen": _Queen()},
+        {"octo": _Octo()},
     )
     result = json.loads(payload)
     assert result["completed_count"] == 1

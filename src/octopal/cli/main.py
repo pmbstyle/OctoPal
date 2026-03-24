@@ -311,7 +311,7 @@ def _ensure_webapp_built(settings: Settings) -> None:
 def start(
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground mode (showing logs)"),
 ) -> None:
-    """Start the Octopal Queen."""
+    """Start the Octopal Octo."""
     from octopal.channels.telegram.bot import run_bot, build_dispatcher
 
     try:
@@ -341,12 +341,12 @@ def start(
     _ensure_webapp_built(settings)
     _maybe_enable_tailscale_serve(settings)
 
-    with console.status("[bold green]Initializing Octopal Queen...[/bold green]", spinner="dots"):
+    with console.status("[bold green]Initializing Octopal Octo...[/bold green]", spinner="dots"):
         write_start_status(settings)
         time.sleep(0.5)
 
     # Use ASCII checkmark [V] instead of unicode checkmark to avoid encoding issues in background processes
-    console.print("[bold green][V] Octopal Queen started.[/bold green]")
+    console.print("[bold green][V] Octopal Octo started.[/bold green]")
     console.print(f"   [dim]Logs directory:[/dim] [cyan]{settings.state_dir / 'logs'}[/cyan]")
     console.print(f"   [dim]Gateway:[/dim] [cyan]http://{settings.gateway_host}:{settings.gateway_port}[/cyan]")
     console.print("[dim]Press Ctrl+C to stop (if in foreground).[/dim]\n")
@@ -355,13 +355,13 @@ def start(
         selected_channel = normalize_user_channel(settings.user_channel)
         if selected_channel == "whatsapp":
             whatsapp_runtime = WhatsAppRuntime(settings)
-            queen = await whatsapp_runtime.start()
-            gateway_app = build_app(settings, queen)
+            octo = await whatsapp_runtime.start()
+            gateway_app = build_app(settings, octo)
             gateway_app.state.whatsapp_runtime = whatsapp_runtime
         else:
             bot_instance = Bot(token=settings.telegram_bot_token)
-            _dp, queen = build_dispatcher(settings, bot_instance)
-            gateway_app = build_app(settings, queen)
+            _dp, octo = build_dispatcher(settings, bot_instance)
+            gateway_app = build_app(settings, octo)
         import uvicorn
         config = uvicorn.Config(gateway_app, host=settings.gateway_host, port=settings.gateway_port, log_level="info")
         server = uvicorn.Server(config)
@@ -370,7 +370,7 @@ def start(
             if selected_channel == "whatsapp":
                 await asyncio.Event().wait()
             else:
-                await run_bot(settings, existing_queen=queen)
+                await run_bot(settings, existing_octo=octo)
         finally:
             server.should_exit = True
             await gateway_task
@@ -535,7 +535,7 @@ def stop() -> None:
 def restart(
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground after restart"),
 ) -> None:
-    """Stop and then start the Octopal Queen."""
+    """Stop and then start the Octopal Octo."""
     stop()
 
     settings = load_settings()
@@ -605,7 +605,7 @@ def status() -> None:
     grid.add_row("Configuration", "[bright_green]Valid[/bright_green]" if config_ok else "[bright_red]Invalid[/bright_red]")
 
     metrics = read_metrics_snapshot(settings.state_dir)
-    queen_metrics = metrics.get("queen", {}) if isinstance(metrics, dict) else {}
+    octo_metrics = metrics.get("octo", {}) if isinstance(metrics, dict) else {}
     telegram_metrics = metrics.get("telegram", {}) if isinstance(metrics, dict) else {}
     whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
     whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
@@ -613,7 +613,7 @@ def status() -> None:
     selected_channel = normalize_user_channel(settings.user_channel)
     if metrics:
         grid.add_row("")
-        grid.add_row("Queen Queues", f"[dim]followup=[/dim]{queen_metrics.get('followup_queues', 0)} [dim]internal=[/dim]{queen_metrics.get('internal_queues', 0)}")
+        grid.add_row("Octo Queues", f"[dim]followup=[/dim]{octo_metrics.get('followup_queues', 0)} [dim]internal=[/dim]{octo_metrics.get('internal_queues', 0)}")
         if selected_channel == "whatsapp":
             grid.add_row(
                 "WhatsApp",
@@ -1157,7 +1157,7 @@ def dashboard(
     compact: bool = typer.Option(False, "--compact", help="Use compact view optimized for narrow terminals"),
     json_output: bool = typer.Option(False, "--json", help="Print JSON snapshot instead of dashboard view"),
 ) -> None:
-    """Show a live runtime dashboard (system, queen, workers, control channel)."""
+    """Show a live runtime dashboard (system, octo, workers, control channel)."""
     settings = load_settings()
     last = max(1, min(50, last))
     refresh_interval = max(0.5, min(30.0, interval))
@@ -1214,7 +1214,7 @@ def sync_worker_templates(
 @tools_app.command("resolve")
 def tools_resolve(
     profile: str | None = typer.Option(None, "--profile", help="Apply a named tool profile such as research or coding."),
-    preset: str = typer.Option("all", "--preset", help="Permission preset to simulate: all or queen."),
+    preset: str = typer.Option("all", "--preset", help="Permission preset to simulate: all or octo."),
     blocked: bool = typer.Option(True, "--blocked/--available-only", help="Show blocked tools or only available ones."),
     json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
 ) -> None:
@@ -1527,15 +1527,15 @@ def _build_tool_resolution_snapshot(
     include_blocked: bool,
 ) -> dict[str, object]:
     normalized_preset = str(preset or "all").strip().lower()
-    if normalized_preset not in {"all", "queen"}:
+    if normalized_preset not in {"all", "octo"}:
         raise typer.BadParameter(f"Unsupported tools preset: {preset}")
 
     permissions = (
-        _queen_tool_permissions()
-        if normalized_preset == "queen"
+        _octo_tool_permissions()
+        if normalized_preset == "octo"
         else _all_enabled_permissions(tool_specs)
     )
-    policy_steps = _queen_tool_policy_steps() if normalized_preset == "queen" else []
+    policy_steps = _octo_tool_policy_steps() if normalized_preset == "octo" else []
     report = resolve_tool_diagnostics(
         tool_specs,
         permissions=permissions,
@@ -1563,7 +1563,7 @@ def _all_enabled_permissions(tool_specs: list[ToolSpec]) -> dict[str, bool]:
     return {str(tool.permission): True for tool in tool_specs}
 
 
-def _queen_tool_permissions() -> dict[str, bool]:
+def _octo_tool_permissions() -> dict[str, bool]:
     return {
         "filesystem_read": True,
         "filesystem_write": True,
@@ -1585,10 +1585,10 @@ def _queen_tool_permissions() -> dict[str, bool]:
     }
 
 
-def _queen_tool_policy_steps() -> list[ToolPolicyPipelineStep]:
+def _octo_tool_policy_steps() -> list[ToolPolicyPipelineStep]:
     return [
         ToolPolicyPipelineStep(
-            label="queen.raw_fetch_denylist",
+            label="octo.raw_fetch_denylist",
             policy=ToolPolicy(deny=["web_fetch", "markdown_new_fetch", "fetch_plan_tool"]),
         )
     ]
@@ -1657,7 +1657,7 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
     pid = status_data.get("pid")
     running = is_pid_running(pid)
     metrics = read_metrics_snapshot(settings.state_dir) or {}
-    queen_metrics = metrics.get("queen", {}) if isinstance(metrics, dict) else {}
+    octo_metrics = metrics.get("octo", {}) if isinstance(metrics, dict) else {}
     telegram_metrics = metrics.get("telegram", {}) if isinstance(metrics, dict) else {}
     whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
     exec_metrics = metrics.get("exec_run", {}) if isinstance(metrics, dict) else {}
@@ -1692,14 +1692,14 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
     completed_workers = by_status.get("completed", 0)
     stopped_workers = by_status.get("stopped", 0)
 
-    followup_q = int(queen_metrics.get("followup_queues", 0) or 0)
-    internal_q = int(queen_metrics.get("internal_queues", 0) or 0)
-    thinking_count = int(queen_metrics.get("thinking_count", 0) or 0)
+    followup_q = int(octo_metrics.get("followup_queues", 0) or 0)
+    internal_q = int(octo_metrics.get("internal_queues", 0) or 0)
+    thinking_count = int(octo_metrics.get("thinking_count", 0) or 0)
 
     if thinking_count > 0 or (followup_q + internal_q) > 0:
-        queen_state = "thinking"
+        octo_state = "thinking"
     else:
-        queen_state = "idle"
+        octo_state = "idle"
 
     requests = _read_jsonl(settings.state_dir / "control_requests.jsonl")
     acks = _read_jsonl(settings.state_dir / "control_acks.jsonl")
@@ -1734,12 +1734,12 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
             "last_heartbeat": status_data.get("last_message_at"),
             "uptime": _uptime_human(status_data.get("started_at")),
         },
-        "queen": {
-            "state": queen_state,
+        "octo": {
+            "state": octo_state,
             "followup_queues": followup_q,
             "internal_queues": internal_q,
-            "followup_tasks": int(queen_metrics.get("followup_tasks", 0) or 0),
-            "internal_tasks": int(queen_metrics.get("internal_tasks", 0) or 0),
+            "followup_tasks": int(octo_metrics.get("followup_tasks", 0) or 0),
+            "internal_tasks": int(octo_metrics.get("internal_tasks", 0) or 0),
         },
         "connectivity": {
             "mcp_servers": connectivity_metrics.get("mcp_servers", {})
@@ -1781,7 +1781,7 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
 
 def _build_dashboard_renderable(snapshot: dict, compact: bool = False) -> Align:
     system = snapshot["system"]
-    queen = snapshot["queen"]
+    octo = snapshot["octo"]
     queues = snapshot["queues"]
     workers = snapshot["workers"]
     control = snapshot["control"]
@@ -1803,7 +1803,7 @@ def _build_dashboard_renderable(snapshot: dict, compact: bool = False) -> Align:
     header_text = (
         f"[bold bright_cyan]OCTOPAL DASHBOARD[/bold bright_cyan]   "
         f"{_fmt_status('Sys', sys_status)}   "
-        f"{_fmt_status('Queen', queen['state'])}   "
+        f"{_fmt_status('Octo', octo['state'])}   "
         f"{_fmt_status('Workers', worker_status)}   "
         f"[dim]Channel[/dim] [{channel_color}]{active_channel}[/{channel_color}]   "
         f"[dim]PID[/dim] {system['pid'] or 'N/A'}   "
@@ -1818,7 +1818,7 @@ def _build_dashboard_renderable(snapshot: dict, compact: bool = False) -> Align:
     health.add_row(
         "Queues",
         (
-            f"followup={queen['followup_queues']} internal={queen['internal_queues']} "
+            f"followup={octo['followup_queues']} internal={octo['internal_queues']} "
             f"telegram={queues['telegram_queues']} send_tasks={queues['telegram_send_tasks']}"
         ),
     )

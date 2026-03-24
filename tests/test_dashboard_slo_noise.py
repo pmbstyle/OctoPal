@@ -22,7 +22,7 @@ def test_build_slo_metrics_produces_expected_keys() -> None:
     now = datetime.now(UTC)
     services = [
         {"id": "gateway", "status": "ok"},
-        {"id": "queen", "status": "warning"},
+        {"id": "octo", "status": "warning"},
         {"id": "telegram", "status": "ok"},
         {"id": "exec_run", "status": "ok"},
     ]
@@ -47,7 +47,7 @@ def test_build_noise_control_reduces_duplicates() -> None:
         {"service": "gateway", "level": "error", "event": "timeout to provider"},
         {"service": "gateway", "level": "error", "event": "timeout to provider"},
         {"service": "gateway", "level": "warning", "event": "queue backlog high"},
-        {"service": "queen", "level": "warning", "event": "queue backlog high"},
+        {"service": "octo", "level": "warning", "event": "queue backlog high"},
     ]
     noise = _build_noise_control(logs=logs)
     assert noise["raw_alerts"] == 4

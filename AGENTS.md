@@ -2,13 +2,13 @@
 
 ## Project Structure & Module Organization
 
-- `src/octopal/` contains the main Python package: CLI, channels, gateway, memory, policy, providers, Queen runtime, scheduler, WhatsApp/Telegram integrations, workers, and shared utilities.
+- `src/octopal/` contains the main Python package: CLI, channels, gateway, memory, policy, providers, Octo runtime, scheduler, WhatsApp/Telegram integrations, workers, and shared utilities.
 - `webapp/` holds the Vite-based dashboard frontend. `src/` contains app code and `dist/` contains built assets.
 - `tests/` contains the pytest suite for CLI, dashboard, runtime, worker orchestration, memory, and channel behavior.
 - `scripts/` contains setup and maintenance helpers such as bootstrap and worker-template sync utilities.
 - `docker/` contains container assets, including the worker image Dockerfile.
 - `data/` is runtime state storage for SQLite, metrics, auth state, and logs; avoid committing generated contents.
-- `workspace/` is the default Queen/worker workspace and scratch area.
+- `workspace/` is the default Octo/worker workspace and scratch area.
 - `workspace_templates/` contains bootstrap content copied into new workspaces.
 - `docs/` stores additional project documentation.
 
@@ -18,7 +18,7 @@
 - `python -m venv .venv` and `pip install -e .[dev]` are the non-`uv` editable setup path.
 - `uv run octopal configure` runs the interactive configuration wizard and bootstraps missing workspace files.
 - `uv run octopal start` starts Octopal in background mode.
-- `uv run octopal start --foreground` runs the Queen and gateway in the foreground.
+- `uv run octopal start --foreground` runs the Octo and gateway in the foreground.
 - `uv run octopal stop`, `uv run octopal restart`, and `uv run octopal status` manage the local runtime.
 - `uv run octopal logs --follow` tails `data/logs/octopal.log`.
 - `uv run octopal gateway` starts the FastAPI gateway directly.
@@ -36,7 +36,7 @@
 - Python code lives under `src/` with imports rooted at `octopal`.
 - Use 4-space indentation, type hints on new or changed Python code, and descriptive module names.
 - Follow the configured tooling in `pyproject.toml`: Black for formatting, Ruff for linting/import order, and MyPy for type checks.
-- Keep CLI entrypoints in `src/octopal/cli/` and group related runtime code under focused packages such as `gateway/`, `memory/`, `queen/`, and `workers/`.
+- Keep CLI entrypoints in `src/octopal/cli/` and group related runtime code under focused packages such as `gateway/`, `memory/`, `octo/`, and `workers/`.
 - Frontend code in `webapp/src/` should stay TypeScript-first and match the existing Vite/Tailwind setup.
 
 ## Testing Guidelines
@@ -58,9 +58,9 @@
 - Important settings include channel credentials, provider API keys, dashboard protection, and `OCTOPAL_STATE_DIR` / workspace paths.
 - Treat `data/`, WhatsApp auth state, and generated workspace files as local runtime artifacts unless the repo explicitly needs fixtures.
 
-## Queen Context Reset Policy
+## Octo Context Reset Policy
 
-- The Queen can invoke `queen_context_reset` to compact or reset overloaded chat context.
+- The Octo can invoke `octo_context_reset` to compact or reset overloaded chat context.
 - Preferred default is `mode=soft` with structured handoff fields: `goal_now`, `done`, `open_threads`, `critical_constraints`, and `next_step`.
 - Persist reset artifacts in workspace memory:
   - `memory/handoff.md`, `memory/handoff.json`

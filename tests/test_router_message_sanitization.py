@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from octopal.infrastructure.providers.base import Message
-from octopal.runtime.queen.router import _sanitize_messages_for_complete
+from octopal.runtime.octo.router import _sanitize_messages_for_complete
 
 
 def test_sanitize_messages_removes_tool_role_and_tool_calls() -> None:

@@ -38,13 +38,13 @@ class _MCPStub:
         }
 
 
-class _QueenStub:
+class _OctoStub:
     def __init__(self) -> None:
         self.mcp_manager = _MCPStub()
 
 
 def test_mcp_discover_summarizes_ready_and_unavailable_servers() -> None:
-    payload = json.loads(mcp_discover({}, {"queen": _QueenStub()}))
+    payload = json.loads(mcp_discover({}, {"octo": _OctoStub()}))
 
     assert payload["status"] == "ok"
     assert payload["server_count"] == 2
@@ -60,7 +60,7 @@ def test_mcp_discover_summarizes_ready_and_unavailable_servers() -> None:
 
 
 def test_mcp_discover_can_focus_on_one_server() -> None:
-    payload = json.loads(mcp_discover({"server_id": "docs"}, {"queen": _QueenStub()}))
+    payload = json.loads(mcp_discover({"server_id": "docs"}, {"octo": _OctoStub()}))
 
     assert payload["server_count"] == 1
     assert payload["servers"][0]["server_id"] == "docs"

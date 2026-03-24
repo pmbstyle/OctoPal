@@ -24,8 +24,8 @@ from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.infrastructure.store.models import AuditEvent, WorkerRecord, WorkerTemplateRecord
 
 _WINDOW_CHOICES = {15, 60, 240, 1440}
-_SERVICE_CHOICES = {"all", "gateway", "queen", "telegram", "whatsapp", "exec_run", "mcp", "workers"}
-_STREAM_TOPICS = {"overview", "incidents", "queen", "workers", "system", "actions", "snapshot"}
+_SERVICE_CHOICES = {"all", "gateway", "octo", "telegram", "whatsapp", "exec_run", "mcp", "workers"}
+_STREAM_TOPICS = {"overview", "incidents", "octo", "workers", "system", "actions", "snapshot"}
 
 
 @dataclass(frozen=True)
@@ -55,8 +55,8 @@ class DashboardIncidentsV2(DashboardV2Envelope):
     incidents: dict[str, Any]
 
 
-class DashboardQueenV2(DashboardV2Envelope):
-    queen: dict[str, Any]
+class DashboardOctoV2(DashboardV2Envelope):
+    octo: dict[str, Any]
     queues: dict[str, Any]
     control: dict[str, Any]
     health: dict[str, Any]
@@ -308,14 +308,14 @@ def register_dashboard_routes(app: FastAPI) -> None:
             incidents=dict(snapshot.get("incidents", {})),
         )
 
-    @app.get("/api/dashboard/v2/queen", response_model=DashboardQueenV2)
-    async def dashboard_v2_queen(
+    @app.get("/api/dashboard/v2/octo", response_model=DashboardOctoV2)
+    async def dashboard_v2_octo(
         request: Request,
         last: int = Query(8, ge=1, le=50),
         window_minutes: int = Query(60, ge=1, le=1440),
         service: str = Query("all"),
         environment: str = Query("all"),
-    ) -> DashboardQueenV2:
+    ) -> DashboardOctoV2:
         snapshot = _build_dashboard_v2_snapshot(
             app=app,
             request=request,
@@ -324,11 +324,11 @@ def register_dashboard_routes(app: FastAPI) -> None:
             service=service,
             environment=environment,
         )
-        return DashboardQueenV2(
-            contract_version="dashboard.v2.queen",
+        return DashboardOctoV2(
+            contract_version="dashboard.v2.octo",
             generated_at=str(snapshot.get("generated_at", "")),
             filters=dict(snapshot.get("filters", {})),
-            queen=dict(snapshot.get("queen", {})),
+            octo=dict(snapshot.get("octo", {})),
             queues=dict(snapshot.get("queues", {})),
             control=dict(snapshot.get("control", {})),
             health=dict(snapshot.get("health", {})),
@@ -472,12 +472,12 @@ def _dashboard_v2_projection(snapshot: dict[str, Any], *, topic: str) -> dict[st
             "filters": filters,
             "incidents": dict(snapshot.get("incidents", {})),
         }
-    if topic == "queen":
+    if topic == "octo":
         return {
-            "contract_version": "dashboard.v2.queen",
+            "contract_version": "dashboard.v2.octo",
             "generated_at": generated_at,
             "filters": filters,
-            "queen": dict(snapshot.get("queen", {})),
+            "octo": dict(snapshot.get("octo", {})),
             "queues": dict(snapshot.get("queues", {})),
             "control": dict(snapshot.get("control", {})),
             "health": dict(snapshot.get("health", {})),
@@ -936,9 +936,9 @@ async def _launch_worker_from_record(
     reason: str,
     requested_by: str,
 ) -> dict[str, Any]:
-    queen = getattr(app.state, "queen", None)
-    if queen is None or not hasattr(queen, "_start_worker_async"):
-        return {"status": "error", "message": "Queen runtime is unavailable for worker launch."}
+    octo = getattr(app.state, "octo", None)
+    if octo is None or not hasattr(octo, "_start_worker_async"):
+        return {"status": "error", "message": "Octo runtime is unavailable for worker launch."}
     template_id = str(worker.template_id or "").strip()
     if not template_id:
         return {"status": "error", "message": "Worker template_id missing; cannot restart/retry."}
@@ -948,7 +948,7 @@ async def _launch_worker_from_record(
     note = f"[dashboard:{requested_by}]"
     if reason:
         note += f" {reason}"
-    launch = await queen._start_worker_async(
+    launch = await octo._start_worker_async(
         worker_id=template_id,
         task=f"{task}\n\n{note}",
         chat_id=0,
@@ -1032,7 +1032,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
     pid = status_data.get("pid")
     running = is_pid_running(pid)
     metrics = read_metrics_snapshot(settings.state_dir) or {}
-    queen_metrics = metrics.get("queen", {}) if isinstance(metrics, dict) else {}
+    octo_metrics = metrics.get("octo", {}) if isinstance(metrics, dict) else {}
     telegram_metrics = metrics.get("telegram", {}) if isinstance(metrics, dict) else {}
     whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
     exec_metrics = metrics.get("exec_run", {}) if isinstance(metrics, dict) else {}
@@ -1059,10 +1059,10 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
     root_running = sum(1 for w in running_nodes if not w.parent_worker_id)
     subworkers_running = sum(1 for w in running_nodes if bool(w.parent_worker_id))
 
-    followup_q = int(queen_metrics.get("followup_queues", 0) or 0)
-    internal_q = int(queen_metrics.get("internal_queues", 0) or 0)
-    thinking_count = int(queen_metrics.get("thinking_count", 0) or 0)
-    queen_state = "thinking" if thinking_count > 0 or (followup_q + internal_q) > 0 else "idle"
+    followup_q = int(octo_metrics.get("followup_queues", 0) or 0)
+    internal_q = int(octo_metrics.get("internal_queues", 0) or 0)
+    thinking_count = int(octo_metrics.get("thinking_count", 0) or 0)
+    octo_state = "thinking" if thinking_count > 0 or (followup_q + internal_q) > 0 else "idle"
 
     requests = _read_jsonl(settings.state_dir / "control_requests.jsonl")
     acks = _read_jsonl(settings.state_dir / "control_acks.jsonl")
@@ -1084,7 +1084,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         now=now,
         system_running=running,
         system_last_heartbeat=status_data.get("last_message_at"),
-        queen_metrics=queen_metrics,
+        octo_metrics=octo_metrics,
         telegram_metrics=telegram_metrics,
         whatsapp_metrics=whatsapp_metrics,
         exec_metrics=exec_metrics,
@@ -1145,12 +1145,12 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
             "last_heartbeat": status_data.get("last_message_at"),
             "uptime": _uptime_human(status_data.get("started_at")),
         },
-        "queen": {
-            "state": queen_state,
+        "octo": {
+            "state": octo_state,
             "followup_queues": followup_q,
             "internal_queues": internal_q,
-            "followup_tasks": int(queen_metrics.get("followup_tasks", 0) or 0),
-            "internal_tasks": int(queen_metrics.get("internal_tasks", 0) or 0),
+            "followup_tasks": int(octo_metrics.get("followup_tasks", 0) or 0),
+            "internal_tasks": int(octo_metrics.get("internal_tasks", 0) or 0),
         },
         "connectivity": {"mcp_servers": mcp_servers if isinstance(mcp_servers, dict) else {}},
         "logs": recent_logs,
@@ -1251,7 +1251,7 @@ def _build_service_health(
     now: datetime,
     system_running: bool,
     system_last_heartbeat: str | None,
-    queen_metrics: dict[str, Any],
+    octo_metrics: dict[str, Any],
     telegram_metrics: dict[str, Any],
     whatsapp_metrics: dict[str, Any],
     exec_metrics: dict[str, Any],
@@ -1274,27 +1274,27 @@ def _build_service_health(
         }
     )
 
-    followup_q = int(queen_metrics.get("followup_queues", 0) or 0)
-    internal_q = int(queen_metrics.get("internal_queues", 0) or 0)
-    thinking_count = int(queen_metrics.get("thinking_count", 0) or 0)
-    queen_queue_pressure = followup_q + internal_q
-    queen_status = "ok"
-    queen_reason = "idle"
-    if queen_queue_pressure >= 20:
-        queen_status = "critical"
-        queen_reason = f"queue pressure high ({queen_queue_pressure})"
-    elif queen_queue_pressure >= 8:
-        queen_status = "warning"
-        queen_reason = f"queue pressure rising ({queen_queue_pressure})"
+    followup_q = int(octo_metrics.get("followup_queues", 0) or 0)
+    internal_q = int(octo_metrics.get("internal_queues", 0) or 0)
+    thinking_count = int(octo_metrics.get("thinking_count", 0) or 0)
+    octo_queue_pressure = followup_q + internal_q
+    octo_status = "ok"
+    octo_reason = "idle"
+    if octo_queue_pressure >= 20:
+        octo_status = "critical"
+        octo_reason = f"queue pressure high ({octo_queue_pressure})"
+    elif octo_queue_pressure >= 8:
+        octo_status = "warning"
+        octo_reason = f"queue pressure rising ({octo_queue_pressure})"
     elif thinking_count > 0:
-        queen_reason = "processing tasks"
+        octo_reason = "processing tasks"
     out.append(
         {
-            "id": "queen",
-            "name": "Queen",
-            "status": queen_status,
-            "reason": queen_reason,
-            "updated_at": queen_metrics.get("updated_at"),
+            "id": "octo",
+            "name": "Octo",
+            "status": octo_status,
+            "reason": octo_reason,
+            "updated_at": octo_metrics.get("updated_at"),
             "metrics": {
                 "followup_queues": followup_q,
                 "internal_queues": internal_q,
@@ -1586,7 +1586,7 @@ def _build_incidents(
         items.append(
             {
                 "id": "queue-depth-pressure",
-                "service": "queen",
+                "service": "octo",
                 "severity": "warning",
                 "impact": 65 + min(20, queue_depth // 2),
                 "title": "Queue pressure",
@@ -1625,7 +1625,7 @@ def _build_slo_metrics(
     error_budget_target = 1.0
     error_budget_fraction = error_budget_target / 100.0
 
-    core_services = [s for s in services if str(s.get("id", "")) in {"gateway", "queen", active_channel, "exec_run"}]
+    core_services = [s for s in services if str(s.get("id", "")) in {"gateway", "octo", active_channel, "exec_run"}]
     if not core_services:
         uptime_pct = 100.0
     else:
@@ -1925,8 +1925,8 @@ def _detect_log_service(payload: dict[str, Any], event: str) -> str:
         return "whatsapp"
     if "telegram" in haystack:
         return "telegram"
-    if "queen" in haystack:
-        return "queen"
+    if "octo" in haystack:
+        return "octo"
     if "exec_run" in haystack or "exec run" in haystack:
         return "exec_run"
     if "mcp" in haystack:

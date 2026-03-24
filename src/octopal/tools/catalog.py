@@ -25,7 +25,7 @@ from octopal.tools.browser.actions import (
 from octopal.tools.memory.canon import manage_canon, search_canon
 from octopal.tools.filesystem.download import download_file
 from octopal.tools.ops.exec_run import exec_run
-from octopal.tools.memory.experiments import queen_experiment_log
+from octopal.tools.memory.experiments import octo_experiment_log
 from octopal.tools.web.plan import fetch_plan_tool
 from octopal.tools.filesystem.files import fs_delete, fs_list, fs_move, fs_read, fs_write
 from octopal.tools.llm.subtask import run_llm_subtask
@@ -65,7 +65,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
     tools = [
         ToolSpec(
             name="manage_canon",
-            description="Manage canonical memory files (facts.md, decisions.md, failures.md). Only the Queen can use this.",
+            description="Manage canonical memory files (facts.md, decisions.md, failures.md). Only the Octo can use this.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -114,7 +114,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             is_async=True,
         ),
         ToolSpec(
-            name="queen_context_health",
+            name="octo_context_health",
             description="Return current context-health metrics and reset decision state for the active chat.",
             parameters={
                 "type": "object",
@@ -122,11 +122,11 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=_tool_queen_context_health,
+            handler=_tool_octo_context_health,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_opportunity_scan",
+            name="octo_opportunity_scan",
             description="Generate proactive opportunity cards (impact/effort/confidence/next_action) for the active chat.",
             parameters={
                 "type": "object",
@@ -136,12 +136,12 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=_tool_queen_opportunity_scan,
+            handler=_tool_octo_opportunity_scan,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_self_queue_add",
-            description="Add a Queen-initiated task into self-driven queue.",
+            name="octo_self_queue_add",
+            description="Add a Octo-initiated task into self-driven queue.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -155,28 +155,28 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=_tool_queen_self_queue_add,
+            handler=_tool_octo_self_queue_add,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_self_queue_list",
-            description="List current Queen self-driven queue items.",
+            name="octo_self_queue_list",
+            description="List current Octo self-driven queue items.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="self_control",
-            handler=_tool_queen_self_queue_list,
+            handler=_tool_octo_self_queue_list,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_self_queue_take",
-            description="Claim next pending task from Queen self-driven queue.",
+            name="octo_self_queue_take",
+            description="Claim next pending task from Octo self-driven queue.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="self_control",
-            handler=_tool_queen_self_queue_take,
+            handler=_tool_octo_self_queue_take,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_self_queue_update",
-            description="Update status of a Queen self-queue item.",
+            name="octo_self_queue_update",
+            description="Update status of a Octo self-queue item.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -188,11 +188,11 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=_tool_queen_self_queue_update,
+            handler=_tool_octo_self_queue_update,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_experiment_log",
+            name="octo_experiment_log",
             description="Append a compact self-improvement observation or experiment result to workspace/experiments/results.jsonl.",
             parameters={
                 "type": "object",
@@ -223,27 +223,27 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=queen_experiment_log,
+            handler=octo_experiment_log,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_memchain_status",
+            name="octo_memchain_status",
             description="Show current memchain integrity status for tracked workspace memory/config files.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="self_control",
-            handler=_tool_queen_memchain_status,
+            handler=_tool_octo_memchain_status,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_memchain_verify",
+            name="octo_memchain_verify",
             description="Verify memchain continuity and detect file drift for tracked workspace memory/config files.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="self_control",
-            handler=_tool_queen_memchain_verify,
+            handler=_tool_octo_memchain_verify,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_memchain_record",
+            name="octo_memchain_record",
             description="Record a new memchain snapshot for tracked workspace memory/config files.",
             parameters={
                 "type": "object",
@@ -253,11 +253,11 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=_tool_queen_memchain_record,
+            handler=_tool_octo_memchain_record,
             is_async=True,
         ),
         ToolSpec(
-            name="queen_memchain_init",
+            name="octo_memchain_init",
             description="Initialize or reinitialize memchain files in workspace memory.",
             parameters={
                 "type": "object",
@@ -267,20 +267,20 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=_tool_queen_memchain_init,
+            handler=_tool_octo_memchain_init,
             is_async=True,
         ),
         ToolSpec(
             name="list_schedule",
-            description="List all scheduled tasks and their status. Only the Queen can use this.",
+            description="List all scheduled tasks and their status. Only the Octo can use this.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="self_control",
-            handler=lambda args, ctx: "\n".join([f"- {t['name']} (ID: {t['id']}): {t['frequency']}, Last run: {t['last_run_at'] or 'Never'}" for t in ctx["queen"].scheduler.store.get_scheduled_tasks()]),
+            handler=lambda args, ctx: "\n".join([f"- {t['name']} (ID: {t['id']}): {t['frequency']}, Last run: {t['last_run_at'] or 'Never'}" for t in ctx["octo"].scheduler.store.get_scheduled_tasks()]),
             is_async=True,
         ),
         ToolSpec(
             name="check_schedule",
-            description="Check for tasks that are due to run. Returns machine-readable JSON with due tasks and current UTC time. Only the Queen can use this.",
+            description="Check for tasks that are due to run. Returns machine-readable JSON with due tasks and current UTC time. Only the Octo can use this.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="self_control",
             handler=_tool_check_schedule,
@@ -288,7 +288,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="scheduler_status",
-            description="Summarize scheduler state with due tasks, next-run previews, and hints about what the Queen should do next.",
+            description="Summarize scheduler state with due tasks, next-run previews, and hints about what the Octo should do next.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -309,13 +309,13 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="schedule_task",
-            description="Add or update a scheduled task. Only the Queen can use this.",
+            description="Add or update a scheduled task. Only the Octo can use this.",
             parameters={
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Human-readable name of the task."},
                     "frequency": {"type": "string", "description": "Frequency (e.g., 'Every 30 minutes', 'Daily at 14:00')."},
-                    "task": {"type": "string", "description": "The task description for the worker or Queen."},
+                    "task": {"type": "string", "description": "The task description for the worker or Octo."},
                     "description": {"type": "string", "description": "Brief description of the task purpose."},
                     "worker_id": {"type": "string", "description": "Optional: Specific worker template ID to use."},
                     "inputs": {"type": "object", "description": "Optional: Inputs for the worker."},
@@ -329,7 +329,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="remove_task",
-            description="Remove a scheduled task by ID. Only the Queen can use this.",
+            description="Remove a scheduled task by ID. Only the Octo can use this.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -339,7 +339,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=lambda args, ctx: (ctx["queen"].scheduler.remove_task(args["task_id"]), "Task removed.")[1],
+            handler=lambda args, ctx: (ctx["octo"].scheduler.remove_task(args["task_id"]), "Task removed.")[1],
             is_async=True,
         ),
         ToolSpec(
@@ -356,7 +356,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="llm_subtask", # A new permission to control access to this powerful tool
-            handler=lambda args, ctx: run_llm_subtask(args, ctx["queen"].provider),
+            handler=lambda args, ctx: run_llm_subtask(args, ctx["octo"].provider),
             is_async=True,
         ),
         ToolSpec(
@@ -945,7 +945,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="gateway_status",
-            description="Read-only control-plane snapshot for gateway, queen, active channel, exec sessions, and MCP connectivity.",
+            description="Read-only control-plane snapshot for gateway, octo, active channel, exec sessions, and MCP connectivity.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="service_read",
             handler=lambda args, ctx: _tool_gateway_status(args, ctx),
@@ -1003,8 +1003,8 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             handler=lambda args, ctx: rollback_release(args, ctx),
         ),
         ToolSpec(
-            name="queen_context_reset",
-            description="Compact or reset Queen chat context with a structured handoff and wake-up directive.",
+            name="octo_context_reset",
+            description="Compact or reset Octo chat context with a structured handoff and wake-up directive.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -1025,7 +1025,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=_tool_queen_context_reset,
+            handler=_tool_octo_context_reset,
             is_async=True,
         ),
         ToolSpec(
@@ -1058,34 +1058,34 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
 
 
 async def _tool_check_schedule(args, ctx) -> str:
-    scheduler = ctx["queen"].scheduler
+    scheduler = ctx["octo"].scheduler
     due_tasks = scheduler.get_actionable_tasks()
-    queen = ctx.get("queen")
+    octo = ctx.get("octo")
     chat_id = int(ctx.get("chat_id", 0) or 0)
     context_health = None
     opportunity_snapshot = None
     self_queue = None
-    if queen is not None and hasattr(queen, "get_context_health_snapshot"):
+    if octo is not None and hasattr(octo, "get_context_health_snapshot"):
         try:
-            maybe = queen.get_context_health_snapshot(chat_id)
+            maybe = octo.get_context_health_snapshot(chat_id)
             if asyncio.iscoroutine(maybe):
                 context_health = await maybe
             else:
                 context_health = maybe
         except Exception:
             context_health = None
-    if queen is not None and hasattr(queen, "scan_opportunities"):
+    if octo is not None and hasattr(octo, "scan_opportunities"):
         try:
-            maybe = queen.scan_opportunities(chat_id, limit=3)
+            maybe = octo.scan_opportunities(chat_id, limit=3)
             if asyncio.iscoroutine(maybe):
                 opportunity_snapshot = await maybe
             else:
                 opportunity_snapshot = maybe
         except Exception:
             opportunity_snapshot = None
-    if queen is not None and hasattr(queen, "get_self_queue"):
+    if octo is not None and hasattr(octo, "get_self_queue"):
         try:
-            maybe = queen.get_self_queue(chat_id)
+            maybe = octo.get_self_queue(chat_id)
             if asyncio.iscoroutine(maybe):
                 self_queue = await maybe
             else:
@@ -1116,7 +1116,7 @@ async def _tool_check_schedule(args, ctx) -> str:
 
 
 async def _tool_scheduler_status(args, ctx) -> str:
-    scheduler = ctx["queen"].scheduler
+    scheduler = ctx["octo"].scheduler
     enabled_only = bool((args or {}).get("enabled_only", False))
     limit = max(1, min(50, int((args or {}).get("limit") or 20)))
     described = scheduler.describe_tasks(enabled_only=enabled_only)
@@ -1172,7 +1172,7 @@ async def _tool_scheduler_status(args, ctx) -> str:
 
 def _tool_schedule_task(args, ctx) -> str:
     try:
-        task_id = ctx["queen"].scheduler.schedule_task(
+        task_id = ctx["octo"].scheduler.schedule_task(
             name=args["name"],
             frequency=args["frequency"],
             task_text=args["task"],
@@ -1206,7 +1206,7 @@ def _tool_gateway_status(args, ctx) -> str:
         str(status_data.get("active_channel", "") or settings.user_channel)
     )
     active_channel_label = user_channel_label(active_channel)
-    queen_metrics = metrics.get("queen", {}) if isinstance(metrics, dict) else {}
+    octo_metrics = metrics.get("octo", {}) if isinstance(metrics, dict) else {}
     telegram_metrics = metrics.get("telegram", {}) if isinstance(metrics, dict) else {}
     whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
     exec_metrics = metrics.get("exec_run", {}) if isinstance(metrics, dict) else {}
@@ -1221,10 +1221,10 @@ def _tool_gateway_status(args, ctx) -> str:
             "updated_at": status_data.get("last_message_at"),
         },
         {
-            "id": "queen",
-            "status": _gateway_queen_status(queen_metrics),
-            "reason": _gateway_queen_reason(queen_metrics),
-            "updated_at": queen_metrics.get("updated_at"),
+            "id": "octo",
+            "status": _gateway_octo_status(octo_metrics),
+            "reason": _gateway_octo_reason(octo_metrics),
+            "updated_at": octo_metrics.get("updated_at"),
         },
         {
             "id": active_channel,
@@ -1242,8 +1242,8 @@ def _tool_gateway_status(args, ctx) -> str:
     hints: list[str] = []
     if not running:
         hints.append("Gateway process is down; restart the Octopal runtime before expecting channel traffic.")
-    if int(queen_metrics.get("followup_queues", 0) or 0) > 0:
-        hints.append("Queen follow-up queue is non-empty; check worker/gateway traffic before spawning more work.")
+    if int(octo_metrics.get("followup_queues", 0) or 0) > 0:
+        hints.append("Octo follow-up queue is non-empty; check worker/gateway traffic before spawning more work.")
     if active_channel == "telegram" and int(telegram_metrics.get("chat_queues", 0) or 0) > 0:
         hints.append("Telegram queue depth is elevated; outbound delivery may be catching up.")
     if active_channel == "whatsapp" and int(bool(whatsapp_metrics.get("connected", 0))) == 0:
@@ -1266,13 +1266,13 @@ def _tool_gateway_status(args, ctx) -> str:
                 "active_channel": active_channel,
                 "active_channel_label": active_channel_label,
             },
-            "queen": {
-                "followup_queues": int(queen_metrics.get("followup_queues", 0) or 0),
-                "internal_queues": int(queen_metrics.get("internal_queues", 0) or 0),
-                "followup_tasks": int(queen_metrics.get("followup_tasks", 0) or 0),
-                "internal_tasks": int(queen_metrics.get("internal_tasks", 0) or 0),
-                "thinking_count": int(queen_metrics.get("thinking_count", 0) or 0),
-                "updated_at": queen_metrics.get("updated_at"),
+            "octo": {
+                "followup_queues": int(octo_metrics.get("followup_queues", 0) or 0),
+                "internal_queues": int(octo_metrics.get("internal_queues", 0) or 0),
+                "followup_tasks": int(octo_metrics.get("followup_tasks", 0) or 0),
+                "internal_tasks": int(octo_metrics.get("internal_tasks", 0) or 0),
+                "thinking_count": int(octo_metrics.get("thinking_count", 0) or 0),
+                "updated_at": octo_metrics.get("updated_at"),
             },
             "channel": {
                 "id": active_channel,
@@ -1308,24 +1308,24 @@ def _tool_gateway_status(args, ctx) -> str:
     )
 
 
-async def _tool_queen_context_reset(args, ctx) -> str:
-    queen = ctx.get("queen")
+async def _tool_octo_context_reset(args, ctx) -> str:
+    octo = ctx.get("octo")
     chat_id = int(ctx.get("chat_id", 0) or 0)
-    if queen is None or not hasattr(queen, "request_context_reset"):
-        return json.dumps({"status": "error", "message": "queen context reset is unavailable"}, ensure_ascii=False)
-    result = await queen.request_context_reset(chat_id, args or {})
+    if octo is None or not hasattr(octo, "request_context_reset"):
+        return json.dumps({"status": "error", "message": "octo context reset is unavailable"}, ensure_ascii=False)
+    result = await octo.request_context_reset(chat_id, args or {})
     return json.dumps(result, ensure_ascii=False)
 
 
-async def _tool_queen_context_health(args, ctx) -> str:
-    queen = ctx.get("queen")
+async def _tool_octo_context_health(args, ctx) -> str:
+    octo = ctx.get("octo")
     chat_id = int(ctx.get("chat_id", 0) or 0)
-    if queen is None or not hasattr(queen, "get_context_health_snapshot"):
-        return json.dumps({"status": "error", "message": "queen context health is unavailable"}, ensure_ascii=False)
-    snapshot = await queen.get_context_health_snapshot(chat_id)
+    if octo is None or not hasattr(octo, "get_context_health_snapshot"):
+        return json.dumps({"status": "error", "message": "octo context health is unavailable"}, ensure_ascii=False)
+    snapshot = await octo.get_context_health_snapshot(chat_id)
     thresholds = (
-        queen.get_context_thresholds()
-        if hasattr(queen, "get_context_thresholds")
+        octo.get_context_thresholds()
+        if hasattr(octo, "get_context_thresholds")
         else {
             "watch": {
                 "context_size_estimate": 60000,
@@ -1354,18 +1354,18 @@ def _workspace_dir() -> Path:
     return Path(os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")).resolve()
 
 
-def _gateway_queen_status(queen_metrics: dict[str, object]) -> str:
-    followup = int(queen_metrics.get("followup_queues", 0) or 0)
-    internal = int(queen_metrics.get("internal_queues", 0) or 0)
+def _gateway_octo_status(octo_metrics: dict[str, object]) -> str:
+    followup = int(octo_metrics.get("followup_queues", 0) or 0)
+    internal = int(octo_metrics.get("internal_queues", 0) or 0)
     queue_pressure = followup + internal
     if queue_pressure >= 10:
         return "warning"
     return "ok"
 
 
-def _gateway_queen_reason(queen_metrics: dict[str, object]) -> str:
-    followup = int(queen_metrics.get("followup_queues", 0) or 0)
-    internal = int(queen_metrics.get("internal_queues", 0) or 0)
+def _gateway_octo_reason(octo_metrics: dict[str, object]) -> str:
+    followup = int(octo_metrics.get("followup_queues", 0) or 0)
+    internal = int(octo_metrics.get("internal_queues", 0) or 0)
     queue_pressure = followup + internal
     if queue_pressure <= 0:
         return "queues clear"
@@ -1426,12 +1426,12 @@ def _gateway_mcp_reason(connectivity_metrics: dict[str, object]) -> str:
     return f"{connected}/{total} server(s) connected"
 
 
-async def _tool_queen_memchain_status(args, ctx) -> str:
+async def _tool_octo_memchain_status(args, ctx) -> str:
     payload = await asyncio.to_thread(memchain_status, _workspace_dir())
     return json.dumps(payload, ensure_ascii=False)
 
 
-async def _tool_queen_memchain_verify(args, ctx) -> str:
+async def _tool_octo_memchain_verify(args, ctx) -> str:
     result = await asyncio.to_thread(memchain_verify, _workspace_dir())
     payload = {
         "status": result.status,
@@ -1444,64 +1444,64 @@ async def _tool_queen_memchain_verify(args, ctx) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-async def _tool_queen_memchain_record(args, ctx) -> str:
-    reason = str((args or {}).get("reason", "queen_manual") or "queen_manual")
+async def _tool_octo_memchain_record(args, ctx) -> str:
+    reason = str((args or {}).get("reason", "octo_manual") or "octo_manual")
     payload = await asyncio.to_thread(
         memchain_record,
         _workspace_dir(),
         reason=reason,
-        meta={"source": "queen_tool", "chat_id": int(ctx.get("chat_id", 0) or 0)},
+        meta={"source": "octo_tool", "chat_id": int(ctx.get("chat_id", 0) or 0)},
     )
     return json.dumps(payload, ensure_ascii=False)
 
 
-async def _tool_queen_memchain_init(args, ctx) -> str:
+async def _tool_octo_memchain_init(args, ctx) -> str:
     force = bool((args or {}).get("force", False))
     payload = await asyncio.to_thread(memchain_init, _workspace_dir(), force=force)
     return json.dumps(payload, ensure_ascii=False)
 
 
-async def _tool_queen_opportunity_scan(args, ctx) -> str:
-    queen = ctx.get("queen")
+async def _tool_octo_opportunity_scan(args, ctx) -> str:
+    octo = ctx.get("octo")
     chat_id = int(ctx.get("chat_id", 0) or 0)
-    if queen is None or not hasattr(queen, "scan_opportunities"):
-        return json.dumps({"status": "error", "message": "queen opportunity scan is unavailable"}, ensure_ascii=False)
+    if octo is None or not hasattr(octo, "scan_opportunities"):
+        return json.dumps({"status": "error", "message": "octo opportunity scan is unavailable"}, ensure_ascii=False)
     limit = int((args or {}).get("limit", 3) or 3)
-    payload = await queen.scan_opportunities(chat_id, limit=limit)
+    payload = await octo.scan_opportunities(chat_id, limit=limit)
     return json.dumps(payload, ensure_ascii=False)
 
 
-async def _tool_queen_self_queue_add(args, ctx) -> str:
-    queen = ctx.get("queen")
+async def _tool_octo_self_queue_add(args, ctx) -> str:
+    octo = ctx.get("octo")
     chat_id = int(ctx.get("chat_id", 0) or 0)
-    if queen is None or not hasattr(queen, "add_self_queue_item"):
-        return json.dumps({"status": "error", "message": "queen self queue is unavailable"}, ensure_ascii=False)
-    payload = await queen.add_self_queue_item(chat_id, args or {})
+    if octo is None or not hasattr(octo, "add_self_queue_item"):
+        return json.dumps({"status": "error", "message": "octo self queue is unavailable"}, ensure_ascii=False)
+    payload = await octo.add_self_queue_item(chat_id, args or {})
     return json.dumps(payload, ensure_ascii=False)
 
 
-async def _tool_queen_self_queue_list(args, ctx) -> str:
-    queen = ctx.get("queen")
+async def _tool_octo_self_queue_list(args, ctx) -> str:
+    octo = ctx.get("octo")
     chat_id = int(ctx.get("chat_id", 0) or 0)
-    if queen is None or not hasattr(queen, "get_self_queue"):
-        return json.dumps({"status": "error", "message": "queen self queue is unavailable"}, ensure_ascii=False)
-    items = await queen.get_self_queue(chat_id)
+    if octo is None or not hasattr(octo, "get_self_queue"):
+        return json.dumps({"status": "error", "message": "octo self queue is unavailable"}, ensure_ascii=False)
+    items = await octo.get_self_queue(chat_id)
     return json.dumps({"status": "ok", "chat_id": chat_id, "items": items, "count": len(items)}, ensure_ascii=False)
 
 
-async def _tool_queen_self_queue_take(args, ctx) -> str:
-    queen = ctx.get("queen")
+async def _tool_octo_self_queue_take(args, ctx) -> str:
+    octo = ctx.get("octo")
     chat_id = int(ctx.get("chat_id", 0) or 0)
-    if queen is None or not hasattr(queen, "take_next_self_queue_item"):
-        return json.dumps({"status": "error", "message": "queen self queue is unavailable"}, ensure_ascii=False)
-    payload = await queen.take_next_self_queue_item(chat_id)
+    if octo is None or not hasattr(octo, "take_next_self_queue_item"):
+        return json.dumps({"status": "error", "message": "octo self queue is unavailable"}, ensure_ascii=False)
+    payload = await octo.take_next_self_queue_item(chat_id)
     return json.dumps(payload, ensure_ascii=False)
 
 
-async def _tool_queen_self_queue_update(args, ctx) -> str:
-    queen = ctx.get("queen")
+async def _tool_octo_self_queue_update(args, ctx) -> str:
+    octo = ctx.get("octo")
     chat_id = int(ctx.get("chat_id", 0) or 0)
-    if queen is None or not hasattr(queen, "update_self_queue_item"):
-        return json.dumps({"status": "error", "message": "queen self queue is unavailable"}, ensure_ascii=False)
-    payload = await queen.update_self_queue_item(chat_id, args or {})
+    if octo is None or not hasattr(octo, "update_self_queue_item"):
+        return json.dumps({"status": "error", "message": "octo self queue is unavailable"}, ensure_ascii=False)
+    payload = await octo.update_self_queue_item(chat_id, args or {})
     return json.dumps(payload, ensure_ascii=False)

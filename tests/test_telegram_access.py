@@ -30,5 +30,5 @@ def test_dispatcher_uses_single_shared_mcp_manager(tmp_path: Path) -> None:
         OCTOPAL_STATE_DIR=tmp_path / "state",
         OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
     )
-    _dp, queen = build_dispatcher(settings, bot=object())
-    assert queen.runtime.mcp_manager is queen.mcp_manager
+    _dp, octo = build_dispatcher(settings, bot=object())
+    assert octo.runtime.mcp_manager is octo.mcp_manager

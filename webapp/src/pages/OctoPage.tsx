@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
-import { fetchQueen } from "../api/dashboardClient";
+import { fetchOcto } from "../api/dashboardClient";
 import type { components } from "../api/types";
 import type { AppShellOutletContext } from "../ui/AppShell";
 import { formatLocalDateTime } from "../utils/dateTime";
 
-type QueenPayload = components["schemas"]["DashboardQueenV2"];
-type QueenView = {
+type OctoPayload = components["schemas"]["DashboardOctoV2"];
+type OctoView = {
   state?: string;
   followup_queues?: number;
   internal_queues?: number;
@@ -57,9 +57,9 @@ function metric(value: unknown): string {
   return String(value);
 }
 
-export function QueenPage() {
+export function OctoPage() {
   const { filters } = useOutletContext<AppShellOutletContext>();
-  const [data, setData] = useState<QueenPayload | null>(null);
+  const [data, setData] = useState<OctoPayload | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string>("");
 
@@ -68,7 +68,7 @@ export function QueenPage() {
     setLoading(true);
     setError("");
 
-    void fetchQueen({
+    void fetchOcto({
       windowMinutes: filters.windowMinutes,
       service: filters.service,
       environment: filters.environment,
@@ -99,8 +99,8 @@ export function QueenPage() {
   if (loading) {
     return (
       <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">
-        <h2 className="text-2xl font-semibold text-slate-100">Queen</h2>
-        <p className="mt-2">Loading Queen operational state...</p>
+        <h2 className="text-2xl font-semibold text-slate-100">Octo</h2>
+        <p className="mt-2">Loading Octo operational state...</p>
       </section>
     );
   }
@@ -108,8 +108,8 @@ export function QueenPage() {
   if (error) {
     return (
       <section className="rounded-2xl border border-rose-500/40 bg-rose-950/30 p-8 text-rose-200">
-        <h2 className="text-2xl font-semibold text-rose-100">Queen</h2>
-        <p className="mt-2">Failed to load queen telemetry: {error}</p>
+        <h2 className="text-2xl font-semibold text-rose-100">Octo</h2>
+        <p className="mt-2">Failed to load octo telemetry: {error}</p>
       </section>
     );
   }
@@ -117,13 +117,13 @@ export function QueenPage() {
   if (!data) {
     return (
       <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">
-        <h2 className="text-2xl font-semibold text-slate-100">Queen</h2>
+        <h2 className="text-2xl font-semibold text-slate-100">Octo</h2>
         <p className="mt-2">No data returned.</p>
       </section>
     );
   }
 
-  const queen = (data.queen ?? {}) as QueenView;
+  const octo = (data.octo ?? {}) as OctoView;
   const queues = (data.queues ?? {}) as QueuesView;
   const control = (data.control ?? {}) as ControlView;
   const health = (data.health ?? {}) as HealthView;
@@ -138,7 +138,7 @@ export function QueenPage() {
       <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-slate-950/60">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Queen</p>
+            <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Octo</p>
             <h2 className="mt-2 text-2xl font-semibold text-slate-100">
               {health.summary ?? "Orchestration core"}
             </h2>
@@ -146,8 +146,8 @@ export function QueenPage() {
               {(health.reasons ?? []).join(" | ") || "No active degradation reasons."}
             </p>
           </div>
-          <div className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusTone(queen.state)}`}>
-            {String(queen.state ?? "unknown")}
+          <div className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${statusTone(octo.state)}`}>
+            {String(octo.state ?? "unknown")}
           </div>
         </div>
       </section>
@@ -155,19 +155,19 @@ export function QueenPage() {
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <article className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
           <p className="text-xs uppercase tracking-wide text-slate-500">Followup queues</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{metric(queen.followup_queues)}</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-100">{metric(octo.followup_queues)}</p>
         </article>
         <article className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
           <p className="text-xs uppercase tracking-wide text-slate-500">Internal queues</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{metric(queen.internal_queues)}</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-100">{metric(octo.internal_queues)}</p>
         </article>
         <article className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
           <p className="text-xs uppercase tracking-wide text-slate-500">Followup tasks</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{metric(queen.followup_tasks)}</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-100">{metric(octo.followup_tasks)}</p>
         </article>
         <article className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
           <p className="text-xs uppercase tracking-wide text-slate-500">Internal tasks</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{metric(queen.internal_tasks)}</p>
+          <p className="mt-2 text-2xl font-semibold text-slate-100">{metric(octo.internal_tasks)}</p>
         </article>
       </section>
 

@@ -137,7 +137,7 @@ Example child template:
 - Parent template must have `can_spawn_children=true`.
 - Child template must be in parent `allowed_child_templates`.
 - Child permissions must be a subset of the parent's effective permissions.
-- Queen enforces global lineage limits:
+- Octo enforces global lineage limits:
   - `OCTOPAL_WORKER_MAX_SPAWN_DEPTH` (default `2`)
   - `OCTOPAL_WORKER_MAX_CHILDREN_TOTAL` (default `20`)
   - `OCTOPAL_WORKER_MAX_CHILDREN_CONCURRENT` (default `10`)

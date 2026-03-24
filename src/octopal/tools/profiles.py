@@ -22,7 +22,7 @@ DEFAULT_TOOL_PROFILES: dict[str, ToolProfile] = {
                 "web_search",
                 "web_fetch",
                 "markdown_new_fetch",
-                "queen_context_health",
+                "octo_context_health",
             ]
         ),
     ),

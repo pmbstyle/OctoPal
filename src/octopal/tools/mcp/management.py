@@ -17,8 +17,8 @@ async def mcp_connect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     if isinstance(safe_args.get("env"), dict):
         safe_args["env"] = {k: ("***" if "key" in str(k).lower() or "token" in str(k).lower() or "secret" in str(k).lower() else v) for k, v in safe_args["env"].items()}
     logger.info("mcp_connect tool called", arguments=safe_args)
-    queen = ctx.get("queen")
-    if not queen or not queen.mcp_manager:
+    octo = ctx.get("octo")
+    if not octo or not octo.mcp_manager:
         return "Error: MCP Manager not initialized."
     
     server_id = args.get("id")
@@ -33,13 +33,13 @@ async def mcp_connect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     if not server_id or (not command and not url):
         return "Error: 'id' and either 'command' or 'url' are required."
 
-    # Prevent common mistake where Queen uses ID as command
+    # Prevent common mistake where Octo uses ID as command
     if command == server_id:
         return f"Error: You provided the server ID '{server_id}' as the command. If this is an SSE server, use the 'url' parameter instead. If it's a local server, you likely need a real command like 'npx' or 'python' with appropriate arguments."
 
     # Helpful hint for local development confusion
     if url and "localhost" in url.lower() and "http://localhost:3000" in url.lower():
-        logger.warning("Queen is attempting to connect to what looks like a default localhost URL. This might be a mistake if the server is external.")
+        logger.warning("Octo is attempting to connect to what looks like a default localhost URL. This might be a mistake if the server is external.")
 
     config = MCPServerConfig(
         id=server_id,
@@ -53,7 +53,7 @@ async def mcp_connect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     )
 
     try:
-        tools = await queen.mcp_manager.connect_server(config)
+        tools = await octo.mcp_manager.connect_server(config)
         # Use the actual names from the ToolSpec objects
         tool_names = [t.name for t in tools]
         return json.dumps({
@@ -69,8 +69,8 @@ async def mcp_connect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
 
 async def mcp_disconnect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     """Disconnect from an MCP server."""
-    queen = ctx.get("queen")
-    if not queen or not queen.mcp_manager:
+    octo = ctx.get("octo")
+    if not octo or not octo.mcp_manager:
         return "Error: MCP Manager not initialized."
 
     server_id = args.get("id")
@@ -78,20 +78,20 @@ async def mcp_disconnect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         return "Error: 'id' is required."
 
     try:
-        await queen.mcp_manager.disconnect_server(server_id)
+        await octo.mcp_manager.disconnect_server(server_id)
         return f"Disconnected from MCP server {server_id}."
     except Exception as e:
         return f"Error disconnecting from MCP server {server_id}: {e}"
 
 def mcp_list(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     """List connected MCP servers and their tools."""
-    queen = ctx.get("queen")
-    if not queen or not queen.mcp_manager:
+    octo = ctx.get("octo")
+    if not octo or not octo.mcp_manager:
         return "Error: MCP Manager not initialized."
 
     servers = []
-    for server_id, session in queen.mcp_manager.sessions.items():
-        tools = queen.mcp_manager._tools.get(server_id, [])
+    for server_id, session in octo.mcp_manager.sessions.items():
+        tools = octo.mcp_manager._tools.get(server_id, [])
         servers.append({
             "id": server_id,
             "tool_count": len(tools),
@@ -103,15 +103,15 @@ def mcp_list(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
 
 def mcp_status(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     """List status for all known MCP servers, including disconnected/error states."""
-    queen = ctx.get("queen")
-    if not queen or not queen.mcp_manager:
+    octo = ctx.get("octo")
+    if not octo or not octo.mcp_manager:
         return "Error: MCP Manager not initialized."
 
-    statuses = queen.mcp_manager.get_server_statuses()
+    statuses = octo.mcp_manager.get_server_statuses()
     return json.dumps(
         {
             "servers": statuses,
-            "connected_count": len(queen.mcp_manager.sessions),
+            "connected_count": len(octo.mcp_manager.sessions),
             "known_count": len(statuses),
             "configured_count": len(statuses),
             "reconnecting_count": sum(
@@ -126,14 +126,14 @@ def mcp_status(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
 
 def mcp_discover(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     """Summarize MCP server usability, exposed tools, and suggested next actions."""
-    queen = ctx.get("queen")
-    if not queen or not queen.mcp_manager:
+    octo = ctx.get("octo")
+    if not octo or not octo.mcp_manager:
         return "Error: MCP Manager not initialized."
 
     server_filter = str(args.get("server_id", "") or "").strip()
     limit = max(1, min(int(args.get("limit") or 20), 50))
-    statuses = queen.mcp_manager.get_server_statuses()
-    tool_map = getattr(queen.mcp_manager, "_tools", {}) or {}
+    statuses = octo.mcp_manager.get_server_statuses()
+    tool_map = getattr(octo.mcp_manager, "_tools", {}) or {}
 
     server_ids = [server_filter] if server_filter else list(statuses.keys())
     server_summaries: list[dict[str, Any]] = []
@@ -209,8 +209,8 @@ def mcp_discover(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
 
 async def mcp_call(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     """Call an MCP tool on a specific server."""
-    queen = ctx.get("queen")
-    if not queen or not queen.mcp_manager:
+    octo = ctx.get("octo")
+    if not octo or not octo.mcp_manager:
         return "Error: MCP Manager not initialized."
 
     server_id = args.get("server_id")
@@ -220,13 +220,13 @@ async def mcp_call(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     if not server_id or not tool_name:
         return "Error: 'server_id' and 'tool_name' are required."
 
-    session = queen.mcp_manager.sessions.get(server_id)
+    session = octo.mcp_manager.sessions.get(server_id)
     if not session:
-        return f"Error: MCP session '{server_id}' not active. Available servers: {list(queen.mcp_manager.sessions.keys())}"
+        return f"Error: MCP session '{server_id}' not active. Available servers: {list(octo.mcp_manager.sessions.keys())}"
 
-    logger.info("Queen calling MCP tool via mcp_call", server_id=server_id, tool=tool_name)
+    logger.info("Octo calling MCP tool via mcp_call", server_id=server_id, tool=tool_name)
     try:
-        result = await queen.mcp_manager.call_tool(server_id, tool_name, tool_args)
+        result = await octo.mcp_manager.call_tool(server_id, tool_name, tool_args)
         return json.dumps([c.model_dump() if hasattr(c, "model_dump") else str(c) for c in result.content], indent=2)
     except Exception as e:
         logger.exception("MCP tool call failed", server_id=server_id, tool=tool_name)

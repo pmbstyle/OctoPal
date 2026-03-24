@@ -72,7 +72,7 @@ def test_start_worker_auto_routes_and_returns_router_metadata() -> None:
                     return t
             return None
 
-    class _Queen:
+    class _Octo:
         def __init__(self) -> None:
             self.store = _Store()
 
@@ -85,7 +85,7 @@ def test_start_worker_auto_routes_and_returns_router_metadata() -> None:
                 "task": "Find latest web docs and summarize",
                 "worker_id": "auto",
             },
-            {"queen": _Queen(), "chat_id": 123},
+            {"octo": _Octo(), "chat_id": 123},
         )
         return json.loads(payload)
 

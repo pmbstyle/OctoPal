@@ -47,7 +47,7 @@ def test_route_includes_policy_block_result_for_blocked_tool_call(monkeypatch) -
         async def add_message(self, role, content, metadata=None):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         store = object()
         canon = object()
         internal_progress_send = None
@@ -62,13 +62,13 @@ def test_route_includes_policy_block_result_for_blocked_tool_call(monkeypatch) -
         def peek_context_wakeup(self, chat_id: int) -> str:
             return ""
 
-    async def fake_build_queen_prompt(**kwargs):
+    async def fake_build_octo_prompt(**kwargs):
         return [Message(role="user", content=str(kwargs["user_text"]))]
 
     async def fake_build_plan(provider, messages, has_tools):
         return None
 
-    def fake_get_queen_tools(queen, chat_id):
+    def fake_get_octo_tools(octo, chat_id):
         from octopal.tools.diagnostics import resolve_tool_diagnostics
         from octopal.tools.registry import ToolSpec
 
@@ -90,18 +90,18 @@ def test_route_includes_policy_block_result_for_blocked_tool_call(monkeypatch) -
             [safe_tool, blocked_tool],
             permissions={"network": True, "exec": False},
         )
-        return [safe_tool], {"queen": queen, "chat_id": chat_id, "tool_resolution_report": report}
+        return [safe_tool], {"octo": octo, "chat_id": chat_id, "tool_resolution_report": report}
 
-    import octopal.runtime.queen.router as router
+    import octopal.runtime.octo.router as router
 
-    monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
-    monkeypatch.setattr(router, "_get_queen_tools", fake_get_queen_tools)
+    monkeypatch.setattr(router, "_get_octo_tools", fake_get_octo_tools)
 
     async def scenario() -> None:
         provider = DummyProvider()
         response = await router.route_or_reply(
-            DummyQueen(),
+            DummyOcto(),
             provider,
             DummyMemory(),
             "check this",

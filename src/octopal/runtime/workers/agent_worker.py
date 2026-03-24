@@ -5,7 +5,7 @@ Workers are pre-defined agents that:
 - Have a system prompt defining their purpose
 - Have access to specific tools
 - Can reason and perform multi-step operations
-- Can ask Queen questions when needed
+- Can ask Octo questions when needed
 """
 from __future__ import annotations
 
@@ -184,7 +184,7 @@ async def execute_agent_task(worker: Worker, base_dir: Path) -> WorkerResult:
             )
         ],
     )
-    filtered_tools = _with_queen_tool_proxies(filtered_tools, worker)
+    filtered_tools = _with_octo_tool_proxies(filtered_tools, worker)
 
     # Add MCP tools from spec
     from octopal.tools.registry import ToolSpec
@@ -235,11 +235,11 @@ Skill usage:
 When you have completed the task, respond with:
 {{
   "type": "result",
-  "summary": "Internal summary for the Queen/runtime",
+  "summary": "Internal summary for the Octo/runtime",
   "output": {{...}}  // Optional structured output
 }}
 
-If you need clarification from the Queen, include:
+If you need clarification from the Octo, include:
 {{
   "type": "result",
   "summary": "...",
@@ -702,21 +702,21 @@ async def _execute_tool(
         return error_result, error_meta
 
 
-def _with_queen_tool_proxies(tools: list[Any], worker: Worker) -> list[Any]:
+def _with_octo_tool_proxies(tools: list[Any], worker: Worker) -> list[Any]:
     proxied: list[Any] = []
     for tool in tools:
         if getattr(tool, "name", "") not in _QUEEN_PROXY_TOOLS:
             proxied.append(tool)
             continue
-        proxied.append(_make_queen_proxy_tool(tool, worker))
+        proxied.append(_make_octo_proxy_tool(tool, worker))
     return proxied
 
 
-def _make_queen_proxy_tool(tool: Any, worker: Worker) -> Any:
+def _make_octo_proxy_tool(tool: Any, worker: Worker) -> Any:
     from octopal.tools.registry import ToolSpec
 
     async def _proxy_handler(args: dict[str, Any], ctx: dict[str, Any]) -> Any:
-        return await worker.call_queen_tool(tool.name, args)
+        return await worker.call_octo_tool(tool.name, args)
 
     return ToolSpec(
         name=tool.name,

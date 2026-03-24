@@ -9,7 +9,7 @@ from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.policy.engine import PolicyEngine
 from octopal.infrastructure.providers.litellm_provider import LiteLLMProvider
 from octopal.infrastructure.providers.openai_embeddings import OpenAIEmbeddingsProvider
-from octopal.runtime.queen.core import Queen
+from octopal.runtime.octo.core import Octo
 from octopal.runtime.scheduler.service import SchedulerService
 from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.channels.telegram.approvals import ApprovalManager
@@ -18,7 +18,7 @@ from octopal.runtime.workers.launcher_factory import build_launcher
 from octopal.runtime.workers.runtime import WorkerRuntime
 
 
-def build_queen(settings: Settings) -> Queen:
+def build_octo(settings: Settings) -> Octo:
     os.environ.setdefault("OCTOPAL_STATE_DIR", str(settings.state_dir))
     os.environ.setdefault("OCTOPAL_WORKSPACE_DIR", str(settings.workspace_dir))
     ensure_skills_layout(settings.workspace_dir)
@@ -58,7 +58,7 @@ def build_queen(settings: Settings) -> Queen:
         embeddings=embeddings,
     )
     scheduler = SchedulerService(store=store, workspace_dir=settings.workspace_dir)
-    queen = Queen(
+    octo = Octo(
         provider=provider,
         store=store,
         policy=policy,
@@ -69,5 +69,5 @@ def build_queen(settings: Settings) -> Queen:
         scheduler=scheduler,
         mcp_manager=mcp_manager,
     )
-    runtime.queen = queen
-    return queen
+    runtime.octo = octo
+    return octo

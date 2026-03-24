@@ -6,7 +6,6 @@
 /src/octopal/memory/__pycache__
 /src/octopal/policy/__pycache__
 /src/octopal/providers/__pycache__
-/src/octopal/queen/__pycache__
 /src/octopal/store/__pycache__
 /src/octopal/telegram/__pycache__
 /src/octopal/workers/__pycache__
@@ -33,7 +32,7 @@ HEARTBEAT.md
 /src/octopal/infrastructure/__pycache__
 /src/octopal/runtime/__pycache__
 /src/octopal/runtime/policy/__pycache__
-/src/octopal/runtime/queen/__pycache__
+/src/octopal/runtime/octo/__pycache__
 /src/octopal/runtime/memory/__pycache__
 /src/octopal/runtime/intents/__pycache__
 /src/octopal/runtime/workers/__pycache__

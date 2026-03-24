@@ -12,7 +12,7 @@ from octopal.tools.registry import ToolSpec
 from octopal.utils import utc_now
 
 if TYPE_CHECKING:
-    from octopal.runtime.queen.core import Queen
+    from octopal.runtime.octo.core import Octo
 
 _WORKER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
@@ -23,7 +23,7 @@ def get_worker_tools() -> list[ToolSpec]:
     return [
         ToolSpec(
             name="propose_knowledge",
-            description="Propose a fact, decision, or failure lesson for the permanent canonical memory. The Queen will review and potentially add it.",
+            description="Propose a fact, decision, or failure lesson for the permanent canonical memory. The Octo will review and potentially add it.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -459,9 +459,9 @@ def get_worker_tools() -> list[ToolSpec]:
 
 def _tool_list_workers(args: dict[str, object], ctx: dict[str, object]) -> str:
     """List available worker templates."""
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
 
-    templates = queen.store.list_worker_templates()
+    templates = octo.store.list_worker_templates()
     template_list = []
     for t in templates:
         template_list.append({
@@ -483,7 +483,7 @@ def _tool_list_workers(args: dict[str, object], ctx: dict[str, object]) -> str:
 
 def _tool_create_worker_template(args: dict[str, object], ctx: dict[str, object]) -> str:
     """Create a new worker template by writing a worker.json file to the workspace."""
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     base_dir: Path = ctx.get("base_dir", Path("workspace"))
 
     worker_id = str(args.get("id", "")).strip()
@@ -503,7 +503,7 @@ def _tool_create_worker_template(args: dict[str, object], ctx: dict[str, object]
         return "create_worker_template error: system_prompt is required."
 
     # Check if worker already exists
-    existing = queen.store.get_worker_template(worker_id)
+    existing = octo.store.get_worker_template(worker_id)
     if existing:
         return f"create_worker_template error: worker '{worker_id}' already exists. Use update_worker_template to modify it."
 
@@ -676,7 +676,7 @@ def _tool_delete_worker_template(args: dict[str, object], ctx: dict[str, object]
 
 
 async def _tool_start_worker(args: dict[str, object], ctx: dict[str, object]) -> str:
-    """Start a worker task (queen or worker context)."""
+    """Start a worker task (octo or worker context)."""
     return await _start_worker_common(args, ctx, require_worker_context=False)
 
 
@@ -691,7 +691,7 @@ async def _start_worker_common(
     *,
     require_worker_context: bool,
 ) -> str:
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     chat_id = int(ctx.get("chat_id") or 0)
     caller_worker = ctx.get("worker")
     if require_worker_context and caller_worker is None:
@@ -711,7 +711,7 @@ async def _start_worker_common(
         return "start_worker error: task is required."
 
     resolution = _resolve_worker_for_start(
-        queen=queen,
+        octo=octo,
         worker_id=worker_id,
         task=task,
         required_tools=required_tools,
@@ -728,7 +728,7 @@ async def _start_worker_common(
     child_ctx = _extract_child_context(caller_worker)
     if child_ctx is not None:
         policy_error = _validate_child_spawn_policy(
-            queen=queen,
+            octo=octo,
             parent_ctx=child_ctx,
             child_template=template,
             explicit_worker_id=worker_id,
@@ -736,7 +736,7 @@ async def _start_worker_common(
         if policy_error:
             return policy_error
 
-    launch = await queen._start_worker_async(
+    launch = await octo._start_worker_async(
         worker_id=worker_id,
         task=task,
         chat_id=chat_id,
@@ -784,7 +784,7 @@ async def _start_worker_common(
 
 
 async def _tool_start_workers_parallel(args: dict[str, object], ctx: dict[str, object]) -> str:
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     chat_id = int(ctx.get("chat_id") or 0)
     caller_worker = ctx.get("worker")
     child_ctx = _extract_child_context(caller_worker)
@@ -814,7 +814,7 @@ async def _tool_start_workers_parallel(args: dict[str, object], ctx: dict[str, o
         required_permissions = _normalize_str_list(item.get("required_permissions"))
 
         resolution = _resolve_worker_for_start(
-            queen=queen,
+            octo=octo,
             worker_id=worker_id,
             task=task_text,
             required_tools=required_tools,
@@ -827,7 +827,7 @@ async def _tool_start_workers_parallel(args: dict[str, object], ctx: dict[str, o
         template = resolution["template"]
         if child_ctx is not None:
             policy_error = _validate_child_spawn_policy(
-                queen=queen,
+                octo=octo,
                 parent_ctx=child_ctx,
                 child_template=template,
                 explicit_worker_id=selected_worker_id,
@@ -835,7 +835,7 @@ async def _tool_start_workers_parallel(args: dict[str, object], ctx: dict[str, o
             if policy_error:
                 return {"index": index, "status": "error", "error": policy_error}
         async with sem:
-            launch = await queen._start_worker_async(
+            launch = await octo._start_worker_async(
                 worker_id=selected_worker_id,
                 task=task_text,
                 chat_id=chat_id,
@@ -882,7 +882,7 @@ async def _tool_start_workers_parallel(args: dict[str, object], ctx: dict[str, o
 
 
 def _tool_synthesize_worker_results(args: dict[str, object], ctx: dict[str, object]) -> str:
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     worker_ids = _normalize_str_list(args.get("worker_ids"))
     if not worker_ids:
         return "synthesize_worker_results error: worker_ids is required."
@@ -894,7 +894,7 @@ def _tool_synthesize_worker_results(args: dict[str, object], ctx: dict[str, obje
     summary_hashes: set[str] = set()
 
     for wid in worker_ids:
-        worker = queen.store.get_worker(wid)
+        worker = octo.store.get_worker(wid)
         if not worker:
             missing.append(wid)
             continue
@@ -951,28 +951,28 @@ def _tool_synthesize_worker_results(args: dict[str, object], ctx: dict[str, obje
 
 
 async def _tool_stop_worker(args: dict[str, object], ctx: dict[str, object]) -> str:
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     worker_id = str(args.get("worker_id", "")).strip()
     if not worker_id:
         return "stop_worker error: worker_id is required."
-    stopped = await queen.runtime.stop_worker(worker_id)
+    stopped = await octo.runtime.stop_worker(worker_id)
     return json.dumps({"status": "stopped" if stopped else "not_found", "worker_id": worker_id}, ensure_ascii=False)
 
 
 def _tool_get_worker_status(args: dict[str, object], ctx: dict[str, object]) -> str:
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     worker_id = str(args.get("worker_id", "")).strip()
     if not worker_id:
         return "get_worker_status error: worker_id is required."
 
-    worker = queen.store.get_worker(worker_id)
+    worker = octo.store.get_worker(worker_id)
     if not worker:
         return json.dumps({
             "status": "not_found",
             "worker_id": worker_id,
             "message": "Worker not found. It may be from an old conversation or never existed."
         }, ensure_ascii=False)
-    worker = _reconcile_stale_worker_status(queen, worker)
+    worker = _reconcile_stale_worker_status(octo, worker)
 
     return json.dumps({
         "status": worker.status,
@@ -990,11 +990,11 @@ def _tool_get_worker_status(args: dict[str, object], ctx: dict[str, object]) -> 
 
 
 def _tool_list_active_workers(args: dict[str, object], ctx: dict[str, object]) -> str:
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     older_than_minutes = int(args.get("older_than_minutes") or 10)
 
-    workers = queen.store.get_active_workers(older_than_minutes=older_than_minutes)
-    workers = _reconcile_stale_active_workers(queen, workers, older_than_minutes=older_than_minutes)
+    workers = octo.store.get_active_workers(older_than_minutes=older_than_minutes)
+    workers = _reconcile_stale_active_workers(octo, workers, older_than_minutes=older_than_minutes)
     worker_list = []
     for w in workers:
         worker_list.append({
@@ -1018,16 +1018,16 @@ def _tool_list_active_workers(args: dict[str, object], ctx: dict[str, object]) -
 
 
 def _tool_worker_session_status(args: dict[str, object], ctx: dict[str, object]) -> str:
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     older_than_minutes = int(args.get("older_than_minutes") or 10)
     recent_limit = max(1, min(50, int(args.get("recent_limit") or 12)))
 
-    active_workers = queen.store.get_active_workers(older_than_minutes=older_than_minutes)
-    active_workers = _reconcile_stale_active_workers(queen, active_workers, older_than_minutes=older_than_minutes)
+    active_workers = octo.store.get_active_workers(older_than_minutes=older_than_minutes)
+    active_workers = _reconcile_stale_active_workers(octo, active_workers, older_than_minutes=older_than_minutes)
     recent_workers = (
-        queen.store.list_recent_workers(recent_limit)
-        if hasattr(queen.store, "list_recent_workers")
-        else queen.store.list_workers()[:recent_limit]
+        octo.store.list_recent_workers(recent_limit)
+        if hasattr(octo.store, "list_recent_workers")
+        else octo.store.list_workers()[:recent_limit]
     )
 
     counts: dict[str, int] = {}
@@ -1087,13 +1087,13 @@ def _tool_worker_session_status(args: dict[str, object], ctx: dict[str, object])
 
 
 def _tool_worker_yield(args: dict[str, object], ctx: dict[str, object]) -> str:
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     older_than_minutes = int(args.get("older_than_minutes") or 10)
     requested_worker_ids = _normalize_str_list(args.get("worker_ids"))
     lineage_id = str(args.get("lineage_id", "") or "").strip() or None
 
     workers = _select_workers_for_yield(
-        queen=queen,
+        octo=octo,
         requested_worker_ids=requested_worker_ids,
         lineage_id=lineage_id,
         older_than_minutes=older_than_minutes,
@@ -1200,8 +1200,8 @@ def _tool_worker_yield(args: dict[str, object], ctx: dict[str, object]) -> str:
     )
 
 
-def _reconcile_stale_worker_status(queen: Queen, worker: Any) -> Any:
-    runtime = getattr(queen, "runtime", None)
+def _reconcile_stale_worker_status(octo: Octo, worker: Any) -> Any:
+    runtime = getattr(octo, "runtime", None)
     if not runtime or not hasattr(runtime, "is_worker_running"):
         return worker
     if worker.status not in {"started", "running"}:
@@ -1211,18 +1211,18 @@ def _reconcile_stale_worker_status(queen: Queen, worker: Any) -> Any:
         return worker
     if runtime.is_worker_running(worker.id):
         return worker
-    queen.store.update_worker_status(worker.id, "stopped")
-    queen.store.update_worker_result(
+    octo.store.update_worker_status(worker.id, "stopped")
+    octo.store.update_worker_result(
         worker.id,
         error="Worker process not found in runtime; stale running state reconciled.",
     )
-    refreshed = queen.store.get_worker(worker.id)
+    refreshed = octo.store.get_worker(worker.id)
     return refreshed or worker
 
 
-def _reconcile_stale_active_workers(queen: Queen, workers: list[Any], older_than_minutes: int) -> list[Any]:
+def _reconcile_stale_active_workers(octo: Octo, workers: list[Any], older_than_minutes: int) -> list[Any]:
     stale_ids: list[str] = []
-    runtime = getattr(queen, "runtime", None)
+    runtime = getattr(octo, "runtime", None)
     if not runtime or not hasattr(runtime, "is_worker_running"):
         return workers
     grace_cutoff = utc_now() - timedelta(minutes=2)
@@ -1233,20 +1233,20 @@ def _reconcile_stale_active_workers(queen: Queen, workers: list[Any], older_than
             continue
         if runtime.is_worker_running(worker.id):
             continue
-        queen.store.update_worker_status(worker.id, "stopped")
-        queen.store.update_worker_result(
+        octo.store.update_worker_status(worker.id, "stopped")
+        octo.store.update_worker_result(
             worker.id,
             error="Worker process not found in runtime; stale running state reconciled.",
         )
         stale_ids.append(worker.id)
     if not stale_ids:
         return workers
-    return queen.store.get_active_workers(older_than_minutes=older_than_minutes)
+    return octo.store.get_active_workers(older_than_minutes=older_than_minutes)
 
 
 def _select_workers_for_yield(
     *,
-    queen: Queen,
+    octo: Octo,
     requested_worker_ids: list[str],
     lineage_id: str | None,
     older_than_minutes: int,
@@ -1254,16 +1254,16 @@ def _select_workers_for_yield(
     workers_by_id: dict[str, Any] = {}
 
     for worker_id in requested_worker_ids:
-        worker = queen.store.get_worker(worker_id)
+        worker = octo.store.get_worker(worker_id)
         if not worker:
             continue
-        worker = _reconcile_stale_worker_status(queen, worker)
+        worker = _reconcile_stale_worker_status(octo, worker)
         workers_by_id[str(worker.id)] = worker
 
     if lineage_id:
-        active_workers = queen.store.get_active_workers(older_than_minutes=older_than_minutes)
+        active_workers = octo.store.get_active_workers(older_than_minutes=older_than_minutes)
         active_workers = _reconcile_stale_active_workers(
-            queen,
+            octo,
             active_workers,
             older_than_minutes=older_than_minutes,
         )
@@ -1273,9 +1273,9 @@ def _select_workers_for_yield(
             workers_by_id[str(worker.id)] = worker
 
         recent_workers = (
-            queen.store.list_recent_workers(50)
-            if hasattr(queen.store, "list_recent_workers")
-            else queen.store.list_workers()[:50]
+            octo.store.list_recent_workers(50)
+            if hasattr(octo.store, "list_recent_workers")
+            else octo.store.list_workers()[:50]
         )
         for worker in recent_workers:
             if str(getattr(worker, "lineage_id", "") or "").strip() != lineage_id:
@@ -1283,9 +1283,9 @@ def _select_workers_for_yield(
             workers_by_id.setdefault(str(worker.id), worker)
 
     if not requested_worker_ids and not lineage_id:
-        active_workers = queen.store.get_active_workers(older_than_minutes=older_than_minutes)
+        active_workers = octo.store.get_active_workers(older_than_minutes=older_than_minutes)
         active_workers = _reconcile_stale_active_workers(
-            queen,
+            octo,
             active_workers,
             older_than_minutes=older_than_minutes,
         )
@@ -1314,12 +1314,12 @@ def _serialize_worker_run(worker: Any) -> dict[str, object]:
 
 
 def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> str:
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     worker_id = str(args.get("worker_id", "")).strip()
     if not worker_id:
         return "get_worker_result error: worker_id is required."
 
-    worker = queen.store.get_worker(worker_id)
+    worker = octo.store.get_worker(worker_id)
     if not worker:
         return json.dumps({
             "status": "not_found",
@@ -1362,7 +1362,7 @@ def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> 
 
 def _tool_get_worker_output_path(args: dict[str, object], ctx: dict[str, object]) -> str:
     """Retrieve a specific part of a worker's output using a dotted path."""
-    queen: Queen = ctx["queen"]
+    octo: Octo = ctx["octo"]
     worker_id = str(args.get("worker_id", "")).strip()
     path = str(args.get("path", "")).strip()
 
@@ -1371,7 +1371,7 @@ def _tool_get_worker_output_path(args: dict[str, object], ctx: dict[str, object]
     if not path:
         return "get_worker_output_path error: path is required."
 
-    worker = queen.store.get_worker(worker_id)
+    worker = octo.store.get_worker(worker_id)
     if not worker:
         return json.dumps({"status": "not_found", "worker_id": worker_id}, ensure_ascii=False)
 
@@ -1463,7 +1463,7 @@ def _extract_child_context(worker_obj: object) -> dict[str, Any] | None:
 
 def _validate_child_spawn_policy(
     *,
-    queen: Queen,
+    octo: Octo,
     parent_ctx: dict[str, Any],
     child_template: object,
     explicit_worker_id: str,
@@ -1471,7 +1471,7 @@ def _validate_child_spawn_policy(
     parent_template_id = str(parent_ctx.get("template_id", "")).strip()
     if not parent_template_id:
         return "start_child_worker error: parent worker template is unknown; cannot spawn children."
-    parent_template = queen.store.get_worker_template(parent_template_id)
+    parent_template = octo.store.get_worker_template(parent_template_id)
     if not parent_template:
         return f"start_child_worker error: parent template '{parent_template_id}' not found."
 
@@ -1503,14 +1503,14 @@ def _validate_child_spawn_policy(
 
 def _resolve_worker_for_start(
     *,
-    queen: Queen,
+    octo: Octo,
     worker_id: str,
     task: str,
     required_tools: list[str] | None = None,
     required_permissions: list[str] | None = None,
 ) -> dict[str, object] | str:
     if not worker_id or worker_id.lower() in {"auto", "best", "router"}:
-        templates = queen.store.list_worker_templates()
+        templates = octo.store.list_worker_templates()
         selection = _select_worker_template(
             templates=templates,
             task=task,
@@ -1528,7 +1528,7 @@ def _resolve_worker_for_start(
             "router_score": selection["score"],
         }
 
-    template = queen.store.get_worker_template(worker_id)
+    template = octo.store.get_worker_template(worker_id)
     if not template:
         return f"start_worker error: worker '{worker_id}' not found. Use list_workers to see available workers."
     return {
