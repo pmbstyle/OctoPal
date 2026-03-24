@@ -2,6 +2,10 @@
    <img src="https://github.com/pmbstyle/OctoPal/blob/main/logo.png?raw=true" width="500" alt="Octapal"/>
 </p>
 
+<p align="center">
+  <strong>MULTI-AGENT AI ORCHESTRATION ON YOUR DEVICE</strong>
+</p>
+
 Octopal is a local AI agent that runs autonomous workers to complete tasks for you.
 It acts as a persistent AI operator that can plan work, spawn specialized agents, and manage long-running workflows.
 
