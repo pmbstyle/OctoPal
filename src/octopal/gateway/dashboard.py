@@ -5,12 +5,12 @@ import json
 import math
 import os
 import shutil
-from uuid import uuid4
 from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -18,14 +18,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from octopal.channels import normalize_user_channel, user_channel_label
 from octopal.infrastructure.config.settings import Settings
+from octopal.infrastructure.store.models import AuditEvent, WorkerRecord, WorkerTemplateRecord
+from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.runtime.metrics import read_metrics_snapshot
 from octopal.runtime.state import is_pid_running, read_status
-from octopal.infrastructure.store.sqlite import SQLiteStore
-from octopal.infrastructure.store.models import AuditEvent, WorkerRecord, WorkerTemplateRecord
 
 _WINDOW_CHOICES = {15, 60, 240, 1440}
 _SERVICE_CHOICES = {"all", "gateway", "octo", "telegram", "whatsapp", "exec_run", "mcp", "workers"}
 _STREAM_TOPICS = {"overview", "incidents", "octo", "workers", "system", "actions", "snapshot"}
+_EMPTY_ACTION_PAYLOAD = Body(default={})
 
 
 @dataclass(frozen=True)
@@ -214,7 +215,7 @@ def register_dashboard_routes(app: FastAPI) -> None:
     @app.post("/api/dashboard/actions")
     async def dashboard_actions(
         request: Request,
-        payload: dict[str, Any] = Body(default={}),
+        payload: dict[str, Any] = _EMPTY_ACTION_PAYLOAD,
     ) -> dict[str, Any]:
         settings = _get_settings(app)
         _verify_dashboard_token(request, settings)
@@ -1677,9 +1678,10 @@ def _estimate_mttr_minutes(recent_workers: list[WorkerRecord]) -> float | None:
             if c.updated_at <= f.updated_at:
                 continue
             same_template = bool(f.template_id and c.template_id and f.template_id == c.template_id)
-            if same_template or not f.template_id:
-                if candidate is None or c.updated_at < candidate.updated_at:
-                    candidate = c
+            if (same_template or not f.template_id) and (
+                candidate is None or c.updated_at < candidate.updated_at
+            ):
+                candidate = c
         if candidate is None:
             continue
         delta_min = (candidate.updated_at - f.updated_at).total_seconds() / 60.0
@@ -1766,7 +1768,9 @@ def _truncate_preview(text: str, limit: int) -> str:
 
 
 def _build_noise_control(*, logs: list[dict[str, Any]]) -> dict[str, Any]:
-    noisy = [l for l in logs if str(l.get("level", "")).lower() in {"warning", "error", "critical"}]
+    noisy = [
+        log for log in logs if str(log.get("level", "")).lower() in {"warning", "error", "critical"}
+    ]
     raw_alerts = len(noisy)
     groups: dict[tuple[str, str, str], int] = {}
     for log in noisy:

@@ -2,20 +2,20 @@ from __future__ import annotations
 
 import os
 
+from octopal.channels.telegram.approvals import ApprovalManager
 from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.mcp.manager import MCPManager
-from octopal.runtime.memory.canon import CanonService
-from octopal.runtime.memory.service import MemoryService
-from octopal.runtime.policy.engine import PolicyEngine
 from octopal.infrastructure.providers.litellm_provider import LiteLLMProvider
 from octopal.infrastructure.providers.openai_embeddings import OpenAIEmbeddingsProvider
-from octopal.runtime.octo.core import Octo
-from octopal.runtime.scheduler.service import SchedulerService
 from octopal.infrastructure.store.sqlite import SQLiteStore
-from octopal.channels.telegram.approvals import ApprovalManager
-from octopal.tools.skills.management import ensure_skills_layout
+from octopal.runtime.memory.canon import CanonService
+from octopal.runtime.memory.service import MemoryService
+from octopal.runtime.octo.core import Octo
+from octopal.runtime.policy.engine import PolicyEngine
+from octopal.runtime.scheduler.service import SchedulerService
 from octopal.runtime.workers.launcher_factory import build_launcher
 from octopal.runtime.workers.runtime import WorkerRuntime
+from octopal.tools.skills.management import ensure_skills_layout
 
 
 def build_octo(settings: Settings) -> Octo:

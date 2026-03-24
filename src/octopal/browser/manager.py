@@ -1,20 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Dict, Optional, Any
-from playwright.async_api import async_playwright, Browser, BrowserContext, Page, Playwright
+
 import structlog
+from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
 logger = structlog.get_logger(__name__)
 
 class BrowserManager:
     """Manages Playwright browser instances and contexts for multiple agents/chats."""
-    
+
     def __init__(self):
-        self._playwright: Optional[Playwright] = None
-        self._browser: Optional[Browser] = None
-        self._contexts: Dict[int, BrowserContext] = {}
-        self._pages: Dict[int, Page] = {}
+        self._playwright: Playwright | None = None
+        self._browser: Browser | None = None
+        self._contexts: dict[int, BrowserContext] = {}
+        self._pages: dict[int, Page] = {}
         self._lock = asyncio.Lock()
 
     async def _ensure_browser(self):
@@ -27,7 +27,7 @@ class BrowserManager:
     async def get_page(self, chat_id: int) -> Page:
         """Get or create an isolated page for a specific chat/agent."""
         await self._ensure_browser()
-        
+
         async with self._lock:
             if chat_id not in self._contexts:
                 # Create a new isolated context for this chat
@@ -39,7 +39,7 @@ class BrowserManager:
                 page = await context.new_page()
                 self._pages[chat_id] = page
                 logger.info("Created new browser context and page", chat_id=chat_id)
-            
+
             return self._pages[chat_id]
 
     async def close_chat_session(self, chat_id: int):
@@ -47,12 +47,12 @@ class BrowserManager:
         async with self._lock:
             page = self._pages.pop(chat_id, None)
             context = self._contexts.pop(chat_id, None)
-            
+
             if page:
                 await page.close()
             if context:
                 await context.close()
-            
+
             logger.info("Closed browser session", chat_id=chat_id)
 
     async def shutdown(self):
@@ -62,15 +62,15 @@ class BrowserManager:
                 await page.close()
             for context in self._contexts.values():
                 await context.close()
-            
+
             self._pages.clear()
             self._contexts.clear()
-            
+
             if self._browser:
                 await self._browser.close()
             if self._playwright:
                 await self._playwright.stop()
-            
+
             self._browser = None
             self._playwright = None
             logger.info("Browser manager shut down")

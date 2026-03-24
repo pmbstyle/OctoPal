@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-
 TRACKED_RELATIVE_PATHS = [
     "memory/canon/facts.md",
     "memory/canon/decisions.md",

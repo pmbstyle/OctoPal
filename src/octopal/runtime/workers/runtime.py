@@ -20,17 +20,17 @@ from typing import Any
 
 import structlog
 
-from octopal.infrastructure.mcp.manager import MCPManager
-from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.config.models import LLMConfig
+from octopal.infrastructure.config.settings import Settings
+from octopal.infrastructure.mcp.manager import MCPManager
 from octopal.infrastructure.store.base import Store
 from octopal.infrastructure.store.models import AuditEvent, WorkerRecord, WorkerTemplateRecord
 from octopal.runtime.intents.types import ActionIntent
 from octopal.runtime.policy.engine import PolicyEngine
+from octopal.runtime.tool_errors import ToolBridgeError
 from octopal.runtime.workers.contracts import TaskRequest, WorkerResult, WorkerSpec
 from octopal.runtime.workers.launcher import WorkerLauncher
 from octopal.utils import utc_now
-from octopal.runtime.tool_errors import ToolBridgeError
 
 logger = structlog.get_logger(__name__)
 
@@ -171,11 +171,12 @@ class WorkerRuntime:
         ) or config_obj.worker_llm_overrides.get(template.name)
 
         # 2. If no specific override, use default worker LLM config
-        if not worker_config:
-            # Only use worker_llm_default if it has at least provider_id or model set
+        if not worker_config and (
+            config_obj.worker_llm_default.provider_id or config_obj.worker_llm_default.model
+        ):
+            # Only use worker_llm_default if it has at least provider_id or model set;
             # otherwise it might be just an empty default object.
-            if config_obj.worker_llm_default.provider_id or config_obj.worker_llm_default.model:
-                worker_config = config_obj.worker_llm_default
+            worker_config = config_obj.worker_llm_default
 
         # 3. If still none, fallback to Octo's LLM config
         if not worker_config:

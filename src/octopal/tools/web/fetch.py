@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json as pyjson
 import os
 from html.parser import HTMLParser
 from typing import Any
-import json as pyjson
 from urllib.parse import urlparse
 
 import httpx

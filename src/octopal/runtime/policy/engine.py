@@ -9,8 +9,8 @@ from octopal.runtime.intents.registry import normalize_payload
 from octopal.runtime.intents.types import ActionIntent
 from octopal.runtime.policy.capabilities import DEFAULT_CAPABILITY_WHITELIST
 from octopal.runtime.policy.permits import ApprovalRequirement, Permit
-from octopal.utils import utc_now
 from octopal.runtime.workers.contracts import Capability
+from octopal.utils import utc_now
 
 
 @dataclass

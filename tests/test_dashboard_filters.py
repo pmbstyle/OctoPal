@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from octopal.infrastructure.config.settings import Settings
 from octopal.gateway.dashboard import (
     DashboardFilters,
     _build_filters,
     _normalize_log_entry,
 )
+from octopal.infrastructure.config.settings import Settings
 
 
 def _settings(tmp_path):

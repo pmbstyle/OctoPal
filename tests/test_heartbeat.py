@@ -1,13 +1,14 @@
 import asyncio
-import pytest
 from datetime import timedelta
+
+import pytest
 
 from octopal.runtime.octo import core as octo_core
 from octopal.runtime.octo.core import (
     Octo,
     _build_worker_result_timeout_followup,
-    _enqueue_batched_worker_followup,
     _coerce_control_plane_reply,
+    _enqueue_batched_worker_followup,
     _extract_followup_required_marker,
     _merge_worker_followup_texts,
     _schedule_worker_followup_flush,

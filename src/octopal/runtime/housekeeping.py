@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from octopal.utils import utc_now
@@ -29,11 +29,11 @@ def cleanup_workspace_tmp(workspace_dir: Path, *, retention_hours: int) -> TmpCl
     if retention_hours <= 0 or not tmp_dir.exists():
         return result
 
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=retention_hours)
+    cutoff = datetime.now(UTC) - timedelta(hours=retention_hours)
     files = [p for p in tmp_dir.rglob("*") if p.is_file()]
     for path in files:
         try:
-            modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            modified = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
             if modified < cutoff:
                 path.unlink(missing_ok=True)
                 result.deleted_files += 1

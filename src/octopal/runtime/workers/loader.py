@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import json
 import re
-import structlog
 from datetime import UTC, datetime
 from pathlib import Path
+
+import structlog
 
 from octopal.infrastructure.store.models import WorkerTemplateRecord
 

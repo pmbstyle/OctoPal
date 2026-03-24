@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-"""Canonical tool catalog and registry assembly for the runtime."""
-
 import asyncio
 import json
 import os
 from pathlib import Path
 
+import structlog
+
 from octopal.channels import normalize_user_channel, user_channel_label
 from octopal.infrastructure.config.settings import load_settings
+from octopal.runtime.memory.memchain import (
+    memchain_init,
+    memchain_record,
+    memchain_status,
+    memchain_verify,
+)
 from octopal.runtime.metrics import read_metrics_snapshot
-from octopal.runtime.memory.memchain import memchain_init, memchain_record, memchain_status, memchain_verify
 from octopal.runtime.state import is_pid_running, read_status
 from octopal.tools.browser.actions import (
     browser_click,
@@ -22,14 +27,14 @@ from octopal.tools.browser.actions import (
     browser_wait_for,
     browser_workflow,
 )
-from octopal.tools.memory.canon import manage_canon, search_canon
 from octopal.tools.filesystem.download import download_file
-from octopal.tools.ops.exec_run import exec_run
-from octopal.tools.memory.experiments import octo_experiment_log
-from octopal.tools.web.plan import fetch_plan_tool
 from octopal.tools.filesystem.files import fs_delete, fs_list, fs_move, fs_read, fs_write
+from octopal.tools.inventory import annotate_tool_specs
 from octopal.tools.llm.subtask import run_llm_subtask
-from octopal.tools.skills.management import get_registered_skill_tools, get_skill_management_tools
+from octopal.tools.mcp.management import get_mcp_mgmt_tools
+from octopal.tools.memory.canon import manage_canon, search_canon
+from octopal.tools.memory.experiments import octo_experiment_log
+from octopal.tools.ops.exec_run import exec_run
 from octopal.tools.ops.management import (
     artifact_collect,
     config_audit,
@@ -49,17 +54,16 @@ from octopal.tools.ops.management import (
     service_logs,
     test_run,
 )
-from octopal.tools.inventory import annotate_tool_specs
 from octopal.tools.registry import ToolSpec
+from octopal.tools.skills.management import get_registered_skill_tools, get_skill_management_tools
 from octopal.tools.web.fetch import markdown_new_fetch, web_fetch
+from octopal.tools.web.plan import fetch_plan_tool
 from octopal.tools.web.search import web_search
 from octopal.tools.workers.management import get_worker_tools
-from octopal.tools.mcp.management import get_mcp_mgmt_tools
-
 from octopal.utils import utc_now
-import structlog
 
 logger = structlog.get_logger(__name__)
+
 
 def get_tools(mcp_manager=None) -> list[ToolSpec]:
     tools = [
@@ -1375,9 +1379,9 @@ def _gateway_octo_reason(octo_metrics: dict[str, object]) -> str:
 def _gateway_channel_status(channel_id: str, channel_metrics: dict[str, object]) -> str:
     if channel_id == "whatsapp":
         connected = channel_metrics.get("connected")
-        if connected in {0, False}:
+        if connected in {0}:
             return "critical"
-        return "ok" if connected in {1, True} else "warning"
+        return "ok" if connected in {1} else "warning"
     queue_depth = int(channel_metrics.get("chat_queues", 0) or 0)
     if queue_depth >= 40:
         return "critical"
@@ -1390,9 +1394,9 @@ def _gateway_channel_reason(channel_id: str, channel_metrics: dict[str, object])
     if channel_id == "whatsapp":
         connected = channel_metrics.get("connected")
         mappings = int(channel_metrics.get("chat_mappings", 0) or 0)
-        if connected in {0, False}:
+        if connected in {0}:
             return "bridge disconnected"
-        if connected in {1, True}:
+        if connected in {1}:
             return f"connected ({mappings} mapped chat(s))" if mappings > 0 else "connected"
         return "awaiting bridge status"
     queue_depth = int(channel_metrics.get("chat_queues", 0) or 0)

@@ -828,9 +828,7 @@ def _result_has_error(result: Any) -> bool:
         returncode = structured.get("returncode")
         if isinstance(returncode, int) and returncode != 0:
             return True
-        if isinstance(returncode, float) and int(returncode) != 0:
-            return True
-        return False
+        return isinstance(returncode, float) and int(returncode) != 0
     if isinstance(result, str):
         lowered = result.strip().lower()
         return (
@@ -927,7 +925,7 @@ def _attach_telemetry(output: Any, telemetry: dict[str, Any]) -> dict[str, Any]:
 
 
 def _summarize_tool_start(tool_name: str | None, tool_input: dict[str, Any], *, timeout_seconds: int | None) -> str:
-    keys = sorted(str(key) for key in tool_input.keys())
+    keys = sorted(str(key) for key in tool_input)
     return f"Tool start: {tool_name} timeout={timeout_seconds or 0}s input_keys={keys}"
 
 
@@ -952,7 +950,7 @@ def _summarize_tool_finish(tool_name: str | None, result: Any, meta: dict[str, A
 
 def _describe_tool_result_shape(result: Any) -> str:
     if isinstance(result, dict):
-        keys = sorted(str(key) for key in result.keys())[:8]
+        keys = sorted(str(key) for key in result)[:8]
         return f"dict(keys={keys}, chars={len(json.dumps(result, ensure_ascii=False, default=str))})"
     if isinstance(result, list):
         return f"list(len={len(result)})"

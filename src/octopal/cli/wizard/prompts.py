@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TypeVar
 
 from rich.console import Console
 from rich.panel import Panel
@@ -17,7 +16,6 @@ from octopal.cli.wizard.models import (
     WizardTextParams,
 )
 
-T = TypeVar("T")
 BROOD_SILVER = "#d8dde2"
 MIND_GOLD = "#f0c15d"
 SURFACE_BLUE = "#5fa8c8"
@@ -31,10 +29,10 @@ class WizardPrompter:
     def note(self, title: str, lines: Sequence[str]) -> None:
         raise NotImplementedError
 
-    def select(self, params: WizardSelectParams[T]) -> T:
+    def select[T](self, params: WizardSelectParams[T]) -> T:
         raise NotImplementedError
 
-    def multiselect(self, params: WizardMultiSelectParams[T]) -> list[T]:
+    def multiselect[T](self, params: WizardMultiSelectParams[T]) -> list[T]:
         raise NotImplementedError
 
     def text(self, params: WizardTextParams) -> str:
@@ -76,13 +74,13 @@ class RichWizardPrompter(WizardPrompter):
         )
         self.console.print()
 
-    def select(self, params: WizardSelectParams[T]) -> T:
+    def select[T](self, params: WizardSelectParams[T]) -> T:
         try:
             return _inquirer_select(params)
         except Exception:
             return self._fallback_select(params)
 
-    def multiselect(self, params: WizardMultiSelectParams[T]) -> list[T]:
+    def multiselect[T](self, params: WizardMultiSelectParams[T]) -> list[T]:
         try:
             return _inquirer_multiselect(params)
         except Exception:
@@ -100,7 +98,7 @@ class RichWizardPrompter(WizardPrompter):
         except Exception:
             return Confirm.ask(params.message, default=params.initial_value)
 
-    def _fallback_select(self, params: WizardSelectParams[T]) -> T:
+    def _fallback_select[T](self, params: WizardSelectParams[T]) -> T:
         visible_options = [option for option in params.options if option.enabled]
         for index, option in enumerate(visible_options, start=1):
             hint = f" [dim]- {option.hint}[/dim]" if option.hint else ""
@@ -120,7 +118,7 @@ class RichWizardPrompter(WizardPrompter):
         )
         return visible_options[selected_idx - 1].value
 
-    def _fallback_multiselect(self, params: WizardMultiSelectParams[T]) -> list[T]:
+    def _fallback_multiselect[T](self, params: WizardMultiSelectParams[T]) -> list[T]:
         self.console.print(f"[bold]{params.message}[/bold]")
         self.console.print("[dim]Enter comma-separated numbers. Leave blank for none.[/dim]")
         visible_options = [option for option in params.options if option.enabled]
@@ -156,7 +154,7 @@ class RichWizardPrompter(WizardPrompter):
         )
 
 
-def _choice_name(option: WizardSelectOption[T]) -> str:
+def _choice_name[T](option: WizardSelectOption[T]) -> str:
     return f"{option.label} - {option.hint}" if option.hint else option.label
 
 
@@ -175,7 +173,7 @@ def _brand_text(title: str) -> Text:
     return rendered
 
 
-def _inquirer_select(params: WizardSelectParams[T]) -> T:
+def _inquirer_select[T](params: WizardSelectParams[T]) -> T:
     from InquirerPy import inquirer
 
     choices = [
@@ -195,7 +193,7 @@ def _inquirer_select(params: WizardSelectParams[T]) -> T:
     ).execute()
 
 
-def _inquirer_multiselect(params: WizardMultiSelectParams[T]) -> list[T]:
+def _inquirer_multiselect[T](params: WizardMultiSelectParams[T]) -> list[T]:
     from InquirerPy import inquirer
 
     choices = [

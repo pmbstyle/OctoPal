@@ -10,13 +10,13 @@ from octopal.runtime.workers.agent_worker import (
     _classify_tool_error,
     _detect_tool_loop,
     _execute_tool,
-    _extract_mcp_identity,
     _extract_error_text,
+    _extract_mcp_identity,
     _hash_tool_call,
     _hash_tool_outcome,
     _parse_tool_arguments,
-    _result_has_error,
     _resolve_tool_loop_thresholds,
+    _result_has_error,
     _tool_no_progress_streak,
 )
 from octopal.runtime.workers.contracts import WorkerSpec

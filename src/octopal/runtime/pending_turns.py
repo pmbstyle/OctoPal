@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -88,10 +89,8 @@ class PendingTurnAggregator:
         for task in tasks:
             task.cancel()
         for task in tasks:
-            try:
+            with suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
     async def _sleep_then_flush(self, chat_id: int) -> None:
         try:

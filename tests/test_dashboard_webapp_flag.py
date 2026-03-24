@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from octopal.infrastructure.config.settings import Settings
 from octopal.gateway.app import build_app
+from octopal.infrastructure.config.settings import Settings
 
 
 def test_dashboard_returns_legacy_html_when_webapp_flag_disabled(tmp_path) -> None:

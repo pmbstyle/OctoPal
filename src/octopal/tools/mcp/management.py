@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import json
+from typing import Any
+
 import structlog
-from typing import Any, Dict
 
 from octopal.infrastructure.mcp.manager import MCPServerConfig
 from octopal.tools.registry import ToolSpec
 
 logger = structlog.get_logger(__name__)
 
-async def mcp_connect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+async def mcp_connect(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Connect to a new MCP server."""
     safe_args = dict(args)
     if isinstance(safe_args.get("headers"), dict):
@@ -20,7 +21,7 @@ async def mcp_connect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     octo = ctx.get("octo")
     if not octo or not octo.mcp_manager:
         return "Error: MCP Manager not initialized."
-    
+
     server_id = args.get("id")
     name = args.get("name", server_id)
     command = args.get("command")
@@ -67,7 +68,7 @@ async def mcp_connect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         logger.error("Dynamic MCP connection failed", server_id=server_id, error=str(e), exc_info=True)
         return f"Failed to connect to MCP server '{server_id}': {e}. Please check the URL/command and ensure the server is reachable."
 
-async def mcp_disconnect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+async def mcp_disconnect(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Disconnect from an MCP server."""
     octo = ctx.get("octo")
     if not octo or not octo.mcp_manager:
@@ -83,14 +84,14 @@ async def mcp_disconnect(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     except Exception as e:
         return f"Error disconnecting from MCP server {server_id}: {e}"
 
-def mcp_list(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+def mcp_list(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """List connected MCP servers and their tools."""
     octo = ctx.get("octo")
     if not octo or not octo.mcp_manager:
         return "Error: MCP Manager not initialized."
 
     servers = []
-    for server_id, session in octo.mcp_manager.sessions.items():
+    for server_id, _session in octo.mcp_manager.sessions.items():
         tools = octo.mcp_manager._tools.get(server_id, [])
         servers.append({
             "id": server_id,
@@ -101,7 +102,7 @@ def mcp_list(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     return json.dumps({"connected_servers": servers}, indent=2)
 
 
-def mcp_status(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+def mcp_status(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """List status for all known MCP servers, including disconnected/error states."""
     octo = ctx.get("octo")
     if not octo or not octo.mcp_manager:
@@ -124,7 +125,7 @@ def mcp_status(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         indent=2,
     )
 
-def mcp_discover(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+def mcp_discover(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Summarize MCP server usability, exposed tools, and suggested next actions."""
     octo = ctx.get("octo")
     if not octo or not octo.mcp_manager:
@@ -207,7 +208,7 @@ def mcp_discover(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         indent=2,
     )
 
-async def mcp_call(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+async def mcp_call(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Call an MCP tool on a specific server."""
     octo = ctx.get("octo")
     if not octo or not octo.mcp_manager:

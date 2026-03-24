@@ -214,7 +214,6 @@ description: Helps write copy
 
 def test_skill_install_command_auto_prepares_env_and_returns_trust_next_step(tmp_path: Path, monkeypatch) -> None:
     workspace_dir = tmp_path / "workspace"
-    skill_dir = workspace_dir / "skills" / "job-search"
     source_dir = tmp_path / "job-search"
     scripts_dir = source_dir / "scripts"
     scripts_dir.mkdir(parents=True)

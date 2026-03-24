@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Iterable
 
 from octopal.tools.profiles import get_tool_profile
 from octopal.tools.registry import ToolPolicy, ToolPolicyPipelineStep, ToolSpec, parse_tool_list

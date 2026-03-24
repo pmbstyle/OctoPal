@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
+
 def register_whatsapp_routes(app: FastAPI) -> None:
     @app.post("/api/channels/whatsapp/inbound")
     async def whatsapp_inbound(

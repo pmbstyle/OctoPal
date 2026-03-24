@@ -6,12 +6,12 @@ import os
 import structlog
 from aiogram import Bot, Dispatcher
 
-from octopal.runtime.app import build_octo
-from octopal.infrastructure.config.settings import Settings
-from octopal.runtime.octo.core import Octo, OctoReply
 from octopal.channels.telegram.approvals import ApprovalManager
 from octopal.channels.telegram.handlers import register_handlers
-from octopal.utils import is_heartbeat_ok, is_control_response
+from octopal.infrastructure.config.settings import Settings
+from octopal.runtime.app import build_octo
+from octopal.runtime.octo.core import Octo, OctoReply
+from octopal.utils import is_control_response
 
 logger = structlog.get_logger(__name__)
 

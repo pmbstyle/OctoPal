@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from octopal.cli.configure import _configure_llm
-from octopal.infrastructure.config.models import OctopalConfig, LLMConfig
+from octopal.infrastructure.config.models import LLMConfig, OctopalConfig
 
 
 def test_configure_llm_quick_mode_allows_custom_base_url(monkeypatch) -> None:

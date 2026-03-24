@@ -18,15 +18,14 @@ from octopal.channels.whatsapp.ids import (
 from octopal.infrastructure.config.settings import Settings
 from octopal.runtime.app import build_octo
 from octopal.runtime.metrics import update_component_gauges
-from octopal.runtime.pending_turns import PendingTurnAggregator
 from octopal.runtime.octo.core import Octo
+from octopal.runtime.pending_turns import PendingTurnAggregator
 from octopal.runtime.state import update_last_message
 from octopal.utils import (
     extract_reaction_and_strip,
     normalize_reaction_emoji,
     sanitize_user_facing_text,
     should_suppress_user_delivery,
-    strip_reaction_tags,
 )
 
 logger = structlog.get_logger(__name__)
@@ -49,24 +48,24 @@ class WhatsAppRuntime:
         async def _internal_send(chat_id: int, text: str) -> None:
             if should_suppress_user_delivery(text):
                 return
-            
+
             emoji, final_text = extract_reaction_and_strip(text)
             if emoji:
                 to = self._number_by_chat_id.get(chat_id)
-                # We need a message ID to react. This simple runtime currently doesn't 
-                # track last inbound message ID globally per chat in a way that's easily 
-                # accessible here without more refactoring, but we can try to use 
-                # the one from the bridge if we had it. 
+                # We need a message ID to react. This simple runtime currently doesn't
+                # track last inbound message ID globally per chat in a way that's easily
+                # accessible here without more refactoring, but we can try to use
+                # the one from the bridge if we had it.
                 # For now, final reactions are handled in _flush_pending_turn.
                 pass
 
             if not final_text:
                 return
-                
+
             clean_text = sanitize_user_facing_text(final_text)
             if not clean_text:
                 return
-                
+
             to = self._number_by_chat_id.get(chat_id)
             if not to:
                 logger.warning("Missing WhatsApp recipient mapping", chat_id=chat_id)
@@ -80,7 +79,7 @@ class WhatsAppRuntime:
             text: str,
             meta: dict[str, object],
         ) -> None:
-            # WhatsApp doesn't support easy 'typing' but we can send status reactions 
+            # WhatsApp doesn't support easy 'typing' but we can send status reactions
             # if we have the message ID.
             logger.info("WhatsApp progress event", chat_id=chat_id, state=state, text=text)
 

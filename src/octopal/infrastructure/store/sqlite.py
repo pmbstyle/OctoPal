@@ -4,6 +4,7 @@ import json
 import logging
 import sqlite3
 import threading
+from contextlib import suppress
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -17,9 +18,9 @@ from octopal.infrastructure.store.models import (
     WorkerRecord,
     WorkerTemplateRecord,
 )
-from octopal.utils import utc_now
 from octopal.runtime.workers.loader import discover_worker_templates
 from octopal.runtime.workers.loader import get_worker_template as get_template_from_fs
+from octopal.utils import utc_now
 
 
 class LockedCursor:
@@ -693,7 +694,7 @@ class SQLiteStore(Store):
                 ),
             )
 
-        try:
+        with suppress(sqlite3.OperationalError):
             self._conn.execute(
                 """
                 INSERT INTO memory_entries_fts (content, owner_id, chat_id, entry_uuid)
@@ -701,8 +702,6 @@ class SQLiteStore(Store):
                 """,
                 (entry.content, owner_id, chat_id, entry.id),
             )
-        except sqlite3.OperationalError:
-            pass
 
         self._conn.commit()
 
@@ -834,15 +833,13 @@ class SQLiteStore(Store):
             (cutoff.isoformat(), safe_keep_count),
         )
         deleted_count = cursor.rowcount
-        try:
+        with suppress(sqlite3.OperationalError):
             self._conn.execute(
                 """
                 DELETE FROM memory_entries_fts
                 WHERE entry_uuid NOT IN (SELECT uuid FROM memory_entries)
                 """
             )
-        except sqlite3.OperationalError:
-            pass
         self._conn.commit()
         return deleted_count
 
@@ -869,15 +866,13 @@ class SQLiteStore(Store):
             )
 
         deleted_count = cursor.rowcount
-        try:
+        with suppress(sqlite3.OperationalError):
             self._conn.execute(
                 """
                 DELETE FROM memory_entries_fts
                 WHERE entry_uuid NOT IN (SELECT uuid FROM memory_entries)
                 """
             )
-        except sqlite3.OperationalError:
-            pass
         self._conn.commit()
         return deleted_count
 
@@ -923,8 +918,8 @@ class SQLiteStore(Store):
         )
         self._conn.commit()
 
-    def upsert_scheduled_task(self, task_id: str, name: str, frequency: str, task_text: str, 
-                             description: str | None = None, worker_id: str | None = None, 
+    def upsert_scheduled_task(self, task_id: str, name: str, frequency: str, task_text: str,
+                             description: str | None = None, worker_id: str | None = None,
                              inputs: dict | None = None, enabled: bool = True) -> None:
         self._conn.execute(
             """

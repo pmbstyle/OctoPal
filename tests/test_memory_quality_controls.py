@@ -4,8 +4,8 @@ import asyncio
 import uuid
 from datetime import timedelta
 
-from octopal.runtime.memory.service import MemoryService
 from octopal.infrastructure.store.models import MemoryEntry
+from octopal.runtime.memory.service import MemoryService
 from octopal.utils import utc_now
 
 

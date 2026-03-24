@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from octopal.infrastructure.config.models import OctopalConfig, LLMConfig
+from octopal.infrastructure.config.models import LLMConfig, OctopalConfig
 from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.providers.profile_resolver import resolve_litellm_profile
 

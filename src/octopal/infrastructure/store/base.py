@@ -86,8 +86,8 @@ class Store(Protocol):
 
     def set_chat_bootstrap_hash(self, chat_id: int, bootstrap_hash: str, ts: datetime) -> None: ...
 
-    def upsert_scheduled_task(self, task_id: str, name: str, frequency: str, task_text: str, 
-                             description: str | None = None, worker_id: str | None = None, 
+    def upsert_scheduled_task(self, task_id: str, name: str, frequency: str, task_text: str,
+                             description: str | None = None, worker_id: str | None = None,
                              inputs: dict | None = None, enabled: bool = True) -> None: ...
 
     def update_task_last_run(self, task_id: str, ts: datetime) -> None: ...

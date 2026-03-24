@@ -12,6 +12,7 @@ from typing import Any
 import structlog
 
 from octopal.tools.filesystem.path_safety import WorkspacePathError, resolve_workspace_path
+from octopal.tools.registry import ToolSpec
 from octopal.tools.skills.bundles import (
     SkillBundle,
     discover_skill_bundle_dirs,
@@ -22,7 +23,6 @@ from octopal.tools.skills.runtime_envs import (
     remove_skill_env,
     resolve_skill_runtime_execution,
 )
-from octopal.tools.registry import ToolSpec
 
 logger = structlog.get_logger(__name__)
 
@@ -736,7 +736,6 @@ def _skill_record_from_registry(workspace_dir: Path, raw: dict[str, Any]) -> dic
         "requires_env": [],
         "requires_config": [],
         "installer_managed": False,
-        "trusted": True,
         "has_scripts": False,
         "runtime_kind": "",
         "runtime_required": False,

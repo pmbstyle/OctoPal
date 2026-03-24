@@ -216,7 +216,6 @@ def resolve_skill_runtime_execution(
     explicit_runner: str,
 ) -> dict[str, Any]:
     status = get_skill_env_status(skill_id, workspace_dir=workspace_dir)
-    env_manifest = _read_env_manifest(workspace_dir, skill_id)
     suffix = script_path.suffix.lower()
 
     if status["kind"] == "python" and status["prepared"]:

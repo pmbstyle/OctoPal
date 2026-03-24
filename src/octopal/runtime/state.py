@@ -129,9 +129,7 @@ def _looks_like_octopal_runtime_cmd(cmdline: str) -> bool:
         return True
     if " octopal start --foreground" in f" {lowered}":
         return True
-    if " -m octopal.cli start" in lowered:
-        return True
-    return False
+    return " -m octopal.cli start" in lowered
 
 
 def _iter_process_cmdlines() -> list[tuple[int, str]]:

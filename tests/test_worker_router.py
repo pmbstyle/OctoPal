@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
-from types import SimpleNamespace
 
 from octopal.infrastructure.store.models import WorkerTemplateRecord
 from octopal.tools.workers.management import _select_worker_template, _tool_start_worker

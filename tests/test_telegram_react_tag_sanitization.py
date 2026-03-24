@@ -6,7 +6,11 @@ import types
 
 from octopal.infrastructure.config.settings import Settings
 from octopal.runtime.octo.core import OctoReply
-from octopal.utils import extract_edge_reaction_fallback, extract_reaction_and_strip, strip_reaction_tags
+from octopal.utils import (
+    extract_edge_reaction_fallback,
+    extract_reaction_and_strip,
+    strip_reaction_tags,
+)
 
 if "telegramify_markdown" not in sys.modules:
     sys.modules["telegramify_markdown"] = types.SimpleNamespace(markdownify=lambda text: text)

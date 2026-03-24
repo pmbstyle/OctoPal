@@ -9,7 +9,6 @@ from uuid import uuid4
 from octopal.infrastructure.jsonl import read_jsonl_dicts
 from octopal.utils import utc_now
 
-
 _MAX_TEXT_LEN = 280
 _MAX_EVIDENCE_ITEMS = 6
 

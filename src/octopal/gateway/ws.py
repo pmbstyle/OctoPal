@@ -5,8 +5,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, status
 import structlog
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, status
 
 from octopal.runtime.octo.core import Octo, OctoReply
 from octopal.utils import get_tailscale_ips, should_suppress_user_delivery
@@ -63,7 +63,7 @@ def register_ws_routes(app: FastAPI) -> None:
         # 1. IP Validation (Tailscale)
         client_host = socket.client.host
         settings = app.state.settings
-        
+
         # Merge configured and automatically discovered IPs
         allowed_ips = [ip.strip() for ip in settings.tailscale_ips.split(",") if ip.strip()]
         if not allowed_ips:
@@ -71,9 +71,9 @@ def register_ws_routes(app: FastAPI) -> None:
             allowed_ips = get_tailscale_ips()
             if allowed_ips:
                 logger.info("Automatically discovered Tailscale IPs", ips=allowed_ips)
-        
+
         is_local = client_host in ("127.0.0.1", "::1", "localhost")
-        
+
         if allowed_ips and not is_local and client_host not in allowed_ips:
              logger.warning("Rejected WebSocket connection from unauthorized IP", host=client_host)
              await socket.close(code=status.WS_1008_POLICY_VIOLATION)
@@ -90,7 +90,7 @@ def register_ws_routes(app: FastAPI) -> None:
             await socket.send_json({"type": "error", "message": "Octo not initialized"})
             await socket.close(code=status.WS_1011_INTERNAL_ERROR)
             return
-        
+
         # Define WS-specific output channel
         async def _ws_send(chat_id: int, text: str) -> None:
             if should_suppress_user_delivery(text):
@@ -116,15 +116,15 @@ def register_ws_routes(app: FastAPI) -> None:
             await socket.send_json({"type": "error", "message": "Another WebSocket session is currently active."})
             await socket.close(code=status.WS_1013_TRY_AGAIN_LATER)
             return
-        
+
         approvals = WsApprovalManager(send=lambda payload: socket.send_json(payload))
         tasks: set[asyncio.Task] = set()
-        
+
         try:
             while True:
                 message = await socket.receive_json()
                 msg_type = message.get("type")
-                
+
                 if msg_type == "message":
                     # Use a positive chat_id so internal worker follow-ups are delivered.
                     chat_id = session_chat_id
@@ -136,14 +136,14 @@ def register_ws_routes(app: FastAPI) -> None:
                     tasks.add(task)
                     task.add_done_callback(lambda t: tasks.discard(t))
                     continue
-                
+
                 if msg_type == "approval_response":
                     approvals.resolve(
                         str(message.get("intent_id")),
                         bool(message.get("approved")),
                     )
                     continue
-                
+
                 if msg_type == "ping":
                     await socket.send_json({"type": "pong"})
         except WebSocketDisconnect:

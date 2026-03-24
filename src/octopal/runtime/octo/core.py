@@ -27,7 +27,6 @@ from octopal.runtime.memory.canon import CanonService
 from octopal.runtime.memory.memchain import memchain_record
 from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.metrics import update_component_gauges
-from octopal.runtime.policy.engine import PolicyEngine
 from octopal.runtime.octo.prompt_builder import (
     build_bootstrap_context_prompt,
 )
@@ -39,6 +38,7 @@ from octopal.runtime.octo.router import (
     should_force_worker_followup,
     should_send_worker_followup,
 )
+from octopal.runtime.policy.engine import PolicyEngine
 from octopal.runtime.scheduler.service import SchedulerService
 from octopal.runtime.workers.contracts import TaskRequest, WorkerResult
 from octopal.runtime.workers.runtime import WorkerRuntime
@@ -56,7 +56,7 @@ _FOLLOWUP_QUEUES: dict[int, asyncio.Queue] = {}
 _FOLLOWUP_TASKS: dict[int, asyncio.Task] = {}
 _INTERNAL_QUEUES: dict[int, asyncio.Queue] = {}
 _INTERNAL_TASKS: dict[int, asyncio.Task] = {}
-_WORKER_FOLLOWUP_BATCHES: dict[tuple[int, str], "_PendingWorkerFollowupBatch"] = {}
+_WORKER_FOLLOWUP_BATCHES: dict[tuple[int, str], _PendingWorkerFollowupBatch] = {}
 _QUEUE_IDLE_TIMEOUT_SECONDS = 300.0
 # Worker-result follow-up can include multiple provider retries and a fallback
 # pass through Octo, so it needs a wider budget than a single LLM request.
@@ -369,7 +369,7 @@ def _merge_worker_followup_texts(texts: list[str]) -> str:
 
 
 async def _send_worker_followup(
-    octo: "Octo",
+    octo: Octo,
     chat_id: int,
     correlation_id: str | None,
     text: str,
@@ -406,7 +406,7 @@ async def _send_worker_followup(
         )
 
 
-async def _flush_worker_followup_batch(octo: "Octo", chat_id: int, correlation_id: str) -> None:
+async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id: str) -> None:
     try:
         await asyncio.sleep(_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS)
         batch_key = (chat_id, correlation_id)
@@ -435,7 +435,7 @@ async def _flush_worker_followup_batch(octo: "Octo", chat_id: int, correlation_i
         logger.exception("Failed to flush batched worker follow-up", chat_id=chat_id)
 
 
-def _schedule_worker_followup_flush(octo: "Octo", chat_id: int, correlation_id: str | None) -> None:
+def _schedule_worker_followup_flush(octo: Octo, chat_id: int, correlation_id: str | None) -> None:
     if not correlation_id:
         return
     batch_key = (chat_id, correlation_id)
@@ -455,7 +455,7 @@ def _schedule_worker_followup_flush(octo: "Octo", chat_id: int, correlation_id: 
 
 
 async def _enqueue_batched_worker_followup(
-    octo: "Octo",
+    octo: Octo,
     chat_id: int,
     correlation_id: str | None,
     text: str,

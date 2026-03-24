@@ -22,8 +22,8 @@ from octopal.channels.telegram.approvals import ApprovalManager
 from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.logging import correlation_id_var
 from octopal.runtime.metrics import update_component_gauges
-from octopal.runtime.pending_turns import PendingTurnAggregator
 from octopal.runtime.octo.core import Octo, OctoReply
+from octopal.runtime.pending_turns import PendingTurnAggregator
 from octopal.runtime.state import update_last_message
 from octopal.utils import (
     escape_html,
@@ -528,7 +528,7 @@ def _flush_pending_turn_factory(
     ) -> None:
         lock = _CHAT_LOCKS.setdefault(chat_id, asyncio.Lock())
         reply_to_message_id = metadata.get("reply_to_message_id")
-        
+
         # Immediate feedback
         if reply_to_message_id is not None:
             try:
@@ -604,14 +604,14 @@ def _flush_pending_turn_factory(
                             requested_emoji=effective_emoji,
                             applied_emoji=mapped_emoji,
                         )
-                    except Exception as exc:
+                    except Exception:
                         logger.warning(
                             "Failed to set terminal reaction",
                             chat_id=chat_id,
                             emoji=effective_emoji,
                             exc_info=True,
                         )
-                
+
                 if final_text:
                     await _enqueue_send(bot, chat_id, final_text, reply_to_message_id=reply_to_message_id)
                 return

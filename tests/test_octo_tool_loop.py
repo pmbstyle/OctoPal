@@ -7,8 +7,8 @@ from octopal.runtime.octo.router import (
     _handle_octo_tool_call,
     _record_octo_tool_call,
 )
-from octopal.tools.metadata import ToolMetadata
 from octopal.tools.diagnostics import resolve_tool_diagnostics
+from octopal.tools.metadata import ToolMetadata
 from octopal.tools.registry import ToolSpec
 
 

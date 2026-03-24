@@ -26,7 +26,7 @@ _TELEGRAM_SUPPORTED_REACTIONS = {
     "🙏", "👌", "🕊", "🤡", "🥱", "🥴", "😍", "🐳", "❤‍🔥", "🌚", "🌭", "💯", "🤣", "⚡", "🍌", "🏆",
     "💔", "🤨", "😐", "🍓", "🍾", "💋", "🖕", "😈", "😴", "😭", "🤓", "👻", "👨‍💻", "👀", "🎃", "🙈",
     "😇", "😨", "🤝", "✍", "🤗", "🫡", "🎅", "🎄", "☃", "💅", "🤪", "🗿", "🆒", "💘", "💻", "🤲",
-    "💊", "🦄", "⭐", "🎈", "🎆", "🎇", "🥨", "🦌", "🛷", "🧡", "🕊", "🌿", "🍓"
+    "💊", "🦄", "⭐", "🎈", "🎆", "🎇", "🥨", "🦌", "🛷", "🧡", "🌿"
 }
 
 _REACTION_MAPPING = {
@@ -76,14 +76,14 @@ def normalize_reaction_emoji(emoji: str) -> str:
     val = (emoji or "").strip()
     # Handle variation selectors (strip \uFE0F)
     base_val = val.replace("\ufe0f", "")
-    
+
     if base_val in _REACTION_MAPPING:
         return _REACTION_MAPPING[base_val]
-    
+
     # If it's already a supported emoji, return it
     if base_val in _TELEGRAM_SUPPORTED_REACTIONS or val in _TELEGRAM_SUPPORTED_REACTIONS:
         return val
-        
+
     # Fallback to thinking or thumb up
     return "👍"
 
@@ -148,7 +148,7 @@ def sanitize_user_facing_text(text: str) -> str:
     """Remove explicit reasoning/tool traces while preserving normal plain text."""
     if not text:
         return ""
-        
+
     value = strip_reaction_tags(text)
     if not value:
         return ""
@@ -295,6 +295,4 @@ def should_suppress_user_delivery(text: str) -> bool:
         return True
     if has_heartbeat_ok_edge(value):
         return True
-    if has_no_user_response_suffix(value):
-        return True
-    return False
+    return bool(has_no_user_response_suffix(value))

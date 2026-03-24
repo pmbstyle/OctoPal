@@ -4,9 +4,9 @@ import asyncio
 import uuid
 from pathlib import Path
 
-from octopal.runtime.memory.canon import CanonService
 from octopal.infrastructure.store.models import MemoryEntry
 from octopal.infrastructure.store.sqlite import SQLiteStore
+from octopal.runtime.memory.canon import CanonService
 from octopal.utils import utc_now
 
 

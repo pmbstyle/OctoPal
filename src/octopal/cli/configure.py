@@ -21,7 +21,7 @@ from octopal.cli.wizard import (
     WizardTextParams,
     create_wizard_prompter,
 )
-from octopal.infrastructure.config.models import OctopalConfig, LLMConfig
+from octopal.infrastructure.config.models import LLMConfig, OctopalConfig
 from octopal.infrastructure.config.settings import (
     _resolve_env_file,
     load_config,

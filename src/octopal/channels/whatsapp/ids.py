@@ -12,10 +12,7 @@ def normalize_whatsapp_number(value: str) -> str:
         raw = raw.split("@", 1)[0]
     if ":" in raw:
         raw = raw.split(":", 1)[0]
-    if raw.startswith("+"):
-        digits = "+" + re.sub(r"\D+", "", raw)
-    else:
-        digits = "+" + re.sub(r"\D+", "", raw)
+    digits = "+" + re.sub(r"\D+", "", raw)
     return digits if len(digits) > 1 else ""
 
 

@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
+from aiogram import Bot
 from rich import box
 from rich.align import Align
 from rich.console import Console
@@ -21,11 +22,15 @@ from rich.prompt import Confirm
 from rich.table import Table
 
 from octopal.channels import normalize_user_channel, user_channel_label
+from octopal.channels.whatsapp.bridge import WhatsAppBridgeController, WhatsAppBridgeError
+from octopal.channels.whatsapp.ids import parse_allowed_whatsapp_numbers
+from octopal.channels.whatsapp.runtime import WhatsAppRuntime
 from octopal.cli.branding import print_banner
-from octopal.infrastructure.config.settings import Settings, load_settings, save_config
 from octopal.gateway.app import build_app
+from octopal.infrastructure.config.settings import Settings, load_settings, save_config
 from octopal.infrastructure.logging import configure_logging
 from octopal.infrastructure.providers.profile_resolver import resolve_litellm_profile
+from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.runtime.metrics import read_metrics_snapshot
 from octopal.runtime.state import (
     is_pid_running,
@@ -34,11 +39,9 @@ from octopal.runtime.state import (
     read_status,
     write_start_status,
 )
-from octopal.infrastructure.store.sqlite import SQLiteStore
-from octopal.channels.whatsapp.bridge import WhatsAppBridgeController, WhatsAppBridgeError
-from octopal.channels.whatsapp.ids import parse_allowed_whatsapp_numbers
-from octopal.channels.whatsapp.runtime import WhatsAppRuntime
 from octopal.runtime.workers.templates import sync_default_templates
+from octopal.tools import get_tools, resolve_tool_diagnostics
+from octopal.tools.registry import ToolPolicy, ToolPolicyPipelineStep, ToolSpec
 from octopal.tools.skills.installer import (
     install_skill_from_source,
     update_installed_skill,
@@ -48,9 +51,6 @@ from octopal.tools.skills.runtime_envs import (
     prepare_skill_env,
     remove_skill_env,
 )
-from octopal.tools import get_tools, resolve_tool_diagnostics
-from octopal.tools.registry import ToolPolicy, ToolPolicyPipelineStep, ToolSpec
-from aiogram import Bot
 
 app = typer.Typer(add_completion=False)
 workers_app = typer.Typer(add_completion=False)
@@ -312,7 +312,7 @@ def start(
     foreground: bool = typer.Option(False, "--foreground", "-f", help="Run in foreground mode (showing logs)"),
 ) -> None:
     """Start the Octopal Octo."""
-    from octopal.channels.telegram.bot import run_bot, build_dispatcher
+    from octopal.channels.telegram.bot import build_dispatcher, run_bot
 
     try:
         settings = load_settings()
@@ -657,7 +657,7 @@ def workers_list() -> None:
             f"[{status_style}]{worker.status}[/{status_style}]",
             (worker.task[:47] + "...") if worker.task and len(worker.task) > 50 else (worker.task or "[dim]-[/dim]")
         )
-    
+
     console.print("\n")
     console.print(Align.center(table))
     console.print("\n")
@@ -688,7 +688,7 @@ def audit_list(limit: int = 50) -> None:
             event.event_type,
             (event.correlation_id[:12] if event.correlation_id else "")
         )
-    
+
     console.print("\n")
     console.print(Align.center(table))
     console.print("\n")
@@ -825,11 +825,10 @@ def config_migrate() -> None:
     if not settings.config_obj:
         console.print("[red]Error: Could not initialize configuration object.[/red]")
         return
-    
+
     config_path = Path.cwd() / "config.json"
-    if config_path.exists():
-        if not Confirm.ask(f"[yellow]config.json already exists. Overwrite?[/yellow]"):
-            return
+    if config_path.exists() and not Confirm.ask("[yellow]config.json already exists. Overwrite?[/yellow]"):
+        return
 
     save_config(settings.config_obj)
     console.print(f"[green]Successfully migrated settings to {config_path}[/green]")
@@ -967,7 +966,7 @@ def config_show(reveal_secrets: bool = typer.Option(False, "--reveal-secrets", h
         if rows:
             panels.append(Panel(table, title=f"[bold white]{group_name}[/bold white]", border_style=surface, padding=(0, 1)))
 
-    extras = sorted(a for a in alias_to_row.keys() if a not in covered)
+    extras = sorted(a for a in alias_to_row if a not in covered)
     if extras:
         table = Table(box=box.SIMPLE, show_header=True, header_style=f"bold {accent}", expand=False)
         table.add_column("Setting", style="white", width=38)
@@ -1665,7 +1664,7 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
 
     if store is None:
         store = SQLiteStore(settings)
-    
+
     # Use active workers for health metrics to avoid stale 'running' states
     active_workers = store.get_active_workers(older_than_minutes=5)
     recent_workers = (
@@ -1673,7 +1672,7 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
         if hasattr(store, "list_recent_workers")
         else store.list_workers()[: max(50, last)]
     )
-    
+
     now = _now_utc()
     cutoff = now.timestamp() - 24 * 60 * 60
 
@@ -1682,7 +1681,7 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
         spawned_24h = int(store.count_workers_created_since(datetime.fromtimestamp(cutoff, tz=UTC)))
     else:
         spawned_24h = sum(1 for worker in recent_workers if worker.created_at.timestamp() >= cutoff)
-            
+
     # Process only active/recent workers for status counts
     for worker in active_workers:
         by_status[worker.status] = by_status.get(worker.status, 0) + 1
@@ -1696,10 +1695,7 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
     internal_q = int(octo_metrics.get("internal_queues", 0) or 0)
     thinking_count = int(octo_metrics.get("thinking_count", 0) or 0)
 
-    if thinking_count > 0 or (followup_q + internal_q) > 0:
-        octo_state = "thinking"
-    else:
-        octo_state = "idle"
+    octo_state = "thinking" if thinking_count > 0 or (followup_q + internal_q) > 0 else "idle"
 
     requests = _read_jsonl(settings.state_dir / "control_requests.jsonl")
     acks = _read_jsonl(settings.state_dir / "control_acks.jsonl")
@@ -1784,7 +1780,6 @@ def _build_dashboard_renderable(snapshot: dict, compact: bool = False) -> Align:
     octo = snapshot["octo"]
     queues = snapshot["queues"]
     workers = snapshot["workers"]
-    control = snapshot["control"]
     connectivity = snapshot.get("connectivity", {})
     logs = snapshot.get("logs", [])
 
@@ -1799,7 +1794,7 @@ def _build_dashboard_renderable(snapshot: dict, compact: bool = False) -> Align:
     worker_status = "running" if workers["running"] > 0 else "idle"
     active_channel = system.get("active_channel", "Telegram")
     channel_color = "bright_magenta" if active_channel == "WebSocket" else "bright_blue"
-    
+
     header_text = (
         f"[bold bright_cyan]OCTOPAL DASHBOARD[/bold bright_cyan]   "
         f"{_fmt_status('Sys', sys_status)}   "
@@ -1885,13 +1880,10 @@ def _build_dashboard_renderable(snapshot: dict, compact: bool = False) -> Align:
     for row in workers["recent"]:
         updated_at_str = str(row["updated_at"])
         last_tool = row.get("tools_used", [])[-1] if row.get("tools_used") else "-"
-        
+
         # Format worker ID: first set before first dash OR name truncated to 8
         wid = str(row["id"])
-        if "-" in wid:
-            display_id = wid.split("-")[0]
-        else:
-            display_id = _truncate(wid, 8)
+        display_id = wid.split("-")[0] if "-" in wid else _truncate(wid, 8)
 
         # Updated (UTC) format: month/day hour:minute
         try:

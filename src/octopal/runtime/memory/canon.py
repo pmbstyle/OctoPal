@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import structlog
+
 from octopal.utils import utc_now
 
 if TYPE_CHECKING:

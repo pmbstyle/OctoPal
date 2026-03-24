@@ -55,10 +55,7 @@ def parse_tool_list(value: str | Iterable[str] | None) -> list[str]:
     """
     if value is None:
         return []
-    if isinstance(value, str):
-        raw_items = value.split(",")
-    else:
-        raw_items = [str(item) for item in value]
+    raw_items = value.split(",") if isinstance(value, str) else [str(item) for item in value]
     out: list[str] = []
     seen: set[str] = set()
     for raw in raw_items:

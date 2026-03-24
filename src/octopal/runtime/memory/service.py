@@ -110,7 +110,7 @@ class MemoryService:
         for entry in candidates:
             if not entry.embedding:
                 continue
-            
+
             # Skip entries from the current chat to avoid duplication with recent history
             if exclude_chat_id is not None:
                 entry_chat_id = entry.metadata.get("chat_id")

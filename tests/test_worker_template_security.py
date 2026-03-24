@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from octopal.tools.workers.management import _tool_create_worker_template, _tool_update_worker_template
+from octopal.tools.workers.management import (
+    _tool_create_worker_template,
+    _tool_update_worker_template,
+)
 
 
 def test_create_worker_template_rejects_path_traversal(tmp_path: Path) -> None:

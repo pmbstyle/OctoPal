@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
+
 from octopal.infrastructure.store.base import Store
 from octopal.utils import utc_now
 
@@ -23,8 +24,8 @@ class SchedulerService:
         self.workspace_dir = workspace_dir
         self.heartbeat_md = workspace_dir / "HEARTBEAT.md"
 
-    def schedule_task(self, name: str, frequency: str, task_text: str, 
-                      description: str | None = None, worker_id: str | None = None, 
+    def schedule_task(self, name: str, frequency: str, task_text: str,
+                      description: str | None = None, worker_id: str | None = None,
                       inputs: dict | None = None) -> str:
         """Add or update a scheduled task."""
         normalized_frequency = self._validate_and_normalize_frequency(frequency)
@@ -54,7 +55,7 @@ class SchedulerService:
         for task in all_tasks:
             if self._should_run(task, now):
                 actionable.append(self._normalize_task_record(task))
-        
+
         return actionable
 
     def describe_tasks(self, *, enabled_only: bool = False) -> list[dict[str, Any]]:
@@ -83,9 +84,9 @@ class SchedulerService:
     def sync_to_markdown(self) -> None:
         """Update HEARTBEAT.md to reflect the database state."""
         tasks = self.store.get_scheduled_tasks()
-        
+
         lines = ["# HEARTBEAT - Scheduled Tasks\n", "## Tasks\n"]
-        
+
         for t in tasks:
             lines.append(f"### {t['name']}")
             lines.append(f"- **ID**: {t['id']}")
@@ -116,7 +117,7 @@ class SchedulerService:
         last_run_str = task.get("last_run_at")
         if not last_run_str:
             return True  # Never run before
-            
+
         last_run = datetime.fromisoformat(last_run_str)
         freq = task["frequency"].lower()
 
@@ -137,14 +138,14 @@ class SchedulerService:
         if daily_match:
             target_h = int(daily_match.group(1))
             target_m = int(daily_match.group(2))
-            
+
             # Check if we've already run today after the target time
             target_today = now.replace(hour=target_h, minute=target_m, second=0, microsecond=0)
-            
+
             # If target time for today hasn't passed yet, we don't run
             if now < target_today:
                 return False
-                
+
             # If we haven't run today yet (last run was before today's target time)
             return last_run < target_today
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import httpx
 
@@ -17,27 +16,27 @@ from octopal.infrastructure.providers.openrouter_provider import (
 
 
 def _settings(**overrides) -> Settings:
-    defaults = dict(
-        telegram_bot_token="test-token",
-        llm_provider="openrouter",
-        litellm_num_retries=0,
-        litellm_timeout=30.0,
-        litellm_fallbacks=None,
-        litellm_drop_params=True,
-        litellm_caching=False,
-        openrouter_api_key="router-key",
-        openrouter_model="anthropic/claude-sonnet-4",
-        openrouter_base_url="https://openrouter.ai/api/v1/",
-        openrouter_timeout=30.0,
-        zai_api_key=None,
-        zai_model="glm-5",
-        zai_base_url="https://api.z.ai/api/coding/paas/v4",
-        zai_chat_path="/chat/completions",
-        zai_timeout_seconds=45.0,
-        zai_connect_timeout_seconds=15.0,
-        zai_accept_language="en-US,en",
-        debug_prompts=False,
-    )
+    defaults = {
+        "telegram_bot_token": "test-token",
+        "llm_provider": "openrouter",
+        "litellm_num_retries": 0,
+        "litellm_timeout": 30.0,
+        "litellm_fallbacks": None,
+        "litellm_drop_params": True,
+        "litellm_caching": False,
+        "openrouter_api_key": "router-key",
+        "openrouter_model": "anthropic/claude-sonnet-4",
+        "openrouter_base_url": "https://openrouter.ai/api/v1/",
+        "openrouter_timeout": 30.0,
+        "zai_api_key": None,
+        "zai_model": "glm-5",
+        "zai_base_url": "https://api.z.ai/api/coding/paas/v4",
+        "zai_chat_path": "/chat/completions",
+        "zai_timeout_seconds": 45.0,
+        "zai_connect_timeout_seconds": 15.0,
+        "zai_accept_language": "en-US,en",
+        "debug_prompts": False,
+    }
     defaults.update(overrides)
     return Settings.model_construct(**defaults)
 

@@ -2,15 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Generic, TypeVar
 
 from octopal.infrastructure.config.models import OctopalConfig
 
-T = TypeVar("T")
-
 
 @dataclass(slots=True)
-class WizardSelectOption(Generic[T]):
+class WizardSelectOption[T]:
     value: T
     label: str
     hint: str | None = None
@@ -18,7 +15,7 @@ class WizardSelectOption(Generic[T]):
 
 
 @dataclass(slots=True)
-class WizardSelectParams(Generic[T]):
+class WizardSelectParams[T]:
     message: str
     options: Sequence[WizardSelectOption[T]]
     initial_value: T | None = None
@@ -26,7 +23,7 @@ class WizardSelectParams(Generic[T]):
 
 
 @dataclass(slots=True)
-class WizardMultiSelectParams(Generic[T]):
+class WizardMultiSelectParams[T]:
     message: str
     options: Sequence[WizardSelectOption[T]]
     initial_values: Sequence[T] = ()

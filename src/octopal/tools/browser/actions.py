@@ -1,15 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict
-from playwright.async_api import Page, Locator
+from typing import Any
+
+from playwright.async_api import Locator, Page
 
 from octopal.browser.manager import get_browser_manager
 from octopal.browser.snapshot import capture_aria_snapshot
 
 # State to store refs per chat_id so they persist across tool calls in the same turn
-_SESSION_REFS: Dict[int, Dict[str, Any]] = {}
+_SESSION_REFS: dict[int, dict[str, Any]] = {}
 
-def _get_chat_id(ctx: Dict[str, Any]) -> int:
+def _get_chat_id(ctx: dict[str, Any]) -> int:
     return int(ctx.get("chat_id") or 0)
 
 async def _get_locator(page: Page, ref: str, chat_id: int) -> Locator:
@@ -17,39 +18,36 @@ async def _get_locator(page: Page, ref: str, chat_id: int) -> Locator:
     refs = _SESSION_REFS.get(chat_id, {})
     if ref not in refs:
         raise ValueError(f"Unknown reference '{ref}'. Run browser_snapshot first.")
-    
+
     info = refs[ref]
     role = info["role"]
     name = info.get("name")
     nth = info.get("nth", 0)
-    
-    if name:
-        locator = page.get_by_role(role, name=name, exact=True)
-    else:
-        locator = page.get_by_role(role)
-        
+
+    locator = page.get_by_role(role, name=name, exact=True) if name else page.get_by_role(role)
+
     return locator.nth(nth)
 
-async def browser_open(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+async def browser_open(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Open a URL in the browser."""
     url = args.get("url")
     if not url:
         return "Error: url is required"
-    
+
     chat_id = _get_chat_id(ctx)
     page = await get_browser_manager().get_page(chat_id)
-    
+
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         return f"Successfully opened {url}"
     except Exception as e:
         return f"Error opening {url}: {e}"
 
-async def browser_snapshot(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+async def browser_snapshot(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Get an accessibility-based snapshot of the current page with stable refs."""
     chat_id = _get_chat_id(ctx)
     page = await get_browser_manager().get_page(chat_id)
-    
+
     try:
         result = await capture_aria_snapshot(page)
         _SESSION_REFS[chat_id] = result["refs"]
@@ -57,15 +55,15 @@ async def browser_snapshot(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     except Exception as e:
         return f"Error taking snapshot: {e}"
 
-async def browser_click(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+async def browser_click(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Click an element identified by a ref (e.g., 'e1')."""
     ref = args.get("ref")
     if not ref:
         return "Error: ref is required"
-    
+
     chat_id = _get_chat_id(ctx)
     page = await get_browser_manager().get_page(chat_id)
-    
+
     try:
         locator = await _get_locator(page, ref, chat_id)
         await locator.click(timeout=5000)
@@ -73,18 +71,18 @@ async def browser_click(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     except Exception as e:
         return f"Error clicking {ref}: {e}"
 
-async def browser_type(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+async def browser_type(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Type text into an element identified by a ref."""
     ref = args.get("ref")
     text = args.get("text")
     press_enter = args.get("press_enter", False)
-    
+
     if not ref or text is None:
         return "Error: ref and text are required"
-    
+
     chat_id = _get_chat_id(ctx)
     page = await get_browser_manager().get_page(chat_id)
-    
+
     try:
         locator = await _get_locator(page, ref, chat_id)
         await locator.fill(text, timeout=5000)
@@ -94,7 +92,7 @@ async def browser_type(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     except Exception as e:
         return f"Error typing into {ref}: {e}"
 
-async def browser_close(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+async def browser_close(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Close the browser session for this chat."""
     chat_id = _get_chat_id(ctx)
     await get_browser_manager().close_chat_session(chat_id)
@@ -102,7 +100,7 @@ async def browser_close(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
     return "Browser session closed"
 
 
-async def browser_wait_for(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
+async def browser_wait_for(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     """Wait for either a known ref or page text to appear."""
     ref = str(args.get("ref") or "").strip()
     text = str(args.get("text") or "").strip()
@@ -129,7 +127,7 @@ async def browser_wait_for(args: Dict[str, Any], ctx: Dict[str, Any]) -> str:
         return f"Error waiting for {target}: {e}"
 
 
-async def browser_extract(args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+async def browser_extract(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Extract visible text from a page or a specific ref."""
     ref = str(args.get("ref") or "").strip()
     max_chars = max(100, min(int(args.get("max_chars") or 4000), 20000))
@@ -165,7 +163,7 @@ async def browser_extract(args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str
         }
 
 
-async def browser_workflow(args: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+async def browser_workflow(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Run a compact browser workflow made of existing browser actions."""
     raw_steps = args.get("steps")
     stop_on_error = bool(args.get("stop_on_error", True))

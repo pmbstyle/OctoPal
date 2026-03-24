@@ -14,15 +14,15 @@ import structlog
 
 from octopal.infrastructure.providers.base import InferenceProvider, Message
 from octopal.runtime.memory.service import MemoryService
+from octopal.runtime.octo.prompt_builder import (
+    build_bootstrap_context_prompt,
+    build_octo_prompt,
+)
 from octopal.runtime.tool_loop import (
     _detect_tool_loop,
     _hash_tool_call,
     _hash_tool_outcome,
     _resolve_tool_loop_thresholds,
-)
-from octopal.runtime.octo.prompt_builder import (
-    build_bootstrap_context_prompt,
-    build_octo_prompt,
 )
 from octopal.runtime.tool_payloads import render_tool_result_for_llm
 from octopal.runtime.workers.contracts import WorkerResult

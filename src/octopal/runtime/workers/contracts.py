@@ -1,15 +1,11 @@
-"""
-Simplified Worker Contracts
-
-Workers are pre-defined agents with system prompts.
-Octo assigns tasks to workers with input data.
-"""
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from octopal.infrastructure.config.models import LLMConfig
 
 
 class WorkerTemplate(BaseModel):
@@ -47,9 +43,6 @@ class TaskRequest(BaseModel):
     lineage_id: str | None = None
     root_task_id: str | None = None
     spawn_depth: int = 0
-
-
-from octopal.infrastructure.config.models import LLMConfig
 
 
 class WorkerSpec(BaseModel):

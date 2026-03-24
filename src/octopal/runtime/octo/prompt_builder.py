@@ -11,10 +11,10 @@ from typing import TYPE_CHECKING
 from octopal.runtime.memory.memchain import memchain_verify
 
 if TYPE_CHECKING:
-    from octopal.runtime.memory.canon import CanonService
-    from octopal.runtime.memory.service import MemoryService
     from octopal.infrastructure.providers.base import Message
     from octopal.infrastructure.store.base import Store
+    from octopal.runtime.memory.canon import CanonService
+    from octopal.runtime.memory.service import MemoryService
 
 
 _QUEEN_SYSTEM_PROMPT_CONTENT = ""
@@ -365,7 +365,7 @@ async def build_octo_prompt(
     if recent_history:
         for role, content in recent_history:
             messages.append(Message(role=role, content=content))
-    
+
     if images:
         text_segments: list[str] = []
         if user_text.strip():
@@ -389,5 +389,5 @@ async def build_octo_prompt(
         messages.append(Message(role="user", content=content_blocks))
     else:
         messages.append(Message(role="user", content=user_text))
-    
+
     return messages

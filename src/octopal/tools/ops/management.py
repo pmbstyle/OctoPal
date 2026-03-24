@@ -17,8 +17,8 @@ from typing import Any
 import httpx
 
 from octopal.infrastructure.config.settings import load_settings
-from octopal.infrastructure.providers.profile_resolver import resolve_litellm_profile
 from octopal.infrastructure.jsonl import read_jsonl_dicts
+from octopal.infrastructure.providers.profile_resolver import resolve_litellm_profile
 
 
 def service_health(args: dict[str, Any], ctx: dict[str, Any]) -> str:

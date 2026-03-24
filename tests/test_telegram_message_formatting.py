@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 import types
 
-
 if "telegramify_markdown" not in sys.modules:
     sys.modules["telegramify_markdown"] = types.SimpleNamespace(markdownify=lambda text: text)
 
