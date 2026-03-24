@@ -56,12 +56,22 @@ _FOLLOWUP_QUEUES: dict[int, asyncio.Queue] = {}
 _FOLLOWUP_TASKS: dict[int, asyncio.Task] = {}
 _INTERNAL_QUEUES: dict[int, asyncio.Queue] = {}
 _INTERNAL_TASKS: dict[int, asyncio.Task] = {}
+_WORKER_FOLLOWUP_BATCHES: dict[tuple[int, str], "_PendingWorkerFollowupBatch"] = {}
 _QUEUE_IDLE_TIMEOUT_SECONDS = 300.0
 # Worker-result follow-up can include multiple provider retries and a fallback
 # pass through Queen, so it needs a wider budget than a single LLM request.
 _WORKER_RESULT_ROUTING_TIMEOUT_SECONDS = 900.0
 _RESET_CONFIRM_THRESHOLD = 2
 _RESET_CONFIDENCE_MIN = 0.7
+
+
+@dataclass
+class _PendingWorkerFollowupBatch:
+    texts: list[str]
+    task: asyncio.Task | None = None
+    loop: asyncio.AbstractEventLoop | None = None
+
+
 def _build_worker_result_timeout_followup(result: WorkerResult) -> str:
     """Return a minimal user-facing fallback when Queen routing times out."""
     lead = "Worker finished, but the follow-up routing step timed out."
@@ -105,6 +115,15 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0, maximum: floa
     except (TypeError, ValueError):
         return default
     return min(maximum, max(minimum, value))
+
+
+_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS = float(
+    _env_int(
+        "BROODMIND_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS",
+        8,
+        minimum=1,
+    )
+)
 
 
 _PENDING_CONVERSATIONAL_CLOSURE_TTL_SECONDS = _env_int(
@@ -330,6 +349,119 @@ def _enqueue_followup(chat_id: int, coro) -> asyncio.Future[str]:
     return future
 
 
+def _merge_worker_followup_texts(texts: list[str]) -> str:
+    merged: list[str] = []
+    seen: set[str] = set()
+    for raw_text in texts:
+        text = normalize_plain_text(raw_text)
+        if not should_send_worker_followup(text):
+            continue
+        fingerprint = text.casefold()
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        merged.append(text)
+    if not merged:
+        return ""
+    if len(merged) == 1:
+        return merged[0]
+    return "\n\n".join(merged)
+
+
+async def _send_worker_followup(
+    queen: "Queen",
+    chat_id: int,
+    correlation_id: str | None,
+    text: str,
+    *,
+    batched_count: int = 1,
+) -> None:
+    if not should_send_worker_followup(text):
+        logger.info("Internal worker follow-up skipped", chat_id=chat_id, reason="no_user_response")
+        return
+    if queen.internal_send:
+        await queen.internal_send(chat_id, text)
+        queen.clear_pending_conversational_closure(correlation_id)
+        logger.info(
+            "Internal worker follow-up sent",
+            chat_id=chat_id,
+            text_len=len(text),
+            batched_count=batched_count,
+        )
+        await queen.memory.add_message(
+            "assistant",
+            text,
+            {
+                "chat_id": chat_id,
+                "worker_followup": True,
+                "batched_count": batched_count,
+            },
+        )
+    else:
+        logger.info(
+            "Worker follow-up produced but no sender attached",
+            chat_id=chat_id,
+            text_len=len(text),
+            batched_count=batched_count,
+        )
+
+
+async def _flush_worker_followup_batch(queen: "Queen", chat_id: int, correlation_id: str) -> None:
+    try:
+        await asyncio.sleep(_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS)
+        batch_key = (chat_id, correlation_id)
+        batch = _WORKER_FOLLOWUP_BATCHES.pop(batch_key, None)
+        if batch is None:
+            return
+        final_text = _merge_worker_followup_texts(batch.texts)
+        if not final_text:
+            logger.info(
+                "Internal worker follow-up skipped",
+                chat_id=chat_id,
+                reason="empty_batched_followup",
+                batched_count=len(batch.texts),
+            )
+            return
+        await _send_worker_followup(
+            queen,
+            chat_id,
+            correlation_id,
+            final_text,
+            batched_count=len(batch.texts),
+        )
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Failed to flush batched worker follow-up", chat_id=chat_id)
+
+
+async def _enqueue_batched_worker_followup(
+    queen: "Queen",
+    chat_id: int,
+    correlation_id: str | None,
+    text: str,
+) -> None:
+    if not correlation_id:
+        await _send_worker_followup(queen, chat_id, correlation_id, text)
+        return
+
+    loop = asyncio.get_running_loop()
+    batch_key = (chat_id, correlation_id)
+    batch = _WORKER_FOLLOWUP_BATCHES.get(batch_key)
+    if batch is not None and batch.loop not in (None, loop):
+        prior_task = batch.task
+        if prior_task and not prior_task.done():
+            prior_task.cancel()
+        _WORKER_FOLLOWUP_BATCHES.pop(batch_key, None)
+        batch = None
+    if batch is None:
+        batch = _PendingWorkerFollowupBatch(texts=[], loop=loop)
+        _WORKER_FOLLOWUP_BATCHES[batch_key] = batch
+    batch.texts.append(text)
+    if batch.task is None or batch.task.done():
+        batch.task = asyncio.create_task(_flush_worker_followup_batch(queen, chat_id, correlation_id))
+
+
 async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> None:
     """Process completed worker results.
 
@@ -397,21 +529,12 @@ async def _internal_worker(queen: Queen, chat_id: int, queue: asyncio.Queue) -> 
                         reason="suppressed_turn_followup",
                     )
                 elif should_send_worker_followup(final_text):
-                    if queen.internal_send:
-                        await queen.internal_send(chat_id, final_text)
-                        queen.clear_pending_conversational_closure(correlation_id)
-                        logger.info("Internal worker follow-up sent", chat_id=chat_id, text_len=len(final_text))
-                        await queen.memory.add_message(
-                            "assistant",
-                            final_text,
-                            {"chat_id": chat_id, "worker_followup": True},
-                        )
-                    else:
-                        logger.info(
-                            "Worker follow-up produced but no sender attached",
-                            chat_id=chat_id,
-                            text_len=len(final_text),
-                        )
+                    await _enqueue_batched_worker_followup(
+                        queen,
+                        chat_id,
+                        correlation_id,
+                        final_text,
+                    )
                 else:
                     logger.info("Internal worker follow-up skipped", chat_id=chat_id, reason="no_user_response")
             logger.debug("Worker result processed", summary_len=len(result.summary or ""))

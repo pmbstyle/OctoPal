@@ -1,10 +1,14 @@
+import pytest
 from datetime import timedelta
 
+from broodmind.runtime.queen import core as queen_core
 from broodmind.runtime.queen.core import (
     Queen,
     _build_worker_result_timeout_followup,
+    _enqueue_batched_worker_followup,
     _coerce_control_plane_reply,
     _extract_followup_required_marker,
+    _merge_worker_followup_texts,
 )
 from broodmind.runtime.queen.router import (
     build_forced_worker_followup,
@@ -244,6 +248,59 @@ def test_control_plane_reply_preserves_no_user_response():
 
 def test_control_plane_reply_preserves_existing_control_text():
     assert _coerce_control_plane_reply("HEARTBEAT_OK") == "HEARTBEAT_OK"
+
+
+def test_merge_worker_followup_texts_deduplicates_and_joins_updates():
+    assert _merge_worker_followup_texts(
+        [
+            "Подготовила короткий итог.",
+            "Подготовила короткий итог.",
+            "NO_USER_RESPONSE",
+            "Сохранила отчёт в `research/report.md`.",
+        ]
+    ) == "Подготовила короткий итог.\n\nСохранила отчёт в `research/report.md`."
+
+
+@pytest.mark.asyncio
+async def test_batched_worker_followups_send_single_combined_message(monkeypatch):
+    monkeypatch.setattr(queen_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 1.0)
+    queen_core._WORKER_FOLLOWUP_BATCHES.clear()
+
+    sent_messages = []
+    memory_messages = []
+
+    class DummyMemory:
+        async def add_message(self, role, text, metadata):
+            memory_messages.append((role, text, metadata))
+
+    async def _send(chat_id, text):
+        sent_messages.append((chat_id, text))
+
+    queen = Queen(
+        approvals=None,
+        memory=DummyMemory(),
+        canon=None,
+        provider=None,
+        store=None,
+        policy=None,
+        runtime=None,
+        internal_send=_send,
+    )
+
+    await _enqueue_batched_worker_followup(queen, 123, "corr-1", "Первый апдейт.")
+    await _enqueue_batched_worker_followup(queen, 123, "corr-1", "Второй апдейт.")
+    await queen_core._flush_worker_followup_batch(queen, 123, "corr-1")
+
+    assert sent_messages == [(123, "Первый апдейт.\n\nВторой апдейт.")]
+    assert memory_messages == [
+        (
+            "assistant",
+            "Первый апдейт.\n\nВторой апдейт.",
+            {"chat_id": 123, "worker_followup": True, "batched_count": 2},
+        )
+    ]
+    assert queen_core._WORKER_FOLLOWUP_BATCHES == {}
+
 
 def test_queen_does_not_have_web_fetch():
     from broodmind.runtime.queen.router import _get_queen_tools
