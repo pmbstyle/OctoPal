@@ -1,12 +1,4 @@
-<p align="center">
-<img width="60%" alt="Octopal" src="https://github.com/pmbstyle/Octopal/blob/main/logo.png" />
-</p>
-
-<p align="center">
-  <strong>RUN YOUR OWN AI HIVE, FAST AND SECURE!</strong>
-</p>
-
-Octopal is a local AI hive that runs autonomous workers to complete tasks for you.
+Octopal is a local AI agent that runs autonomous workers to complete tasks for you.
 It acts as a persistent AI operator that can plan work, spawn specialized agents, and manage long-running workflows.
 
 The **Octo** is the long-running coordinator: it holds memory, plans work, chooses tools, manages context, and delegates execution.
