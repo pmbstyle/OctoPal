@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import os
+import time
 import uuid
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -50,8 +51,10 @@ _TYPING_STOP_EVENTS: dict[int, asyncio.Event] = {}
 _TYPING_REFS: dict[int, int] = {}
 _TYPING_LOCK: asyncio.Lock | None = None
 _SEND_IDLE_TIMEOUT_SECONDS = 300.0
+_INBOUND_MESSAGE_DEDUP_TTL_SECONDS = 300.0
 _TELEGRAM_PARSE_MODE: str | None = None
 _PENDING_TURNS: PendingTurnAggregator | None = None
+_RECENT_INBOUND_MESSAGE_IDS: dict[tuple[int, int], float] = {}
 
 
 def _publish_runtime_metrics() -> None:
@@ -64,6 +67,32 @@ def _publish_runtime_metrics() -> None:
             "typing_tasks": len(_TYPING_TASKS),
         },
     )
+
+
+def _prune_recent_inbound_messages(now: float | None = None) -> None:
+    if not _RECENT_INBOUND_MESSAGE_IDS:
+        return
+    current = time.monotonic() if now is None else now
+    cutoff = current - _INBOUND_MESSAGE_DEDUP_TTL_SECONDS
+    expired = [
+        key
+        for key, seen_at in _RECENT_INBOUND_MESSAGE_IDS.items()
+        if seen_at < cutoff
+    ]
+    for key in expired:
+        _RECENT_INBOUND_MESSAGE_IDS.pop(key, None)
+
+
+def _is_duplicate_inbound_message(chat_id: int, message_id: int) -> bool:
+    if message_id <= 0:
+        return False
+    now = time.monotonic()
+    _prune_recent_inbound_messages(now)
+    message_key = (chat_id, message_id)
+    if message_key in _RECENT_INBOUND_MESSAGE_IDS:
+        return True
+    _RECENT_INBOUND_MESSAGE_IDS[message_key] = now
+    return False
 
 
 def register_handlers(
@@ -223,6 +252,13 @@ def register_handlers(
     async def handle_message(message: Message) -> None:
         if not is_allowed_chat(message.chat.id, allowed_chat_ids):
             await _reject_unauthorized_message(message)
+            return
+        if _is_duplicate_inbound_message(message.chat.id, message.message_id):
+            logger.info(
+                "Skipping duplicate Telegram inbound message",
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+            )
             return
         # Generate a unique ID for this request chain
         correlation_id = f"msg-{uuid.uuid4()}"
