@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    state_dir = Path(os.getenv("BROODMIND_STATE_DIR", "data")).resolve()
+    state_dir = Path(os.getenv("OCTOPAL_STATE_DIR", "data")).resolve()
     req_file = state_dir / "control_requests.jsonl"
     ack_file = state_dir / "control_acks.jsonl"
     offset_file = state_dir / ".control_supervisor.offset"
@@ -58,7 +58,7 @@ def _handle_request(req: dict[str, Any]) -> dict[str, Any]:
         action = "restart_service"
 
     if action == "restart_service":
-        rc, out, err = _run_shell("python -m broodmind.cli restart")
+        rc, out, err = _run_shell("python -m octopal.cli restart")
         return _ack(
             request_id,
             "restart_service",
@@ -70,7 +70,7 @@ def _handle_request(req: dict[str, Any]) -> dict[str, Any]:
         )
 
     if action == "graceful_shutdown":
-        rc, out, err = _run_shell("python -m broodmind.cli stop")
+        rc, out, err = _run_shell("python -m octopal.cli stop")
         return _ack(
             request_id,
             "graceful_shutdown",

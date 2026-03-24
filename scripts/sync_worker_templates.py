@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 
-from broodmind.workers.templates import sync_default_templates
+from octopal.workers.templates import sync_default_templates
 
 
 def main() -> None:
@@ -16,8 +16,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--workspace",
-        default=os.getenv("BROODMIND_WORKSPACE_DIR", "workspace"),
-        help="Workspace directory (default: BROODMIND_WORKSPACE_DIR or ./workspace)",
+        default=os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace"),
+        help="Workspace directory (default: OCTOPAL_WORKSPACE_DIR or ./workspace)",
     )
     parser.add_argument(
         "--overwrite",

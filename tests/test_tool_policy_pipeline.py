@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from broodmind.tools.registry import (
+from octopal.tools.registry import (
     ToolPolicy,
     ToolPolicyPipelineStep,
     ToolSpec,

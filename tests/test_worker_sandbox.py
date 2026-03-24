@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from broodmind.runtime.workers.sandbox import SoftSandbox
+from octopal.runtime.workers.sandbox import SoftSandbox
 
 
 def test_soft_sandbox_build_env_keeps_only_whitelisted_keys_in_order() -> None:
@@ -9,7 +9,7 @@ def test_soft_sandbox_build_env_keeps_only_whitelisted_keys_in_order() -> None:
     result = sandbox.build_env(
         {
             "PATH": "/usr/bin",
-            "HOME": "/home/broodmind",
+            "HOME": "/home/octopal",
             "SECRET": "nope",
             "API_KEY": "token",
         }
@@ -17,7 +17,7 @@ def test_soft_sandbox_build_env_keeps_only_whitelisted_keys_in_order() -> None:
 
     assert result == {
         "API_KEY": "token",
-        "HOME": "/home/broodmind",
+        "HOME": "/home/octopal",
         "PATH": "/usr/bin",
     }
 

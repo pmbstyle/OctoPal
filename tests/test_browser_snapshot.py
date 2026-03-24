@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from broodmind.browser.snapshot import _get_indent_level, capture_aria_snapshot
+from octopal.browser.snapshot import _get_indent_level, capture_aria_snapshot
 
 
 class _PageStub:

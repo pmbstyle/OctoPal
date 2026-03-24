@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from broodmind.tools.diagnostics import resolve_tool_diagnostics
-from broodmind.tools.registry import ToolPolicy, ToolPolicyPipelineStep, ToolSpec
+from octopal.tools.diagnostics import resolve_tool_diagnostics
+from octopal.tools.registry import ToolPolicy, ToolPolicyPipelineStep, ToolSpec
 
 
 def _tool(name: str, permission: str = "network") -> ToolSpec:
@@ -41,12 +41,12 @@ def test_resolve_tool_diagnostics_reports_pipeline_deny_blocks() -> None:
         [_tool("web_search")],
         permissions={"network": True},
         policy_pipeline_steps=[
-            ToolPolicyPipelineStep(label="queen.raw_fetch_denylist", policy=ToolPolicy(deny=["web_search"]))
+            ToolPolicyPipelineStep(label="octo.raw_fetch_denylist", policy=ToolPolicy(deny=["web_search"]))
         ],
     )
 
     assert report.available_tools == ()
-    assert report.blocked_tools[0].reasons == ("blocked_by_deny:queen.raw_fetch_denylist",)
+    assert report.blocked_tools[0].reasons == ("blocked_by_deny:octo.raw_fetch_denylist",)
 
 
 def test_resolve_tool_diagnostics_returns_available_tools_in_order() -> None:

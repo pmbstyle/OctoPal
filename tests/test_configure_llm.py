@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from broodmind.cli.configure import _configure_llm
-from broodmind.infrastructure.config.models import BroodMindConfig, LLMConfig
+from octopal.cli.configure import _configure_llm
+from octopal.infrastructure.config.models import LLMConfig, OctopalConfig
 
 
 def test_configure_llm_quick_mode_allows_custom_base_url(monkeypatch) -> None:
-    config = BroodMindConfig()
+    config = OctopalConfig()
     llm = LLMConfig(provider_id="openrouter")
 
     int_answers = iter([1])
@@ -19,15 +19,15 @@ def test_configure_llm_quick_mode_allows_custom_base_url(monkeypatch) -> None:
     confirm_answers = iter([False])
 
     monkeypatch.setattr(
-        "broodmind.cli.configure.IntPrompt.ask",
+        "octopal.cli.configure.IntPrompt.ask",
         lambda *args, **kwargs: next(int_answers),
     )
     monkeypatch.setattr(
-        "broodmind.cli.configure.Prompt.ask",
+        "octopal.cli.configure.Prompt.ask",
         lambda *args, **kwargs: next(prompt_answers),
     )
     monkeypatch.setattr(
-        "broodmind.cli.configure.Confirm.ask",
+        "octopal.cli.configure.Confirm.ask",
         lambda *args, **kwargs: next(confirm_answers),
     )
 
@@ -38,7 +38,7 @@ def test_configure_llm_quick_mode_allows_custom_base_url(monkeypatch) -> None:
 
 
 def test_configure_llm_quick_mode_can_keep_recommended_base_url(monkeypatch) -> None:
-    config = BroodMindConfig()
+    config = OctopalConfig()
     llm = LLMConfig(provider_id="openrouter")
 
     int_answers = iter([1])
@@ -51,18 +51,18 @@ def test_configure_llm_quick_mode_can_keep_recommended_base_url(monkeypatch) -> 
     confirm_answers = iter([True])
 
     monkeypatch.setattr(
-        "broodmind.cli.configure.IntPrompt.ask",
+        "octopal.cli.configure.IntPrompt.ask",
         lambda *args, **kwargs: next(int_answers),
     )
     monkeypatch.setattr(
-        "broodmind.cli.configure.Prompt.ask",
+        "octopal.cli.configure.Prompt.ask",
         lambda *args, **kwargs: next(prompt_answers),
     )
     monkeypatch.setattr(
-        "broodmind.cli.configure.Confirm.ask",
+        "octopal.cli.configure.Confirm.ask",
         lambda *args, **kwargs: next(confirm_answers),
     )
 
-    _configure_llm(config, "Queen", llm, advanced=False)
+    _configure_llm(config, "Octo", llm, advanced=False)
 
     assert llm.api_base == "https://openrouter.ai/api/v1"

@@ -4,10 +4,10 @@ import asyncio
 import uuid
 from pathlib import Path
 
-from broodmind.runtime.memory.canon import CanonService
-from broodmind.infrastructure.store.models import MemoryEntry
-from broodmind.infrastructure.store.sqlite import SQLiteStore
-from broodmind.utils import utc_now
+from octopal.infrastructure.store.models import MemoryEntry
+from octopal.infrastructure.store.sqlite import SQLiteStore
+from octopal.runtime.memory.canon import CanonService
+from octopal.utils import utc_now
 
 
 class _StoreSettings:

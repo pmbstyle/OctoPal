@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from broodmind.infrastructure.config.settings import load_settings
+from octopal.infrastructure.config.settings import load_settings
 
 
 def test_load_settings_uses_user_channel_from_config_json(tmp_path, monkeypatch) -> None:

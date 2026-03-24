@@ -4,23 +4,23 @@ import asyncio
 import json
 from pathlib import Path
 
-from broodmind.tools.memory.experiments import queen_experiment_log
-from broodmind.tools.tools import get_tools
+from octopal.tools.memory.experiments import octo_experiment_log
+from octopal.tools.tools import get_tools
 
 
-def test_get_tools_includes_queen_experiment_log() -> None:
+def test_get_tools_includes_octo_experiment_log() -> None:
     names = {tool.name for tool in get_tools(mcp_manager=None)}
-    assert "queen_experiment_log" in names
+    assert "octo_experiment_log" in names
 
 
-def test_queen_experiment_log_appends_jsonl_entry(tmp_path: Path) -> None:
+def test_octo_experiment_log_appends_jsonl_entry(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     ctx = {"base_dir": workspace}
 
     result = asyncio.run(
-        queen_experiment_log(
+        octo_experiment_log(
             {
-                "problem": "Queen re-reads files before acting",
+                "problem": "Octo re-reads files before acting",
                 "classification": "behavioral",
                 "source": "deliberation_audit",
                 "status": "observed",
@@ -45,5 +45,5 @@ def test_queen_experiment_log_appends_jsonl_entry(tmp_path: Path) -> None:
     assert payload["classification"] == "behavioral"
     assert payload["source"] == "deliberation_audit"
     assert payload["status"] == "observed"
-    assert payload["problem"] == "Queen re-reads files before acting"
+    assert payload["problem"] == "Octo re-reads files before acting"
     assert payload["evidence"] == ["same file opened twice", "no new question depended on it"]

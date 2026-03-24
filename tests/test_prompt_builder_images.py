@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import asyncio
 
-from broodmind.runtime.queen.prompt_builder import build_queen_prompt
+from octopal.runtime.octo.prompt_builder import build_octo_prompt
 
 
-def test_build_queen_prompt_includes_saved_image_paths_in_user_text() -> None:
+def test_build_octo_prompt_includes_saved_image_paths_in_user_text() -> None:
     class DummyMemory:
         async def get_context(self, user_text: str, exclude_chat_id: int | None = None):
             return []
@@ -18,7 +18,7 @@ def test_build_queen_prompt_includes_saved_image_paths_in_user_text() -> None:
             return ""
 
     async def scenario() -> None:
-        messages = await build_queen_prompt(
+        messages = await build_octo_prompt(
             store=object(),
             memory=DummyMemory(),
             canon=DummyCanon(),
@@ -38,7 +38,7 @@ def test_build_queen_prompt_includes_saved_image_paths_in_user_text() -> None:
     asyncio.run(scenario())
 
 
-def test_build_queen_prompt_includes_worker_first_guardrails() -> None:
+def test_build_octo_prompt_includes_worker_first_guardrails() -> None:
     class DummyMemory:
         async def get_context(self, user_text: str, exclude_chat_id: int | None = None):
             return []
@@ -51,7 +51,7 @@ def test_build_queen_prompt_includes_worker_first_guardrails() -> None:
             return ""
 
     async def scenario() -> None:
-        messages = await build_queen_prompt(
+        messages = await build_octo_prompt(
             store=object(),
             memory=DummyMemory(),
             canon=DummyCanon(),
@@ -62,14 +62,14 @@ def test_build_queen_prompt_includes_worker_first_guardrails() -> None:
         system_message = messages[0]
         assert isinstance(system_message.content, str)
         assert "Workers are the default execution unit for external work." in system_message.content
-        assert "Treat direct Queen-side network or MCP access as emergency-only fallback." in system_message.content
+        assert "Treat direct Octo-side network or MCP access as emergency-only fallback." in system_message.content
         assert "For scheduled or network-heavy work, never lower `timeout_seconds` below the worker template default" in system_message.content
         assert "prefer a capable parent worker that can spawn child workers or use `start_workers_parallel`" in system_message.content
 
     asyncio.run(scenario())
 
 
-def test_build_queen_prompt_includes_tool_policy_summary() -> None:
+def test_build_octo_prompt_includes_tool_policy_summary() -> None:
     class DummyMemory:
         async def get_context(self, user_text: str, exclude_chat_id: int | None = None):
             return []
@@ -82,7 +82,7 @@ def test_build_queen_prompt_includes_tool_policy_summary() -> None:
             return ""
 
     async def scenario() -> None:
-        messages = await build_queen_prompt(
+        messages = await build_octo_prompt(
             store=object(),
             memory=DummyMemory(),
             canon=DummyCanon(),

@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 
-from broodmind.infrastructure.config.settings import Settings
-from broodmind.infrastructure.providers.litellm_provider import (
+from octopal.infrastructure.config.settings import Settings
+from octopal.infrastructure.providers.litellm_provider import (
     LiteLLMProvider,
     _sanitize_schema_for_minimax,
     _serialize_message,
@@ -73,7 +73,7 @@ def test_complete_normalizes_system_only_payload_to_include_user(monkeypatch) ->
         captured.append(kwargs["messages"])
         return _response("ok")
 
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
     provider = LiteLLMProvider(_settings())
 
     result = asyncio.run(provider.complete([{"role": "system", "content": "You are verifier"}]))
@@ -95,7 +95,7 @@ def test_complete_retries_with_strict_payload_on_1214(monkeypatch) -> None:
             raise RuntimeError("Error code: 400 - {'error': {'code': '1214', 'message': 'The messages parameter is illegal.'}}")
         return _response("ok-after-retry")
 
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
     provider = LiteLLMProvider(_settings())
 
     result = asyncio.run(provider.complete([{"role": "system", "content": "Verifier prompt"}]))
@@ -135,7 +135,7 @@ def test_complete_retries_once_when_client_was_closed(monkeypatch) -> None:
             raise RuntimeError("Cannot send a request, as the client has been closed.")
         return _response("ok-after-client-retry")
 
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
     provider = LiteLLMProvider(_settings())
 
     result = asyncio.run(provider.complete([{"role": "user", "content": "hello"}]))
@@ -159,10 +159,10 @@ def test_complete_records_shared_cooldown_after_rate_limit(monkeypatch) -> None:
             raise RuntimeError("Error code: 429 - {'error': {'message': 'Rate limit reached for requests'}}")
         return _response("ok-after-rate-limit")
 
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.asyncio.sleep", _fake_sleep)
     monkeypatch.setattr(
-        "broodmind.infrastructure.providers.litellm_provider._compute_rate_limit_delay",
+        "octopal.infrastructure.providers.litellm_provider._compute_rate_limit_delay",
         lambda **kwargs: 1.0,
     )
     monkeypatch.setattr(LiteLLMProvider, "_now", lambda self: clock["now"])
@@ -189,8 +189,8 @@ def test_complete_respects_shared_cooldown_from_other_instance(monkeypatch) -> N
     async def _fake_acompletion(**kwargs):
         return _response("ok")
 
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.asyncio.sleep", _fake_sleep)
     monkeypatch.setattr(LiteLLMProvider, "_now", lambda self: clock["now"])
     LiteLLMProvider._rate_limit_cooldowns.clear()
 
@@ -225,7 +225,7 @@ def test_complete_with_tools_downgrades_response_format_to_json_object(monkeypat
             ]
         }
 
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
     LiteLLMProvider._tool_response_format_modes.clear()
     provider = LiteLLMProvider(_settings())
 
@@ -260,7 +260,7 @@ def test_complete_with_tools_reuses_cached_response_format_mode(monkeypatch) -> 
             ]
         }
 
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
     LiteLLMProvider._tool_response_format_modes.clear()
     provider = LiteLLMProvider(_settings())
     LiteLLMProvider._tool_response_format_modes[provider._tool_response_format_key()] = "json_object"
@@ -296,7 +296,7 @@ def test_complete_with_tools_downgrades_to_no_response_format_when_needed(monkey
             ]
         }
 
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
     LiteLLMProvider._tool_response_format_modes.clear()
     provider = LiteLLMProvider(_settings())
 
@@ -345,7 +345,7 @@ def test_complete_with_tools_sanitizes_minimax_tools_and_response_format(monkeyp
             ]
         }
 
-    monkeypatch.setattr("broodmind.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
+    monkeypatch.setattr("octopal.infrastructure.providers.litellm_provider.acompletion", _fake_acompletion)
     LiteLLMProvider._tool_response_format_modes.clear()
     provider = LiteLLMProvider(_minimax_settings())
 

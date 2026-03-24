@@ -1,11 +1,11 @@
 # AGENTS.md - Workspace Operating Guide
 
-This file defines how the Queen and workers should operate in this workspace.
+This file defines how the Octo and workers should operate in this workspace.
 It is a living document and may be edited freely as the workspace evolves.
 
 ## Core Roles
 
-- **Queen**: plans, reasons, executes local work, delegates external work, and reports.
+- **Octo**: plans, reasons, executes local work, delegates external work, and reports.
   - Strategic thinker: decides WHAT needs to be done
   - Can directly perform local workspace operations
   - Uses workers as the security boundary for network and other external access
@@ -14,7 +14,7 @@ It is a living document and may be edited freely as the workspace evolves.
 
 - **Workers**: specialized executors for bounded tasks.
   - Execute scoped tasks with clear acceptance criteria
-  - Serve as secure boundary between the Queen and external resources
+  - Serve as secure boundary between the Octo and external resources
   - Each worker has specific tools and permissions
   - Return summaries or structured results for verification
 
@@ -24,7 +24,7 @@ It is a living document and may be edited freely as the workspace evolves.
 
 ### Separation of Concerns
 
-- **Queen Layer (Strategic + Local Execution)**
+- **Octo Layer (Strategic + Local Execution)**
   - Local filesystem reads and writes inside the workspace
   - Local process, service, and project inspection
   - Planning, verification, memory maintenance, and orchestration
@@ -33,13 +33,13 @@ It is a living document and may be edited freely as the workspace evolves.
   - Network access, web research, remote APIs, and other external I/O
   - Scoped permissions per worker type
   - Clear task boundaries and acceptance criteria
-  - Results returned to the Queen for verification
+  - Results returned to the Octo for verification
 
 This ensures:
 - Fast local problem-solving without unnecessary delegation
 - Auditability for external actions through worker tasks
 - Safety through scoped worker permissions
-- Traceability because the Queen can verify and override results
+- Traceability because the Octo can verify and override results
 
 ### Worker Usage Principles
 
@@ -51,15 +51,15 @@ This ensures:
 6. NEVER delegate LOCAL operations to workers — do them directly
 7. Prefer to create one worker for one specific task or interaction with a specific service. Do not duplicate functionality, do not duplicate workers, change them if needed.
 8. Workers may use `fs_read` and `fs_write`, but only inside their own temporary worker workspace.
-9. Workers cannot directly read from or write to the Queen workspace. Do not rely on worker filesystem access to shared workspace files.
-10. If work depends on a local file from the Queen workspace, the Queen must read it first and pass the relevant content in worker inputs.
-11. If a worker produces file updates that should be saved in the Queen workspace, the Queen must verify the result and write those updates herself.
+9. Workers cannot directly read from or write to the Octo workspace. Do not rely on worker filesystem access to shared workspace files.
+10. If work depends on a local file from the Octo workspace, the Octo must read it first and pass the relevant content in worker inputs.
+11. If a worker produces file updates that should be saved in the Octo workspace, the Octo must verify the result and write those updates herself.
 12. Do not ask a worker to save important final artifacts unless the full content is also returned in the worker response.
-13. Workers are the default path for external work. A worker failure is a debugging signal, not permission for the Queen to immediately take over the network task.
-14. If a worker stumbles, first inspect worker fit, tools, permissions, inputs, and upstream health. Only consider Queen-side external fallback when there is no viable worker path and waiting would be worse than the risk.
+13. Workers are the default path for external work. A worker failure is a debugging signal, not permission for the Octo to immediately take over the network task.
+14. If a worker stumbles, first inspect worker fit, tools, permissions, inputs, and upstream health. Only consider Octo-side external fallback when there is no viable worker path and waiting would be worse than the risk.
 15. Treat worker template defaults as the baseline. Do not pass `timeout_seconds` unless there is a concrete task-specific reason.
 16. For scheduled or network-heavy work, do not reduce `timeout_seconds` below the worker template default just to be conservative.
-17. If one external task splits into several independent external substeps, prefer a worker that can spawn child workers or launch a bounded parallel batch rather than having the Queen orchestrate every small external action directly.
+17. If one external task splits into several independent external substeps, prefer a worker that can spawn child workers or launch a bounded parallel batch rather than having the Octo orchestrate every small external action directly.
 18. Use subworkers only for independent subtasks with clear boundaries. Avoid duplicative fan-out and unnecessary recursion.
 
 ## Runtime Memory
@@ -74,8 +74,8 @@ If you need to remember something, write it down.
 
 ## Context Reset Protocol
 
-Use `queen_context_reset` when context is overloaded and focus quality drops.
-Use `queen_context_health` to inspect metrics on demand.
+Use `octo_context_reset` when context is overloaded and focus quality drops.
+Use `octo_context_health` to inspect metrics on demand.
 
 - Default mode: `soft`
 - `hard` mode is allowed only with explicit confirmation
@@ -101,11 +101,11 @@ Operational thresholds (preemptive reset):
   - `no_progress_turns >= 10`
 - Also treat as `RESET_SOON` when 2+ WATCH signals persist across heartbeats.
 - Use early `soft` reset in RESET_SOON state rather than waiting for quality collapse.
-- In heartbeat, prefer metrics from `check_schedule.context_health`; if missing, call `queen_context_health`.
+- In heartbeat, prefer metrics from `check_schedule.context_health`; if missing, call `octo_context_health`.
 
 Proactive mode (Opportunity Engine + Self Queue):
-- Generate opportunities with `queen_opportunity_scan` (impact, effort, confidence, next_action).
-- Keep initiative backlog via `queen_self_queue_add`, `queen_self_queue_list`, `queen_self_queue_take`, `queen_self_queue_update`.
+- Generate opportunities with `octo_opportunity_scan` (impact, effort, confidence, next_action).
+- Keep initiative backlog via `octo_self_queue_add`, `octo_self_queue_list`, `octo_self_queue_take`, `octo_self_queue_update`.
 - If no scheduled tasks are due, execute one high-confidence initiative before returning `HEARTBEAT_OK`.
 
 Memory integrity (MemChain):
@@ -113,7 +113,7 @@ Memory integrity (MemChain):
 - Chain files:
   - `memory/memchain.jsonl`
   - `memory/memchain_head.txt`
-- Queen tools: `queen_memchain_init`, `queen_memchain_record`, `queen_memchain_verify`, `queen_memchain_status`.
+- Octo tools: `octo_memchain_init`, `octo_memchain_record`, `octo_memchain_verify`, `octo_memchain_status`.
 - If integrity is broken, treat memory as untrusted until confirmed.
 
 Reset artifacts (read/write):
@@ -188,7 +188,7 @@ Rules:
 2. Do not perform destructive actions without explicit confirmation.
 3. For external side effects such as messages, posts, emails, or deployments, confirm intent when uncertain.
 4. Validate file paths and commands before execution.
-5. All network access should go through workers by default. Queen-side external access is a last-resort recovery path, not the normal plan.
+5. All network access should go through workers by default. Octo-side external access is a last-resort recovery path, not the normal plan.
 6. Treat worker results as inputs to verify, not truth to trust blindly.
 7. Keep durable notes lean: recent activity in daily notes, durable truths in `MEMORY.md`, canonical items in `memory/canon/*`.
 

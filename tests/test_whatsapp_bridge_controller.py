@@ -1,7 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from broodmind.channels.whatsapp.bridge import WhatsAppBridgeController, WhatsAppBridgeError
+from octopal.channels.whatsapp.bridge import WhatsAppBridgeController, WhatsAppBridgeError
 
 
 def test_parse_node_major_accepts_v_prefix() -> None:

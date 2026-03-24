@@ -1,5 +1,5 @@
 services:
-  broodmind:
+  octopal:
     build:
       context: .
       dockerfile: docker/Dockerfile
@@ -10,5 +10,5 @@ services:
       - ./workspace:/app/workspace
       # Windows Docker Desktop socket
       - //./pipe/docker_engine:/var/run/docker.sock
-    command: ["python", "-m", "broodmind.cli.main", "start"]
+    command: ["python", "-m", "octopal.cli.main", "start"]
     restart: unless-stopped

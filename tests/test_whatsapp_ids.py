@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from broodmind.channels.whatsapp.ids import (
+from octopal.channels.whatsapp.ids import (
     normalize_whatsapp_number,
     parse_allowed_whatsapp_numbers,
     whatsapp_chat_id,

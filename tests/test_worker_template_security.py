@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from broodmind.tools.workers.management import _tool_create_worker_template, _tool_update_worker_template
+from octopal.tools.workers.management import (
+    _tool_create_worker_template,
+    _tool_update_worker_template,
+)
 
 
 def test_create_worker_template_rejects_path_traversal(tmp_path: Path) -> None:
@@ -11,7 +14,7 @@ def test_create_worker_template_rejects_path_traversal(tmp_path: Path) -> None:
         def get_worker_template(self, template_id: str):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         def __init__(self) -> None:
             self.store = DummyStore()
 
@@ -25,7 +28,7 @@ def test_create_worker_template_rejects_path_traversal(tmp_path: Path) -> None:
             "description": "Bad",
             "system_prompt": "Bad",
         },
-        {"queen": DummyQueen(), "base_dir": workspace},
+        {"octo": DummyOcto(), "base_dir": workspace},
     )
     assert "error" in result.lower()
 
@@ -35,7 +38,7 @@ def test_create_worker_template_infers_permissions_from_available_tools(tmp_path
         def get_worker_template(self, template_id: str):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         def __init__(self) -> None:
             self.store = DummyStore()
 
@@ -51,7 +54,7 @@ def test_create_worker_template_infers_permissions_from_available_tools(tmp_path
             "available_tools": ["list_skills", "use_skill", "run_skill_script", "fs_read", "fs_write"],
             "required_permissions": ["network"],
         },
-        {"queen": DummyQueen(), "base_dir": workspace},
+        {"octo": DummyOcto(), "base_dir": workspace},
     )
     payload = json.loads(raw)
 

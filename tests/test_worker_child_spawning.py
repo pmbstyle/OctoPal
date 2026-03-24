@@ -5,8 +5,8 @@ import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
-from broodmind.infrastructure.store.models import WorkerTemplateRecord
-from broodmind.tools.workers.management import _tool_start_child_worker
+from octopal.infrastructure.store.models import WorkerTemplateRecord
+from octopal.tools.workers.management import _tool_start_child_worker
 
 
 def _template(
@@ -72,7 +72,7 @@ def test_start_child_worker_enforces_opt_in() -> None:
         "child": _template("child", perms=["network"]),
     }
 
-    class _Queen:
+    class _Octo:
         def __init__(self) -> None:
             self.store = _Store(templates)
 
@@ -82,7 +82,7 @@ def test_start_child_worker_enforces_opt_in() -> None:
     async def _scenario() -> str:
         return await _tool_start_child_worker(
             {"worker_id": "child", "task": "fetch rss"},
-            {"queen": _Queen(), "chat_id": 1, "worker": _caller_worker(effective_permissions=["network"])},
+            {"octo": _Octo(), "chat_id": 1, "worker": _caller_worker(effective_permissions=["network"])},
         )
 
     result = asyncio.run(_scenario())
@@ -95,7 +95,7 @@ def test_start_child_worker_enforces_whitelist_and_permission_subset() -> None:
         "child": _template("child", perms=["exec"]),
     }
 
-    class _Queen:
+    class _Octo:
         def __init__(self) -> None:
             self.store = _Store(templates)
 
@@ -105,7 +105,7 @@ def test_start_child_worker_enforces_whitelist_and_permission_subset() -> None:
     async def _scenario() -> str:
         return await _tool_start_child_worker(
             {"worker_id": "child", "task": "fetch rss"},
-            {"queen": _Queen(), "chat_id": 1, "worker": _caller_worker(effective_permissions=["network"])},
+            {"octo": _Octo(), "chat_id": 1, "worker": _caller_worker(effective_permissions=["network"])},
         )
 
     result = asyncio.run(_scenario())
@@ -118,7 +118,7 @@ def test_start_child_worker_propagates_lineage_fields() -> None:
         "child": _template("child", perms=["network"]),
     }
 
-    class _Queen:
+    class _Octo:
         def __init__(self) -> None:
             self.store = _Store(templates)
             self.last_launch = None
@@ -135,13 +135,13 @@ def test_start_child_worker_propagates_lineage_fields() -> None:
                 "spawn_depth": kwargs.get("spawn_depth"),
             }
 
-    queen = _Queen()
+    octo = _Octo()
 
     async def _scenario() -> dict[str, object]:
         payload = await _tool_start_child_worker(
             {"worker_id": "child", "task": "fetch rss"},
             {
-                "queen": queen,
+                "octo": octo,
                 "chat_id": 1,
                 "worker": _caller_worker(
                     template_id="parent",
@@ -161,4 +161,4 @@ def test_start_child_worker_propagates_lineage_fields() -> None:
     assert result["parent_worker_id"] == "parent-run-9"
     assert result["root_task_id"] == "root-9"
     assert result["spawn_depth"] == 2
-    assert queen.last_launch["parent_worker_id"] == "parent-run-9"
+    assert octo.last_launch["parent_worker_id"] == "parent-run-9"

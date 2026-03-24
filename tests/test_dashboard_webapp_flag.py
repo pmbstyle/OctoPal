@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from broodmind.infrastructure.config.settings import Settings
-from broodmind.gateway.app import build_app
+from octopal.gateway.app import build_app
+from octopal.infrastructure.config.settings import Settings
 
 
 def test_dashboard_returns_legacy_html_when_webapp_flag_disabled(tmp_path) -> None:
     settings = Settings(
         TELEGRAM_BOT_TOKEN="123:abc",
-        BROODMIND_STATE_DIR=tmp_path / "state",
-        BROODMIND_WORKSPACE_DIR=tmp_path / "workspace",
-        BROODMIND_WEBAPP_ENABLED=False,
+        OCTOPAL_STATE_DIR=tmp_path / "state",
+        OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
+        OCTOPAL_WEBAPP_ENABLED=False,
     )
     app = build_app(settings)
     client = TestClient(app)
@@ -32,10 +32,10 @@ def test_dashboard_serves_webapp_when_flag_enabled(tmp_path) -> None:
 
     settings = Settings(
         TELEGRAM_BOT_TOKEN="123:abc",
-        BROODMIND_STATE_DIR=tmp_path / "state",
-        BROODMIND_WORKSPACE_DIR=tmp_path / "workspace",
-        BROODMIND_WEBAPP_ENABLED=True,
-        BROODMIND_WEBAPP_DIST_DIR=dist,
+        OCTOPAL_STATE_DIR=tmp_path / "state",
+        OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
+        OCTOPAL_WEBAPP_ENABLED=True,
+        OCTOPAL_WEBAPP_DIST_DIR=dist,
     )
     app = build_app(settings)
     client = TestClient(app)

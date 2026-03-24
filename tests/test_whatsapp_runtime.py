@@ -4,8 +4,8 @@ import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
-import broodmind.channels.whatsapp.runtime as whatsapp_runtime_module
-from broodmind.channels.whatsapp.runtime import WhatsAppRuntime
+import octopal.channels.whatsapp.runtime as whatsapp_runtime_module
+from octopal.channels.whatsapp.runtime import WhatsAppRuntime
 
 
 class _FakeBridgeController:
@@ -53,7 +53,7 @@ class _FakeReply:
         self.immediate = immediate
 
 
-class _FakeQueen:
+class _FakeOcto:
     def __init__(self) -> None:
         self.handled: list[dict] = []
         self.initialized: list[int] = []
@@ -87,14 +87,14 @@ def _make_settings(*, mode: str, allowed_numbers: str) -> SimpleNamespace:
 
 
 def test_whatsapp_runtime_accepts_personal_self_chat(monkeypatch) -> None:
-    fake_queen = _FakeQueen()
-    monkeypatch.setattr(whatsapp_runtime_module, "build_queen", lambda settings: fake_queen)
+    fake_octo = _FakeOcto()
+    monkeypatch.setattr(whatsapp_runtime_module, "build_octo", lambda settings: fake_octo)
     monkeypatch.setattr(whatsapp_runtime_module, "WhatsAppBridgeController", _FakeBridgeController)
     monkeypatch.setattr(whatsapp_runtime_module, "update_component_gauges", lambda *args, **kwargs: None)
     monkeypatch.setattr(whatsapp_runtime_module, "update_last_message", lambda *args, **kwargs: None)
 
     runtime = WhatsAppRuntime(_make_settings(mode="personal", allowed_numbers="+15551234567"))
-    runtime.attach_queen_output()
+    runtime.attach_octo_output()
 
     async def scenario() -> None:
         result = await runtime.handle_inbound(
@@ -108,21 +108,21 @@ def test_whatsapp_runtime_accepts_personal_self_chat(monkeypatch) -> None:
             }
         )
         assert result["accepted"] is True
-        assert fake_queen.handled
+        assert fake_octo.handled
         assert runtime.bridge.sent == [("+15551234567", "hello back")]
 
     asyncio.run(scenario())
 
 
 def test_whatsapp_runtime_ignores_from_me_outside_personal_mode(monkeypatch) -> None:
-    fake_queen = _FakeQueen()
-    monkeypatch.setattr(whatsapp_runtime_module, "build_queen", lambda settings: fake_queen)
+    fake_octo = _FakeOcto()
+    monkeypatch.setattr(whatsapp_runtime_module, "build_octo", lambda settings: fake_octo)
     monkeypatch.setattr(whatsapp_runtime_module, "WhatsAppBridgeController", _FakeBridgeController)
     monkeypatch.setattr(whatsapp_runtime_module, "update_component_gauges", lambda *args, **kwargs: None)
     monkeypatch.setattr(whatsapp_runtime_module, "update_last_message", lambda *args, **kwargs: None)
 
     runtime = WhatsAppRuntime(_make_settings(mode="separate", allowed_numbers="+15551234567"))
-    runtime.attach_queen_output()
+    runtime.attach_octo_output()
 
     async def scenario() -> None:
         result = await runtime.handle_inbound(
@@ -136,21 +136,21 @@ def test_whatsapp_runtime_ignores_from_me_outside_personal_mode(monkeypatch) -> 
             }
         )
         assert result == {"accepted": False, "reason": "from_me_ignored"}
-        assert fake_queen.handled == []
+        assert fake_octo.handled == []
         assert runtime.bridge.sent == []
 
     asyncio.run(scenario())
 
 
 def test_whatsapp_runtime_ignores_from_me_non_self_chat(monkeypatch) -> None:
-    fake_queen = _FakeQueen()
-    monkeypatch.setattr(whatsapp_runtime_module, "build_queen", lambda settings: fake_queen)
+    fake_octo = _FakeOcto()
+    monkeypatch.setattr(whatsapp_runtime_module, "build_octo", lambda settings: fake_octo)
     monkeypatch.setattr(whatsapp_runtime_module, "WhatsAppBridgeController", _FakeBridgeController)
     monkeypatch.setattr(whatsapp_runtime_module, "update_component_gauges", lambda *args, **kwargs: None)
     monkeypatch.setattr(whatsapp_runtime_module, "update_last_message", lambda *args, **kwargs: None)
 
     runtime = WhatsAppRuntime(_make_settings(mode="personal", allowed_numbers="+15551234567"))
-    runtime.attach_queen_output()
+    runtime.attach_octo_output()
 
     async def scenario() -> None:
         result = await runtime.handle_inbound(
@@ -164,15 +164,15 @@ def test_whatsapp_runtime_ignores_from_me_non_self_chat(monkeypatch) -> None:
             }
         )
         assert result == {"accepted": False, "reason": "not_self_chat"}
-        assert fake_queen.handled == []
+        assert fake_octo.handled == []
         assert runtime.bridge.sent == []
 
     asyncio.run(scenario())
 
 
 def test_whatsapp_runtime_accepts_image_only_payload_and_saves_path(monkeypatch, tmp_path) -> None:
-    fake_queen = _FakeQueen()
-    monkeypatch.setattr(whatsapp_runtime_module, "build_queen", lambda settings: fake_queen)
+    fake_octo = _FakeOcto()
+    monkeypatch.setattr(whatsapp_runtime_module, "build_octo", lambda settings: fake_octo)
     monkeypatch.setattr(whatsapp_runtime_module, "WhatsAppBridgeController", _FakeBridgeController)
     monkeypatch.setattr(whatsapp_runtime_module, "update_component_gauges", lambda *args, **kwargs: None)
     monkeypatch.setattr(whatsapp_runtime_module, "update_last_message", lambda *args, **kwargs: None)
@@ -180,7 +180,7 @@ def test_whatsapp_runtime_accepts_image_only_payload_and_saves_path(monkeypatch,
     settings = _make_settings(mode="personal", allowed_numbers="+15551234567")
     settings.workspace_dir = tmp_path
     runtime = WhatsAppRuntime(settings)
-    runtime.attach_queen_output()
+    runtime.attach_octo_output()
 
     async def scenario() -> None:
         result = await runtime.handle_inbound(
@@ -196,7 +196,7 @@ def test_whatsapp_runtime_accepts_image_only_payload_and_saves_path(monkeypatch,
             }
         )
         assert result["accepted"] is True
-        handled = fake_queen.handled[-1]
+        handled = fake_octo.handled[-1]
         assert handled["text"] == ""
         assert handled["kwargs"]["images"] == ["data:image/jpeg;base64,SGVsbG8="]
         saved_paths = handled["kwargs"]["saved_file_paths"]
@@ -209,8 +209,8 @@ def test_whatsapp_runtime_accepts_image_only_payload_and_saves_path(monkeypatch,
 
 
 def test_whatsapp_runtime_aggregates_messages_within_grace_window(monkeypatch) -> None:
-    fake_queen = _FakeQueen()
-    monkeypatch.setattr(whatsapp_runtime_module, "build_queen", lambda settings: fake_queen)
+    fake_octo = _FakeOcto()
+    monkeypatch.setattr(whatsapp_runtime_module, "build_octo", lambda settings: fake_octo)
     monkeypatch.setattr(whatsapp_runtime_module, "WhatsAppBridgeController", _FakeBridgeController)
     monkeypatch.setattr(whatsapp_runtime_module, "update_component_gauges", lambda *args, **kwargs: None)
     monkeypatch.setattr(whatsapp_runtime_module, "update_last_message", lambda *args, **kwargs: None)
@@ -218,7 +218,7 @@ def test_whatsapp_runtime_aggregates_messages_within_grace_window(monkeypatch) -
     settings = _make_settings(mode="personal", allowed_numbers="+15551234567")
     settings.user_message_grace_seconds = 0.05
     runtime = WhatsAppRuntime(settings)
-    runtime.attach_queen_output()
+    runtime.attach_octo_output()
 
     async def scenario() -> None:
         first = await runtime.handle_inbound(
@@ -243,32 +243,32 @@ def test_whatsapp_runtime_aggregates_messages_within_grace_window(monkeypatch) -
         )
         assert first["accepted"] is True
         assert second["accepted"] is True
-        assert fake_queen.handled == []
+        assert fake_octo.handled == []
 
         await asyncio.sleep(0.12)
 
-        assert len(fake_queen.handled) == 1
-        assert fake_queen.handled[0]["text"] == "hello\n\nand another thing"
+        assert len(fake_octo.handled) == 1
+        assert fake_octo.handled[0]["text"] == "hello\n\nand another thing"
 
     asyncio.run(scenario())
 
 
 def test_whatsapp_runtime_applies_reaction_and_strips_tag(monkeypatch) -> None:
-    fake_queen = _FakeQueen()
+    fake_octo = _FakeOcto()
 
     async def _handle_message(text: str, chat_id: int, **kwargs):
-        fake_queen.handled.append({"text": text, "chat_id": chat_id, "kwargs": kwargs})
+        fake_octo.handled.append({"text": text, "chat_id": chat_id, "kwargs": kwargs})
         return _FakeReply("<react>✅</react> All done.")
 
-    fake_queen.handle_message = _handle_message  # type: ignore[method-assign]
+    fake_octo.handle_message = _handle_message  # type: ignore[method-assign]
 
-    monkeypatch.setattr(whatsapp_runtime_module, "build_queen", lambda settings: fake_queen)
+    monkeypatch.setattr(whatsapp_runtime_module, "build_octo", lambda settings: fake_octo)
     monkeypatch.setattr(whatsapp_runtime_module, "WhatsAppBridgeController", _FakeBridgeController)
     monkeypatch.setattr(whatsapp_runtime_module, "update_component_gauges", lambda *args, **kwargs: None)
     monkeypatch.setattr(whatsapp_runtime_module, "update_last_message", lambda *args, **kwargs: None)
 
     runtime = WhatsAppRuntime(_make_settings(mode="personal", allowed_numbers="+15551234567"))
-    runtime.attach_queen_output()
+    runtime.attach_octo_output()
     chat_id = whatsapp_runtime_module.whatsapp_chat_id("+15551234567")
     runtime._number_by_chat_id[chat_id] = "+15551234567"
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from broodmind.cli.main import app
+from octopal.cli.main import app
 
 runner = CliRunner()
 
@@ -24,7 +24,7 @@ description: Helps write copy
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "broodmind.cli.main.load_settings",
+        "octopal.cli.main.load_settings",
         lambda: SimpleNamespace(workspace_dir=workspace_dir),
     )
 
@@ -49,7 +49,7 @@ description: Helps write copy
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "broodmind.cli.main.load_settings",
+        "octopal.cli.main.load_settings",
         lambda: SimpleNamespace(workspace_dir=workspace_dir),
     )
 
@@ -76,7 +76,7 @@ description: v1
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "broodmind.cli.main.load_settings",
+        "octopal.cli.main.load_settings",
         lambda: SimpleNamespace(workspace_dir=workspace_dir),
     )
 
@@ -111,7 +111,7 @@ description: Helps write copy
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "broodmind.cli.main.load_settings",
+        "octopal.cli.main.load_settings",
         lambda: SimpleNamespace(workspace_dir=workspace_dir),
     )
 
@@ -138,7 +138,7 @@ description: Helps write copy
     )
     (scripts_dir / "noop.py").write_text("print('ok')\n", encoding="utf-8")
     monkeypatch.setattr(
-        "broodmind.cli.main.load_settings",
+        "octopal.cli.main.load_settings",
         lambda: SimpleNamespace(workspace_dir=workspace_dir),
     )
 
@@ -197,7 +197,7 @@ description: Helps write copy
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        "broodmind.cli.main.load_settings",
+        "octopal.cli.main.load_settings",
         lambda: SimpleNamespace(workspace_dir=workspace_dir),
     )
 
@@ -214,7 +214,6 @@ description: Helps write copy
 
 def test_skill_install_command_auto_prepares_env_and_returns_trust_next_step(tmp_path: Path, monkeypatch) -> None:
     workspace_dir = tmp_path / "workspace"
-    skill_dir = workspace_dir / "skills" / "job-search"
     source_dir = tmp_path / "job-search"
     scripts_dir = source_dir / "scripts"
     scripts_dir.mkdir(parents=True)
@@ -224,7 +223,7 @@ name: job-search
 description: Search jobs
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "python": {
           "packages": ["python-jobspy"]
@@ -238,11 +237,11 @@ metadata:
     )
     (scripts_dir / "jobspy.py").write_text("print('ok')\n", encoding="utf-8")
     monkeypatch.setattr(
-        "broodmind.cli.main.load_settings",
+        "octopal.cli.main.load_settings",
         lambda: SimpleNamespace(workspace_dir=workspace_dir),
     )
     monkeypatch.setattr(
-        "broodmind.tools.skills.installer.prepare_skill_env",
+        "octopal.tools.skills.installer.prepare_skill_env",
         lambda skill_id, workspace_dir: {
             "status": "prepared",
             "skill_id": skill_id,

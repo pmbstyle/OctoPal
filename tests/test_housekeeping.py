@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from broodmind.runtime.housekeeping import cleanup_workspace_tmp, rotate_canon_events
+from octopal.runtime.housekeeping import cleanup_workspace_tmp, rotate_canon_events
 
 
 def _touch(path: Path, text: str = "x") -> None:

@@ -4,19 +4,19 @@ import json
 
 from typer.testing import CliRunner
 
-from broodmind.cli.main import (
+from octopal.cli.main import (
     _build_tool_resolution_snapshot,
     app,
 )
-from broodmind.tools.catalog import get_tools
+from octopal.tools.catalog import get_tools
 
 runner = CliRunner()
 
 
-def test_build_tool_resolution_snapshot_for_queen_applies_policy_and_profile() -> None:
+def test_build_tool_resolution_snapshot_for_octo_applies_policy_and_profile() -> None:
     snapshot = _build_tool_resolution_snapshot(
         get_tools(mcp_manager=None),
-        preset="queen",
+        preset="octo",
         profile_name="research",
         include_blocked=True,
     )
@@ -29,15 +29,15 @@ def test_build_tool_resolution_snapshot_for_queen_applies_policy_and_profile() -
     assert "fs_read" in blocked_rows
     assert blocked_rows["fs_read"]["reason"] == "blocked_by_allowlist:profile.research"
     assert "web_fetch" in blocked_rows
-    assert blocked_rows["web_fetch"]["reason"] == "blocked_by_deny:queen.raw_fetch_denylist"
+    assert blocked_rows["web_fetch"]["reason"] == "blocked_by_deny:octo.raw_fetch_denylist"
 
 
 def test_tools_resolve_json_outputs_snapshot() -> None:
-    result = runner.invoke(app, ["tools", "resolve", "--preset", "queen", "--profile", "research", "--json"])
+    result = runner.invoke(app, ["tools", "resolve", "--preset", "octo", "--profile", "research", "--json"])
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["preset"] == "queen"
+    assert payload["preset"] == "octo"
     assert payload["profile"] == "research"
     assert payload["available_count"] > 0
     assert any(row["name"] == "web_search" for row in payload["available"])

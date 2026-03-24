@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from broodmind.infrastructure.config.settings import Settings
-from broodmind.gateway.dashboard import (
+from octopal.gateway.dashboard import (
     DashboardFilters,
     _build_filters,
     _normalize_log_entry,
 )
+from octopal.infrastructure.config.settings import Settings
 
 
 def _settings(tmp_path):
     return Settings(
         TELEGRAM_BOT_TOKEN="123:abc",
-        BROODMIND_STATE_DIR=tmp_path / "state",
-        BROODMIND_WORKSPACE_DIR=tmp_path / "workspace",
+        OCTOPAL_STATE_DIR=tmp_path / "state",
+        OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
     )
 
 
@@ -38,7 +38,7 @@ def test_normalize_log_entry_respects_service_filter() -> None:
     assert entry["service"] == "telegram"
 
     blocked = _normalize_log_entry(
-        '{"timestamp":"2026-03-01T00:00:00+00:00","level":"info","event":"queen loop tick"}',
+        '{"timestamp":"2026-03-01T00:00:00+00:00","level":"info","event":"octo loop tick"}',
         filters=filters,
     )
     assert blocked is None

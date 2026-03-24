@@ -1,4 +1,4 @@
-from broodmind.infrastructure.logging import _prepare_console_stream
+from octopal.infrastructure.logging import _prepare_console_stream
 
 
 class _FakeStream:

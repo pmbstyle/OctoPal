@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from broodmind.tools.skills.bundles import (
+from octopal.tools.skills.bundles import (
     SkillBundleMetadata,
     discover_skill_bundle_dirs,
     load_discovered_skill_bundles,
@@ -90,7 +90,7 @@ def test_load_skill_bundle_can_fall_back_to_registry_fields(tmp_path: Path) -> N
             "id": "legacy_skill",
             "name": "Legacy Skill",
             "description": "Legacy registry-backed skill",
-            "scope": "queen",
+            "scope": "octo",
             "enabled": False,
             "path": "skills/legacy_skill/skill.md",
         },
@@ -100,7 +100,7 @@ def test_load_skill_bundle_can_fall_back_to_registry_fields(tmp_path: Path) -> N
     assert bundle.id == "legacy_skill"
     assert bundle.name == "Legacy Skill"
     assert bundle.description == "Legacy registry-backed skill"
-    assert bundle.scope == "queen"
+    assert bundle.scope == "octo"
     assert bundle.enabled is False
 
 
@@ -154,7 +154,7 @@ def test_resolve_skill_bundle_metadata_reads_runtime_blocks() -> None:
         {
             "metadata": """
 {
-  "broodmind": {
+  "octopal": {
     "runtime": {
       "python": {
         "packages": ["python-jobspy"]

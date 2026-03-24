@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-from broodmind.tools.workers.management import _tool_worker_yield
-from broodmind.utils import utc_now
+from octopal.tools.workers.management import _tool_worker_yield
+from octopal.utils import utc_now
 
 
 class _WorkerStub:
@@ -85,14 +85,14 @@ class _StoreStub:
         return list(self._workers.values())[:limit]
 
 
-class _QueenStub:
+class _OctoStub:
     def __init__(self) -> None:
         self.store = _StoreStub()
         self.runtime = _RuntimeStub()
 
 
 def test_worker_yield_recommends_followup_when_runs_are_still_active() -> None:
-    payload = json.loads(_tool_worker_yield({"worker_ids": ["w1", "w2"]}, {"queen": _QueenStub()}))
+    payload = json.loads(_tool_worker_yield({"worker_ids": ["w1", "w2"]}, {"octo": _OctoStub()}))
 
     assert payload["status"] == "ok"
     assert payload["mode"] == "yield"
@@ -105,7 +105,7 @@ def test_worker_yield_recommends_followup_when_runs_are_still_active() -> None:
 
 def test_worker_yield_recommends_synthesis_when_parallel_results_are_ready() -> None:
     payload = json.loads(
-        _tool_worker_yield({"worker_ids": ["w3", "w4", "w5"], "lineage_id": "lin-2"}, {"queen": _QueenStub()})
+        _tool_worker_yield({"worker_ids": ["w3", "w4", "w5"], "lineage_id": "lin-2"}, {"octo": _OctoStub()})
     )
 
     assert payload["status"] == "ok"

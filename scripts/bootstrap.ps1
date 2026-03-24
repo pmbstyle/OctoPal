@@ -90,9 +90,9 @@ finally {
 
 Write-Host ""
 Write-Host "Launching onboarding..."
-uv run broodmind configure
+uv run octopal configure
 
 Write-Host ""
 Write-Host "Bootstrap complete."
 Write-Host "Next steps:"
-Write-Host "  uv run broodmind start"
+Write-Host "  uv run octopal start"

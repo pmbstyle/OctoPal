@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-import broodmind.tools.browser.actions as browser_actions
+import octopal.tools.browser.actions as browser_actions
 
 
 class _LocatorStub:

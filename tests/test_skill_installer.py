@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import json
 import zipfile
 from pathlib import Path
 
-from broodmind.tools.skills.installer import (
+from octopal.tools.skills.installer import (
     detect_skill_install_source,
     install_skill_from_source,
     list_installed_skill_sources,
@@ -78,7 +77,7 @@ name: job-search
 description: Search jobs
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "python": {
           "packages": ["python-jobspy"]
@@ -92,7 +91,7 @@ metadata:
     )
     (scripts_dir / "jobspy.py").write_text("print('ok')\n", encoding="utf-8")
     monkeypatch.setattr(
-        "broodmind.tools.skills.installer.prepare_skill_env",
+        "octopal.tools.skills.installer.prepare_skill_env",
         lambda skill_id, workspace_dir: {
             "status": "prepared",
             "skill_id": skill_id,
@@ -130,11 +129,11 @@ description: Shared agent helpers
         archive_path.write_bytes(prepared_archive.read_bytes())
 
     monkeypatch.setattr(
-        "broodmind.tools.skills.installer._download_clawhub_archive",
+        "octopal.tools.skills.installer._download_clawhub_archive",
         _fake_download,
     )
     monkeypatch.setattr(
-        "broodmind.tools.skills.installer.prepare_skill_env",
+        "octopal.tools.skills.installer.prepare_skill_env",
         lambda skill_id, workspace_dir: {
             "status": "not_applicable",
             "skill_id": skill_id,

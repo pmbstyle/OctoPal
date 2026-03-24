@@ -1,20 +1,20 @@
 <p align="center">
-<img width="60%" alt="BroodMind" src="https://github.com/pmbstyle/BroodMind/blob/main/logo.png" />
+<img width="60%" alt="Octopal" src="https://github.com/pmbstyle/Octopal/blob/main/logo.png" />
 </p>
 
 <p align="center">
   <strong>RUN YOUR OWN AI HIVE, FAST AND SECURE!</strong>
 </p>
 
-BroodMind is a local AI hive that runs autonomous workers to complete tasks for you.
+Octopal is a local AI hive that runs autonomous workers to complete tasks for you.
 It acts as a persistent AI operator that can plan work, spawn specialized agents, and manage long-running workflows.
 
-The **Queen** is the long-running coordinator: it holds memory, plans work, chooses tools, manages context, and delegates execution.
+The **Octo** is the long-running coordinator: it holds memory, plans work, chooses tools, manages context, and delegates execution.
 **Workers** are short-lived specialists with limited permissions, bounded context, and task-specific tool access.
 
-BroodMind is designed for persistent assistant workflows, not just single prompts. It combines conversation channels, reusable workers, scheduling, memory, canon, policy controls, and an ops dashboard into one local system you can run on your own machine or server.
+Octopal is designed for persistent assistant workflows, not just single prompts. It combines conversation channels, reusable workers, scheduling, memory, canon, policy controls, and an ops dashboard into one local system you can run on your own machine or server.
 
-This separation improves safety and reliability: sensitive context stays with the Queen, while workers receive only the minimal context needed to complete a task.
+This separation improves safety and reliability: sensitive context stays with the Octo, while workers receive only the minimal context needed to complete a task.
 
 ## 🪛 What It Can Do
 
@@ -34,7 +34,7 @@ User
    │
 Channels (Telegram / WhatsApp / WS)
    │
- Queen
+ Octo
    │
  Worker Pool
    │
@@ -48,11 +48,11 @@ Channels (Telegram / WhatsApp / WS)
 User:
 "Research the latest Gemini model and write a summary."
 
-Queen:
+Octo:
 1. Spawns Web Researcher
 2. Researcher fetches sources
 3. Writer worker generates summary
-4. Queen stores canon entry
+4. Octo stores canon entry
 5. Result returned to user
 
 ## 🚀 Quick Start
@@ -83,8 +83,8 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 ### 2. Bootstrap script
 
 ```bash
-git clone https://github.com/pmbstyle/BroodMind.git
-cd BroodMind
+git clone https://github.com/pmbstyle/Octopal.git
+cd Octopal
 ```
 
 ```bash
@@ -98,19 +98,19 @@ chmod +x ./scripts/bootstrap.sh
 ./scripts/bootstrap.ps1
 ```
 
-This is the main starting path. The bootstrap script installs dependencies, installs Playwright Chromium, and then launches `broodmind configure`.
+This is the main starting path. The bootstrap script installs dependencies, installs Playwright Chromium, and then launches `octopal configure`.
 
 ### 3. Open the web dashboard
 
-After bootstrap, start BroodMind and then open the dashboard in your browser:
+After bootstrap, start Octopal and then open the dashboard in your browser:
 
 ```bash
-uv run broodmind start
+uv run octopal start
 ```
 
 Open [http://127.0.0.1:8001/dashboard](http://127.0.0.1:8001/dashboard) (change IP to your instance)
 
-If you enabled dashboard protection during `broodmind configure`, use the value of `BROODMIND_DASHBOARD_TOKEN` from `.env` when the dashboard or dashboard API asks for it.
+If you enabled dashboard protection during `octopal configure`, use the value of `OCTOPAL_DASHBOARD_TOKEN` from `.env` when the dashboard or dashboard API asks for it.
 
 If the page says the dashboard is unavailable, build and enable the web app first:
 
@@ -119,9 +119,9 @@ cd webapp
 npm run build
 ```
 
-Then set `BROODMIND_WEBAPP_ENABLED=1` in `.env` and start BroodMind again.
+Then set `OCTOPAL_WEBAPP_ENABLED=1` in `.env` and start Octopal again.
 
-<img alt="BroodMind dashboard" src="https://github.com/user-attachments/assets/0fcf993b-97c6-4f90-840a-63011f0d55f0" />
+<img alt="Octopal dashboard" src="https://github.com/user-attachments/assets/0fcf993b-97c6-4f90-840a-63011f0d55f0" />
 
 
 ### 4. Manual setup
@@ -129,10 +129,10 @@ Then set `BROODMIND_WEBAPP_ENABLED=1` in `.env` and start BroodMind again.
 If you do not want the bootstrap script, use the manual path below.
 
 ```bash
-git clone https://github.com/pmbstyle/BroodMind.git
-cd BroodMind
+git clone https://github.com/pmbstyle/Octopal.git
+cd Octopal
 uv sync
-uv run broodmind configure
+uv run octopal configure
 ```
 
 Alternative without `uv`:
@@ -149,7 +149,7 @@ pip install -e .
 Then run:
 
 ```bash
-broodmind configure
+octopal configure
 ```
 
 `configure` creates/updates `.env` and bootstraps workspace files if missing.
@@ -158,28 +158,28 @@ broodmind configure
 
 ```bash
 # background mode
-uv run broodmind start
+uv run octopal start
 
 # foreground mode
-uv run broodmind start --foreground
+uv run octopal start --foreground
 ```
 
 ### 6. Check Health
 
 ```bash
-uv run broodmind status
-uv run broodmind logs --follow
+uv run octopal status
+uv run octopal logs --follow
 ```
 
 ## Core Commands
 
 ```bash
 # lifecycle
-uv run broodmind start
-uv run broodmind stop
-uv run broodmind restart
-uv run broodmind status
-uv run broodmind logs --follow
+uv run octopal start
+uv run octopal stop
+uv run octopal restart
+uv run octopal status
+uv run octopal logs --follow
 ```
 
 ## Optional: Docker Worker Launcher
@@ -187,43 +187,43 @@ uv run broodmind logs --follow
 Default runtime is non-Docker. If you want Dockerized workers:
 
 ```bash
-uv run broodmind build-worker-image --tag broodmind-worker:latest
+uv run octopal build-worker-image --tag octopal-worker:latest
 ```
 
 Then set in `.env`:
 
 ```env
-BROODMIND_WORKER_LAUNCHER=docker
-BROODMIND_WORKER_DOCKER_IMAGE=broodmind-worker:latest
+OCTOPAL_WORKER_LAUNCHER=docker
+OCTOPAL_WORKER_DOCKER_IMAGE=octopal-worker:latest
 ```
 
-Restart BroodMind after config changes.
+Restart Octopal after config changes.
 
 
 ## ✨ Key Features
 
 ### 💻 Local and Cloud deployment
 
-BroodMind can work from any environment that supports Python execution.
-Fast and simple bootstrap onboarding helps you to start using BroodMind right away.
+Octopal can work from any environment that supports Python execution.
+Fast and simple bootstrap onboarding helps you to start using Octopal right away.
 
 - deploy on your local PC (Linux, Windows, MacOS)
 - deploy on a VPS
 - deploy in Docker
 
-BroodMind works from a specified directory and has no access to your system components.
+Octopal works from a specified directory and has no access to your system components.
 
 ### 🧠 Delegation-driven architecture
 
-The Queen, which holds all system context and sensitive data, never communicates with the outside world on its own.
-Instead, the Queen delegates tasks to workers with limited context and predefined tool/skill sets.
+The Octo, which holds all system context and sensitive data, never communicates with the outside world on its own.
+Instead, the Octo delegates tasks to workers with limited context and predefined tool/skill sets.
 Workers can spawn subworkers for multi-step tasks. Workers can only return response of their tasks or question/error responses. 
 
-- the Queen delegates external operations to workers, which ensures context isolation, enhances security, and provides async task execution
+- the Octo delegates external operations to workers, which ensures context isolation, enhances security, and provides async task execution
 - workers execute in an isolated environment, which gets deleted after each execution
 - workers can act as orchestrators and create sub-workers for multi-tasking
 - workers operate with a predefined set of tools, MCP, and skills in their config as well as `max_thinking_steps` and `execution_timeout`
-- the Queen can create new workers for a specific task (ex. use a skill to work with an external resource)
+- the Octo can create new workers for a specific task (ex. use a skill to work with an external resource)
 - Prebuilt worker templates include:
   - Web Researcher
   - Web Fetcher
@@ -237,7 +237,7 @@ Workers can spawn subworkers for multi-step tasks. Workers can only return respo
 
 ### 📃 Multilayer memory system
 
-The Queen operates with a local vector database to store communication history and file-based context:
+The Octo operates with a local vector database to store communication history and file-based context:
 
 - **MEMORY.md** – working memory and durable context; important facts, current state, and notes the system may need across sessions
 - **memory/canon/** – curated long-term knowledge that has been reviewed and promoted into trusted reference material
@@ -247,7 +247,7 @@ The Queen operates with a local vector database to store communication history a
 
 ### 🤖 Multi-channel user communication
 
-BroodMind supports:
+Octopal supports:
 - Telegram (Botfather)
 - WhatsApp (Dedicated or personal numbers)
 - WS API gateway (Build or bring your own client)
@@ -258,7 +258,7 @@ Communication channels, by default, provide full support of functions like:
 - message reactions
 - 5s grace window for user messages.
 
-  You can send a followback message before the Queen executes it - this helps to prevent typos, wrong commands, etc.
+  You can send a followback message before the Octo executes it - this helps to prevent typos, wrong commands, etc.
 
 ### ⚙️ Web dashboard
 
@@ -267,14 +267,14 @@ Built-in Tailscale tunneling and token-based authentication prevent unauthorised
 
 ### 🧩 Skills and skill bundles
 
-BroodMind supports workspace-local skill bundles under `workspace/skills/<skill-id>/`.
+Octopal supports workspace-local skill bundles under `workspace/skills/<skill-id>/`.
 
 - auto-discovers `SKILL.md` bundles
 - keeps `skills/registry.json` as a compatibility layer
 - supports optional `scripts/`, `references/`, and `assets/`
 - exposes readiness checks for required binaries and env vars
 - runs bundled scripts through a dedicated safe runner instead of raw shell
-- can install external skills with ClawHub-style commands like `uv run broodmind skill install <publisher>/<skill-pack>`
+- can install external skills with ClawHub-style commands like `uv run octopal skill install <publisher>/<skill-pack>`
 - also accepts direct `SKILL.md` URLs and local bundle paths
 - supports installer lifecycle commands: `skill install`, `skill list`, `skill update`, `skill trust`, `skill untrust`, `skill remove`
 - shows both local workspace skills and installer-managed skills in `skill list`
@@ -289,20 +289,20 @@ See [docs/skills.md](docs/skills.md) for the current format and behavior.
 
 - Verify `TELEGRAM_BOT_TOKEN`
 - Verify your chat ID is in `ALLOWED_TELEGRAM_CHAT_IDS`
-- Check `uv run broodmind status` and `uv run broodmind logs --follow`
+- Check `uv run octopal status` and `uv run octopal logs --follow`
 
 ### WhatsApp is selected, but not receiving messages
 
-- Verify `BROODMIND_USER_CHANNEL=whatsapp`
+- Verify `OCTOPAL_USER_CHANNEL=whatsapp`
 - Verify your phone number is in `ALLOWED_WHATSAPP_NUMBERS`
-- Run `uv run broodmind whatsapp install-bridge`
-- Run `uv run broodmind whatsapp link`
-- Start BroodMind again and check `uv run broodmind whatsapp status`
+- Run `uv run octopal whatsapp install-bridge`
+- Run `uv run octopal whatsapp link`
+- Start Octopal again and check `uv run octopal whatsapp status`
 
 ### LLM errors
 
-- Run `uv run broodmind configure` and pick the provider you want to use.
-- For unified LiteLLM config: set `BROODMIND_LITELLM_PROVIDER_ID`, `BROODMIND_LITELLM_MODEL`, and `BROODMIND_LITELLM_API_KEY`.
+- Run `uv run octopal configure` and pick the provider you want to use.
+- For unified LiteLLM config: set `OCTOPAL_LITELLM_PROVIDER_ID`, `OCTOPAL_LITELLM_MODEL`, and `OCTOPAL_LITELLM_API_KEY`.
 - Existing `ZAI_*` and `OPENROUTER_*` variables still work as legacy fallbacks.
 
 ### Web search/fetch issues

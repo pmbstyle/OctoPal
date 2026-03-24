@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from broodmind.gateway.dashboard import _clear_control_queue_requests, _select_retry_target
-from broodmind.infrastructure.store.models import WorkerRecord
+from octopal.gateway.dashboard import _clear_control_queue_requests, _select_retry_target
+from octopal.infrastructure.store.models import WorkerRecord
 
 
 def _worker(worker_id: str, status: str) -> WorkerRecord:

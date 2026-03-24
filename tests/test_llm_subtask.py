@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from broodmind.tools.llm import subtask as subtask_module
+from octopal.tools.llm import subtask as subtask_module
 
 
 class _ProviderStub:

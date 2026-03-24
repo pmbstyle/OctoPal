@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from broodmind.gateway.ws import _resolve_ws_chat_id
+from octopal.gateway.ws import _resolve_ws_chat_id
 
 
 def test_resolve_ws_chat_id_returns_positive_when_no_allowlist() -> None:

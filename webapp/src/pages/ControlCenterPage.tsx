@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 
-import { fetchOverview, fetchQueen, fetchSystem, fetchWorkers } from "../api/dashboardClient";
+import { fetchOverview, fetchOcto, fetchSystem, fetchWorkers } from "../api/dashboardClient";
 import type { components } from "../api/types";
 import type { AppShellOutletContext } from "../ui/AppShell";
 import { formatLocalDateTime, formatLocalTime } from "../utils/dateTime";
 
 type OverviewPayload = components["schemas"]["DashboardOverviewV2"];
 type WorkersPayload = components["schemas"]["DashboardWorkersV2"];
-type QueenPayload = components["schemas"]["DashboardQueenV2"];
+type OctoPayload = components["schemas"]["DashboardOctoV2"];
 type SystemPayload = components["schemas"]["DashboardSystemV2"];
 
 type WorkerTemplateConfig = {
@@ -41,13 +41,13 @@ type MetricPoint = {
   at: number;
   activeWorkers: number;
   queueDepth: number;
-  queenQueue: number;
+  octoQueue: number;
 };
 
 type SnapshotBundle = {
   overview: OverviewPayload;
   workers: WorkersPayload;
-  queen: QueenPayload;
+  octo: OctoPayload;
   system: SystemPayload;
 };
 
@@ -58,7 +58,7 @@ type LogRow = {
   service?: string;
 };
 
-type QueenStep = {
+type OctoStep = {
   id: string;
   title: string;
   detail: string;
@@ -172,10 +172,10 @@ function formatEventTitle(event?: string): string {
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
 }
 
-function isQueenRelevantLog(entry: LogRow): boolean {
+function isOctoRelevantLog(entry: LogRow): boolean {
   const service = String(entry.service ?? "").toLowerCase();
   const event = String(entry.event ?? "").toLowerCase();
-  if (service.includes("queen")) {
+  if (service.includes("octo")) {
     return true;
   }
   return [
@@ -192,9 +192,9 @@ function isQueenRelevantLog(entry: LogRow): boolean {
   ].some((needle) => event.includes(needle));
 }
 
-function buildQueenSteps(logs: LogRow[]): QueenStep[] {
+function buildOctoSteps(logs: LogRow[]): OctoStep[] {
   return logs
-    .filter(isQueenRelevantLog)
+    .filter(isOctoRelevantLog)
     .map((entry, index) => ({
       id: `${entry.timestamp ?? "ts"}-${index}`,
       title: formatEventTitle(entry.event),
@@ -204,7 +204,7 @@ function buildQueenSteps(logs: LogRow[]): QueenStep[] {
     }));
 }
 
-function deriveQueenWaitingOn(args: {
+function deriveOctoWaitingOn(args: {
   state: string;
   controlPending: number;
   channelQueueDepth: number;
@@ -244,15 +244,15 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
   const height = 220;
   const workers = points.map((point) => point.activeWorkers);
   const queueDepth = points.map((point) => point.queueDepth);
-  const queenQueue = points.map((point) => point.queenQueue);
-  const rawMaxValue = Math.max(1, ...workers, ...queueDepth, ...queenQueue);
+  const octoQueue = points.map((point) => point.octoQueue);
+  const rawMaxValue = Math.max(1, ...workers, ...queueDepth, ...octoQueue);
   const yStep = Math.max(1, Math.ceil(rawMaxValue / 3));
   const yAxisMax = yStep * 3;
   const yTicks = [yStep, yStep * 2, yAxisMax];
   const plotHeight = Math.max(1, height - GRAPH_TOP_PAD - GRAPH_BOTTOM_PAD);
   const workerLine = buildLine(workers, width, height, yAxisMax);
   const queueLine = buildLine(queueDepth, width, height, yAxisMax);
-  const queenLine = buildLine(queenQueue, width, height, yAxisMax);
+  const octoLine = buildLine(octoQueue, width, height, yAxisMax);
   const firstPoint = points[0];
   const lastPoint = points[points.length - 1];
   const startLabel = firstPoint ? formatLocalTime(firstPoint.at) : "--:--";
@@ -268,7 +268,7 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
       <div className="mb-3 flex items-center justify-between">
         <div>
           <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Live Load</h3>
-          <p className="mt-1 text-xs text-slate-500">Workers, total system queue, and queen-only queue.</p>
+          <p className="mt-1 text-xs text-slate-500">Workers, total system queue, and octo-only queue.</p>
         </div>
         <span className="text-xs text-slate-400">Last {points.length} samples</span>
       </div>
@@ -306,7 +306,7 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
           </text>
           <path d={workerLine} fill="none" stroke="#06b6d4" strokeWidth={3} strokeLinecap="round" />
           <path d={queueLine} fill="none" stroke="#f59e0b" strokeWidth={2.5} strokeLinecap="round" />
-          <path d={queenLine} fill="none" stroke="#22c55e" strokeWidth={2.5} strokeLinecap="round" />
+          <path d={octoLine} fill="none" stroke="#22c55e" strokeWidth={2.5} strokeLinecap="round" />
           {activePoint ? (
             <line x1={markerX} x2={markerX} y1={0} y2={height} stroke="#64748b" strokeWidth={1} strokeDasharray="5 4" />
           ) : null}
@@ -316,7 +316,7 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
             <p className="mb-1 text-[11px] text-slate-400">{formatLocalDateTime(activePoint.at)} ({tzLabel})</p>
             <p className="text-cyan-300">Workers: {activePoint.activeWorkers}</p>
             <p className="text-amber-300">System queue: {activePoint.queueDepth}</p>
-            <p className="text-emerald-300">Queen queue: {activePoint.queenQueue}</p>
+            <p className="text-emerald-300">Octo queue: {activePoint.octoQueue}</p>
           </div>
         ) : null}
       </div>
@@ -327,7 +327,7 @@ function RealtimeGraph({ points }: { points: MetricPoint[] }) {
       <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-300 xl:mt-auto">
         <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-cyan-400" />Workers</span>
         <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-amber-400" />System queue</span>
-        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />Queen queue</span>
+        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />Octo queue</span>
       </div>
     </section>
   );
@@ -346,7 +346,7 @@ export function ControlCenterPage() {
 
     const refresh = async () => {
       try {
-        const [overview, workers, queen, system] = await Promise.all([
+        const [overview, workers, octo, system] = await Promise.all([
           fetchOverview({
             windowMinutes: filters.windowMinutes,
             service: filters.service,
@@ -359,7 +359,7 @@ export function ControlCenterPage() {
             environment: filters.environment,
             token: filters.token || undefined,
           }),
-          fetchQueen({
+          fetchOcto({
             windowMinutes: filters.windowMinutes,
             service: filters.service,
             environment: filters.environment,
@@ -379,11 +379,11 @@ export function ControlCenterPage() {
 
         const queueDepth = asNumber((overview.kpis as Record<string, { value?: unknown }>)?.queue_depth?.value);
         const activeWorkers = asNumber((workers.workers as Record<string, unknown>)?.running);
-        const queenNode = queen.queen as Record<string, unknown>;
-        const queenQueue = asNumber(queenNode?.followup_queues) + asNumber(queenNode?.internal_queues);
+        const octoNode = octo.octo as Record<string, unknown>;
+        const octoQueue = asNumber(octoNode?.followup_queues) + asNumber(octoNode?.internal_queues);
 
-        setBundle({ overview, workers, queen, system });
-        setHistory((prev) => [...prev, { at: Date.now(), activeWorkers, queueDepth, queenQueue }].slice(-32));
+        setBundle({ overview, workers, octo, system });
+        setHistory((prev) => [...prev, { at: Date.now(), activeWorkers, queueDepth, octoQueue }].slice(-32));
         setError("");
       } catch (err: unknown) {
         if (!active) {
@@ -411,38 +411,38 @@ export function ControlCenterPage() {
 
   const workers = (((bundle?.workers.workers as { recent?: WorkerRow[] })?.recent ?? []).slice(0, 12));
   const health = (bundle?.overview.health as { status?: string; summary?: string; reasons?: string[] }) ?? {};
-  const queenNode = (bundle?.queen.queen as Record<string, unknown>) ?? {};
-  const queenHealth = (bundle?.queen.health as { summary?: string; reasons?: string[] }) ?? {};
-  const queenQueues = (bundle?.queen.queues as Record<string, unknown>) ?? {};
-  const queenControl = (bundle?.queen.control as Record<string, unknown>) ?? {};
+  const octoNode = (bundle?.octo.octo as Record<string, unknown>) ?? {};
+  const octoHealth = (bundle?.octo.health as { summary?: string; reasons?: string[] }) ?? {};
+  const octoQueues = (bundle?.octo.queues as Record<string, unknown>) ?? {};
+  const octoControl = (bundle?.octo.control as Record<string, unknown>) ?? {};
   const logs = ((bundle?.system.logs as LogRow[]) ?? []);
 
-  const queenSteps = useMemo(() => buildQueenSteps(logs).slice(0, 10), [logs]);
+  const octoSteps = useMemo(() => buildOctoSteps(logs).slice(0, 10), [logs]);
 
-  const queenState = String(queenNode.state ?? "idle");
-  const followupQueues = asNumber(queenNode.followup_queues);
-  const internalQueues = asNumber(queenNode.internal_queues);
-  const followupTasks = asNumber(queenNode.followup_tasks);
-  const internalTasks = asNumber(queenNode.internal_tasks);
-  const controlPending = asNumber(queenControl.pending_requests);
-  const channelQueueDepth = asNumber(queenQueues.channel_queue_depth);
-  const activeChannelLabel = String(queenQueues.active_channel_label ?? queenQueues.active_channel ?? "Channel");
-  const currentQueenStep = queenSteps[0];
-  const recentQueenSteps = queenSteps.slice(1);
-  const waitingOn = deriveQueenWaitingOn({
-    state: queenState,
+  const octoState = String(octoNode.state ?? "idle");
+  const followupQueues = asNumber(octoNode.followup_queues);
+  const internalQueues = asNumber(octoNode.internal_queues);
+  const followupTasks = asNumber(octoNode.followup_tasks);
+  const internalTasks = asNumber(octoNode.internal_tasks);
+  const controlPending = asNumber(octoControl.pending_requests);
+  const channelQueueDepth = asNumber(octoQueues.channel_queue_depth);
+  const activeChannelLabel = String(octoQueues.active_channel_label ?? octoQueues.active_channel ?? "Channel");
+  const currentOctoStep = octoSteps[0];
+  const recentOctoSteps = octoSteps.slice(1);
+  const waitingOn = deriveOctoWaitingOn({
+    state: octoState,
     controlPending,
     channelQueueDepth,
     channelLabel: activeChannelLabel,
     followupQueues,
     internalQueues,
   });
-  const queenHeadline =
-    currentQueenStep?.title ??
-    (queenState === "idle" ? "Queen is idle right now" : queenHealth.summary ?? "Queen is actively orchestrating work");
-  const queenSubline =
-    currentQueenStep?.detail ??
-    ((queenHealth.reasons ?? []).join(" • ") || "No recent orchestration steps in the visible log window.");
+  const octoHeadline =
+    currentOctoStep?.title ??
+    (octoState === "idle" ? "Octo is idle right now" : octoHealth.summary ?? "Octo is actively orchestrating work");
+  const octoSubline =
+    currentOctoStep?.detail ??
+    ((octoHealth.reasons ?? []).join(" • ") || "No recent orchestration steps in the visible log window.");
 
   if (loading) {
     return <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading live operations view...</section>;
@@ -484,18 +484,18 @@ export function ControlCenterPage() {
         <section className="xl:flex xl:h-full xl:flex-col">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Queen</h3>
+              <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Octo</h3>
               <p className="mt-1 text-xs text-slate-500">What she is doing now, and the last orchestration steps.</p>
             </div>
-            <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${statusPill(queenState)}`}>
-              {queenState}
+            <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${statusPill(octoState)}`}>
+              {octoState}
             </span>
           </div>
 
           <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
             <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Now</p>
-            <p className="mt-2 text-lg font-semibold text-slate-100">{queenHeadline}</p>
-            <p className="mt-2 text-sm text-slate-400">{queenSubline}</p>
+            <p className="mt-2 text-lg font-semibold text-slate-100">{octoHeadline}</p>
+            <p className="mt-2 text-sm text-slate-400">{octoSubline}</p>
           </div>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
@@ -529,15 +529,15 @@ export function ControlCenterPage() {
           <div className="mt-4 xl:flex-1">
             <div className="mb-3 flex items-center justify-between">
               <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Recent steps</p>
-              <span className="text-xs text-slate-500">Last {queenSteps.length} visible events</span>
+              <span className="text-xs text-slate-500">Last {octoSteps.length} visible events</span>
             </div>
             <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
-              {recentQueenSteps.length === 0 ? (
+              {recentOctoSteps.length === 0 ? (
                 <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3 text-sm text-slate-400">
-                  No recent queen steps in the current log window.
+                  No recent octo steps in the current log window.
                 </div>
               ) : (
-                recentQueenSteps.map((step) => (
+                recentOctoSteps.map((step) => (
                   <article key={step.id} className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>

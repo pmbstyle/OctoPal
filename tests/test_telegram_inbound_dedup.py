@@ -4,7 +4,7 @@ import types
 if "telegramify_markdown" not in sys.modules:
     sys.modules["telegramify_markdown"] = types.SimpleNamespace(markdownify=lambda text: text)
 
-from broodmind.channels.telegram import handlers as telegram_handlers
+from octopal.channels.telegram import handlers as telegram_handlers
 
 
 def test_is_duplicate_inbound_message_detects_replayed_message_id() -> None:

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from broodmind.tools.catalog import get_tools
-from broodmind.tools.inventory import annotate_tool_specs, resolve_tool_metadata
-from broodmind.tools.registry import ToolSpec, filter_tools
+from octopal.tools.catalog import get_tools
+from octopal.tools.inventory import annotate_tool_specs, resolve_tool_metadata
+from octopal.tools.registry import ToolSpec, filter_tools
 
 
 def _tool(name: str, permission: str = "network") -> ToolSpec:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from broodmind.runtime.pending_turns import PendingTurnAggregator
+from octopal.runtime.pending_turns import PendingTurnAggregator
 
 
 def test_pending_turn_aggregator_merges_messages() -> None:

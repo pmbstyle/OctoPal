@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-import broodmind.tools.web.plan as plan_mod
+import octopal.tools.web.plan as plan_mod
 
 
 def test_fetch_plan_tool_uses_browser_extract_fallback(monkeypatch) -> None:

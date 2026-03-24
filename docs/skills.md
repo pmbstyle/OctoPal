@@ -1,6 +1,6 @@
-# Skills In BroodMind
+# Skills In Octopal
 
-BroodMind now supports a bundle-style skill layout inside the workspace.
+Octopal now supports a bundle-style skill layout inside the workspace.
 
 ## Bundle layout
 
@@ -34,7 +34,7 @@ description: Describe what this skill does
 scope: worker
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "primaryEnv": "MY_API_KEY",
       "requires": {
         "bins": ["python"],
@@ -50,19 +50,19 @@ Supported fields today:
 - `name`
 - `description`
 - `scope`
-- `metadata.broodmind.primaryEnv`
-- `metadata.broodmind.requires.bins`
-- `metadata.broodmind.requires.env`
-- `metadata.broodmind.requires.config`
-- `metadata.broodmind.runtime.python.packages`
-- `metadata.broodmind.runtime.node.packages`
-- `metadata.broodmind.runtime.node.packageManager`
+- `metadata.octopal.primaryEnv`
+- `metadata.octopal.requires.bins`
+- `metadata.octopal.requires.env`
+- `metadata.octopal.requires.config`
+- `metadata.octopal.runtime.python.packages`
+- `metadata.octopal.runtime.node.packages`
+- `metadata.octopal.runtime.node.packageManager`
 
 `metadata.openclaw` is also understood for compatibility when porting skill packs.
 
 ## Discovery and registry
 
-BroodMind builds the skill inventory from two sources:
+Octopal builds the skill inventory from two sources:
 
 1. Auto-discovered bundle directories under `workspace/skills/*/SKILL.md`
 2. Legacy `workspace/skills/registry.json`
@@ -78,20 +78,20 @@ When a valid bundle is present, `name` and `description` come from `SKILL.md`.
 
 ## Installing skills
 
-BroodMind can install external skills into the local workspace with:
+Octopal can install external skills into the local workspace with:
 
 ```bash
-uv run broodmind skill install <source>
+uv run octopal skill install <source>
 ```
 
 Supported source styles today:
 
 ```bash
-uv run broodmind skill install publisher/skill-pack
-uv run broodmind skill install clawhub:publisher/skill-pack
-uv run broodmind skill install https://host/path/to/SKILL.md
-uv run broodmind skill install https://host/path/to/skill.zip
-uv run broodmind skill install ./local-skill
+uv run octopal skill install publisher/skill-pack
+uv run octopal skill install clawhub:publisher/skill-pack
+uv run octopal skill install https://host/path/to/SKILL.md
+uv run octopal skill install https://host/path/to/skill.zip
+uv run octopal skill install ./local-skill
 ```
 
 Installed skills are copied into `workspace/skills/<skill-id>/` and tracked in:
@@ -103,19 +103,19 @@ workspace/skills/installed.json
 You can inspect all discovered skills, including local bundles and installer-managed entries, with:
 
 ```bash
-uv run broodmind skill list
-uv run broodmind skill list --json
+uv run octopal skill list
+uv run octopal skill list --json
 ```
 
 Lifecycle commands:
 
 ```bash
-uv run broodmind skill install <source>
-uv run broodmind skill list
-uv run broodmind skill update <skill-id>
-uv run broodmind skill trust <skill-id>
-uv run broodmind skill untrust <skill-id>
-uv run broodmind skill remove <skill-id>
+uv run octopal skill install <source>
+uv run octopal skill list
+uv run octopal skill update <skill-id>
+uv run octopal skill trust <skill-id>
+uv run octopal skill untrust <skill-id>
+uv run octopal skill remove <skill-id>
 ```
 
 `update` reinstalls from the stored source recorded in `installed.json`.
@@ -130,14 +130,14 @@ Script-backed skills now require isolated runtime envs stored under:
 workspace/.skill-envs/<skill-id>/
 ```
 
-This keeps the main BroodMind environment clean while still allowing per-skill dependencies.
+This keeps the main Octopal environment clean while still allowing per-skill dependencies.
 Any skill with scripts must be prepared before `run_skill_script` will execute it, but installer-managed skills now do this automatically during install and update.
 
 Typical flow:
 
 ```bash
-uv run broodmind skill install <source>
-uv run broodmind skill trust <skill-id>
+uv run octopal skill install <source>
+uv run octopal skill trust <skill-id>
 ```
 
 Python skills can declare packages like:
@@ -145,7 +145,7 @@ Python skills can declare packages like:
 ```md
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "python": {
           "packages": ["python-jobspy"]
@@ -160,7 +160,7 @@ Node or TypeScript skills can declare packages like:
 ```md
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "node": {
           "packages": ["tsx"],
@@ -171,14 +171,14 @@ metadata:
   }
 ```
 
-For third-party skills without BroodMind runtime metadata, BroodMind also falls back to:
+For third-party skills without Octopal runtime metadata, Octopal also falls back to:
 
 - `requirements.txt` for Python package lists
 - `package.json` `dependencies` and `devDependencies` for Node or TypeScript skills
 
 ### Trust model for imported scripts
 
-BroodMind treats imported script-backed skills more carefully than local ones.
+Octopal treats imported script-backed skills more carefully than local ones.
 
 - local workspace skills are trusted by default
 - local installs from a folder, local `SKILL.md`, or local `.zip` are trusted by default
@@ -188,19 +188,19 @@ BroodMind treats imported script-backed skills more carefully than local ones.
 When you want to allow script execution for an imported skill:
 
 ```bash
-uv run broodmind skill trust <skill-id>
+uv run octopal skill trust <skill-id>
 ```
 
 If the verification scan reports findings that need manual review, trust will ask you to confirm intent explicitly:
 
 ```bash
-uv run broodmind skill trust <skill-id> --force
+uv run octopal skill trust <skill-id> --force
 ```
 
 To block script execution again:
 
 ```bash
-uv run broodmind skill untrust <skill-id>
+uv run octopal skill untrust <skill-id>
 ```
 
 This trust flag affects script execution for both imported and local script-backed skills. The skill guidance in `SKILL.md` can still be read and used.
@@ -220,33 +220,33 @@ Install and update run this scan automatically. The scan currently records:
 If you need to repair a local or manually edited skill env, these maintenance commands are still available:
 
 ```bash
-uv run broodmind skill prepare-env <skill-id>
-uv run broodmind skill remove-env <skill-id>
+uv run octopal skill prepare-env <skill-id>
+uv run octopal skill remove-env <skill-id>
 ```
 
 This is a review aid, not a sandbox or malware detector.
 
 ## ClawHub compatibility
 
-BroodMind is compatible with the ClawHub install workflow at the UX level:
+Octopal is compatible with the ClawHub install workflow at the UX level:
 
 - ClawHub-style slug input like `publisher/skill-pack`
 - `clawhub:<slug>` explicit source prefix
 - frontmatter compatibility for `metadata.openclaw`
 
 This is intentionally not a Node wrapper around `npx clawhub@latest`.
-BroodMind uses its own installer and then normalizes the result into BroodMind's local skill bundle system.
+Octopal uses its own installer and then normalizes the result into Octopal's local skill bundle system.
 
 That means:
 
 - install UX is familiar to ClawHub/OpenClaw users
-- installed skills become normal BroodMind skill bundles
-- BroodMind keeps its own manifest and runtime policy model
+- installed skills become normal Octopal skill bundles
+- Octopal keeps its own manifest and runtime policy model
 - imported script-backed skills can be reviewed locally before being trusted
 
 ## Direct SKILL.md URLs
 
-When the source points directly to `SKILL.md`, BroodMind creates a minimal bundle from that file.
+When the source points directly to `SKILL.md`, Octopal creates a minimal bundle from that file.
 
 This works best for markdown-only skills.
 
@@ -276,7 +276,7 @@ Current requirement checks:
 Config requirements are currently checked via env vars named like:
 
 ```text
-BROODMIND_SKILL_CONFIG_<KEY>
+OCTOPAL_SKILL_CONFIG_<KEY>
 ```
 
 ## Script execution

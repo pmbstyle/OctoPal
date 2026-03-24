@@ -3,12 +3,12 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
-from broodmind.infrastructure.mcp.manager import (
+from octopal.infrastructure.mcp.manager import (
     MCPManager,
     MCPServerConfig,
     _classify_mcp_call_error,
 )
-from broodmind.runtime.tool_errors import MCPToolCallError
+from octopal.runtime.tool_errors import MCPToolCallError
 
 
 def test_mcp_manager_schedules_self_healing_reconnect(tmp_path, monkeypatch) -> None:
@@ -26,8 +26,8 @@ def test_mcp_manager_schedules_self_healing_reconnect(tmp_path, monkeypatch) -> 
         calls.append(config.id)
         return []
 
-    monkeypatch.setattr("broodmind.infrastructure.mcp.manager._MCP_RECONNECT_BASE_SECONDS", 0.01)
-    monkeypatch.setattr("broodmind.infrastructure.mcp.manager._MCP_RECONNECT_MAX_SECONDS", 0.01)
+    monkeypatch.setattr("octopal.infrastructure.mcp.manager._MCP_RECONNECT_BASE_SECONDS", 0.01)
+    monkeypatch.setattr("octopal.infrastructure.mcp.manager._MCP_RECONNECT_MAX_SECONDS", 0.01)
     manager.connect_server = _fake_connect  # type: ignore[method-assign]
 
     async def scenario():
@@ -53,8 +53,8 @@ def test_mcp_manager_does_not_reconnect_after_intentional_disconnect(tmp_path, m
         calls.append(config.id)
         return []
 
-    monkeypatch.setattr("broodmind.infrastructure.mcp.manager._MCP_RECONNECT_BASE_SECONDS", 0.01)
-    monkeypatch.setattr("broodmind.infrastructure.mcp.manager._MCP_RECONNECT_MAX_SECONDS", 0.01)
+    monkeypatch.setattr("octopal.infrastructure.mcp.manager._MCP_RECONNECT_BASE_SECONDS", 0.01)
+    monkeypatch.setattr("octopal.infrastructure.mcp.manager._MCP_RECONNECT_MAX_SECONDS", 0.01)
     manager.connect_server = _fake_connect  # type: ignore[method-assign]
 
     async def scenario():

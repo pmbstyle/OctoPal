@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from broodmind.gateway.dashboard import _build_noise_control, _build_slo_metrics
-from broodmind.infrastructure.store.models import WorkerRecord
+from octopal.gateway.dashboard import _build_noise_control, _build_slo_metrics
+from octopal.infrastructure.store.models import WorkerRecord
 
 
 def _worker(worker_id: str, status: str, updated_at: datetime, template_id: str = "coder") -> WorkerRecord:
@@ -22,7 +22,7 @@ def test_build_slo_metrics_produces_expected_keys() -> None:
     now = datetime.now(UTC)
     services = [
         {"id": "gateway", "status": "ok"},
-        {"id": "queen", "status": "warning"},
+        {"id": "octo", "status": "warning"},
         {"id": "telegram", "status": "ok"},
         {"id": "exec_run", "status": "ok"},
     ]
@@ -47,7 +47,7 @@ def test_build_noise_control_reduces_duplicates() -> None:
         {"service": "gateway", "level": "error", "event": "timeout to provider"},
         {"service": "gateway", "level": "error", "event": "timeout to provider"},
         {"service": "gateway", "level": "warning", "event": "queue backlog high"},
-        {"service": "queen", "level": "warning", "event": "queue backlog high"},
+        {"service": "octo", "level": "warning", "event": "queue backlog high"},
     ]
     noise = _build_noise_control(logs=logs)
     assert noise["raw_alerts"] == 4

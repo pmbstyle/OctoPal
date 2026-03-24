@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from broodmind.cli.main import _is_webapp_build_stale
+from octopal.cli.main import _is_webapp_build_stale
 
 
 def test_webapp_build_is_stale_when_dist_missing(tmp_path) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from broodmind.channels.whatsapp.routes import register_whatsapp_routes
+from octopal.channels.whatsapp.routes import register_whatsapp_routes
 
 
 class _FakeRuntime:
@@ -33,7 +33,7 @@ def test_whatsapp_inbound_route_accepts_valid_token() -> None:
     client = TestClient(app)
     response = client.post(
         "/api/channels/whatsapp/inbound",
-        headers={"x-broodmind-whatsapp-token": "secret"},
+        headers={"x-octopal-whatsapp-token": "secret"},
         json={"sender": "+1", "text": "hi"},
     )
 

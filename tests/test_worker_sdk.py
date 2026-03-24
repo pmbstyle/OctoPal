@@ -5,12 +5,12 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from broodmind.runtime.intents.types import IntentRequest
-from broodmind.runtime.tool_errors import ToolBridgeError
-from broodmind.runtime.workers.contracts import WorkerResult, WorkerSpec
-from broodmind.worker_sdk.intents import http_get
-from broodmind.worker_sdk.protocol import VALID_MESSAGE_TYPES
-from broodmind.worker_sdk.worker import Worker
+from octopal.runtime.intents.types import IntentRequest
+from octopal.runtime.tool_errors import ToolBridgeError
+from octopal.runtime.workers.contracts import WorkerResult, WorkerSpec
+from octopal.worker_sdk.intents import http_get
+from octopal.worker_sdk.protocol import VALID_MESSAGE_TYPES
+from octopal.worker_sdk.worker import Worker
 
 
 def _worker() -> Worker:
@@ -41,7 +41,7 @@ def test_http_get_builds_expected_intent_request() -> None:
 
 def test_valid_message_types_exposes_expected_protocol_surface() -> None:
     assert "intent_request" in VALID_MESSAGE_TYPES
-    assert "queen_tool_result" in VALID_MESSAGE_TYPES
+    assert "octo_tool_result" in VALID_MESSAGE_TYPES
     assert "shutdown" in VALID_MESSAGE_TYPES
 
 
@@ -124,7 +124,7 @@ def test_worker_request_intent_returns_permit_when_hash_matches(monkeypatch) -> 
             },
         }
 
-    from broodmind.worker_sdk import worker as worker_module
+    from octopal.worker_sdk import worker as worker_module
 
     async def _fake_read_message_bound() -> dict:
         return {
@@ -245,12 +245,12 @@ def test_worker_tool_bridge_calls_handle_success_and_errors(monkeypatch) -> None
         "arguments": {"q": "docs"},
     }
 
-    async def _queen_success() -> dict:
-        return {"type": "queen_tool_result", "ok": True, "result": {"status": "ok"}}
+    async def _octo_success() -> dict:
+        return {"type": "octo_tool_result", "ok": True, "result": {"status": "ok"}}
 
-    monkeypatch.setattr(worker, "_read_message", _queen_success)
-    queen_result = asyncio.run(worker.call_queen_tool("manage_canon", {"action": "list"}))
-    assert queen_result == {"status": "ok"}
+    monkeypatch.setattr(worker, "_read_message", _octo_success)
+    octo_result = asyncio.run(worker.call_octo_tool("manage_canon", {"action": "list"}))
+    assert octo_result == {"status": "ok"}
 
     async def _mcp_error() -> dict:
         return {
@@ -274,13 +274,13 @@ def test_worker_tool_bridge_calls_handle_success_and_errors(monkeypatch) -> None
     else:
         raise AssertionError("Expected MCP error")
 
-    async def _queen_error() -> dict:
-        return {"type": "queen_tool_result", "ok": False, "error": "denied"}
+    async def _octo_error() -> dict:
+        return {"type": "octo_tool_result", "ok": False, "error": "denied"}
 
-    monkeypatch.setattr(worker, "_read_message", _queen_error)
+    monkeypatch.setattr(worker, "_read_message", _octo_error)
     try:
-        asyncio.run(worker.call_queen_tool("manage_canon", {"action": "list"}))
+        asyncio.run(worker.call_octo_tool("manage_canon", {"action": "list"}))
     except RuntimeError as exc:
         assert "denied" in str(exc)
     else:
-        raise AssertionError("Expected Queen tool bridge failure")
+        raise AssertionError("Expected Octo tool bridge failure")

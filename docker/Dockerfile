@@ -21,5 +21,5 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 
 FROM base AS worker
 
-# The launcher invokes: python -m broodmind.workers.entrypoint <spec>
+# The launcher invokes: python -m octopal.workers.entrypoint <spec>
 # Keeping ENTRYPOINT empty to allow explicit command in DockerLauncher.

@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from broodmind.tools.skills.runtime_envs import (
+from octopal.tools.skills.runtime_envs import (
     get_skill_env_status,
     prepare_skill_env,
     remove_skill_env,
@@ -22,7 +22,7 @@ name: job-search
 description: Search jobs
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "python": {
           "packages": ["python-jobspy"]
@@ -55,7 +55,7 @@ name: job-search
 description: Search jobs
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "python": {
           "packages": ["python-jobspy"]
@@ -78,7 +78,7 @@ metadata:
             (scripts_path / python_name).write_text("", encoding="utf-8")
         return type("Completed", (), {"returncode": 0})()
 
-    monkeypatch.setattr("broodmind.tools.skills.runtime_envs.subprocess.run", _fake_run)
+    monkeypatch.setattr("octopal.tools.skills.runtime_envs.subprocess.run", _fake_run)
 
     payload = prepare_skill_env("job-search", workspace_dir=workspace_dir)
 
@@ -111,7 +111,7 @@ name: ui-helper
 description: Run TS helpers
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "node": {
           "packages": ["tsx"],
@@ -134,8 +134,8 @@ metadata:
             (node_bin / binary_name).write_text("", encoding="utf-8")
         return type("Completed", (), {"returncode": 0})()
 
-    monkeypatch.setattr("broodmind.tools.skills.runtime_envs.subprocess.run", _fake_run)
-    monkeypatch.setattr("broodmind.tools.skills.runtime_envs.shutil.which", lambda name: "npm" if name in {"npm", "node"} else None)
+    monkeypatch.setattr("octopal.tools.skills.runtime_envs.subprocess.run", _fake_run)
+    monkeypatch.setattr("octopal.tools.skills.runtime_envs.shutil.which", lambda name: "npm" if name in {"npm", "node"} else None)
 
     payload = prepare_skill_env("ui-helper", workspace_dir=workspace_dir)
 
@@ -243,7 +243,7 @@ name: legacy-job
 description: Legacy job search
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "python": {
           "packages": ["requests"]
@@ -294,7 +294,7 @@ name: job-search
 description: Search jobs
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "python": {
           "packages": ["python-jobspy"]
@@ -324,7 +324,7 @@ metadata:
             return type("Completed", (), {"returncode": 0})()
         raise subprocess.CalledProcessError(1, command, "boom", "boom")
 
-    monkeypatch.setattr("broodmind.tools.skills.runtime_envs.subprocess.run", _failing_run)
+    monkeypatch.setattr("octopal.tools.skills.runtime_envs.subprocess.run", _failing_run)
 
     try:
         prepare_skill_env("job-search", workspace_dir=workspace_dir)

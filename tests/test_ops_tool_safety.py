@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import broodmind.tools.ops.management as ops_tools
-from broodmind.tools.ops.management import docker_compose_control, test_run
+import octopal.tools.ops.management as ops_tools
+from octopal.tools.ops.management import docker_compose_control, test_run
 
 
 def test_test_run_rejects_shell_chaining(tmp_path: Path) -> None:
@@ -20,7 +20,7 @@ def test_docker_exec_preserves_quoted_args(monkeypatch, tmp_path: Path) -> None:
         return 0, "ok", ""
 
     monkeypatch.setattr(ops_tools, "_run_command", fake_run_command)
-    monkeypatch.setenv("BROODMIND_ALLOWED_SERVICES", "api")
+    monkeypatch.setenv("OCTOPAL_ALLOWED_SERVICES", "api")
 
     workspace = tmp_path / "workspace"
     workspace.mkdir(parents=True, exist_ok=True)

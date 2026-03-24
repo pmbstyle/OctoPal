@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 
 import httpx
 
-from broodmind.infrastructure.config.settings import Settings
-from broodmind.infrastructure.providers.base import Message
-from broodmind.infrastructure.providers.openrouter_provider import (
+from octopal.infrastructure.config.settings import Settings
+from octopal.infrastructure.providers.base import Message
+from octopal.infrastructure.providers.openrouter_provider import (
     OpenRouterProvider,
     _extract_content,
     _extract_tool_calls,
@@ -17,27 +16,27 @@ from broodmind.infrastructure.providers.openrouter_provider import (
 
 
 def _settings(**overrides) -> Settings:
-    defaults = dict(
-        telegram_bot_token="test-token",
-        llm_provider="openrouter",
-        litellm_num_retries=0,
-        litellm_timeout=30.0,
-        litellm_fallbacks=None,
-        litellm_drop_params=True,
-        litellm_caching=False,
-        openrouter_api_key="router-key",
-        openrouter_model="anthropic/claude-sonnet-4",
-        openrouter_base_url="https://openrouter.ai/api/v1/",
-        openrouter_timeout=30.0,
-        zai_api_key=None,
-        zai_model="glm-5",
-        zai_base_url="https://api.z.ai/api/coding/paas/v4",
-        zai_chat_path="/chat/completions",
-        zai_timeout_seconds=45.0,
-        zai_connect_timeout_seconds=15.0,
-        zai_accept_language="en-US,en",
-        debug_prompts=False,
-    )
+    defaults = {
+        "telegram_bot_token": "test-token",
+        "llm_provider": "openrouter",
+        "litellm_num_retries": 0,
+        "litellm_timeout": 30.0,
+        "litellm_fallbacks": None,
+        "litellm_drop_params": True,
+        "litellm_caching": False,
+        "openrouter_api_key": "router-key",
+        "openrouter_model": "anthropic/claude-sonnet-4",
+        "openrouter_base_url": "https://openrouter.ai/api/v1/",
+        "openrouter_timeout": 30.0,
+        "zai_api_key": None,
+        "zai_model": "glm-5",
+        "zai_base_url": "https://api.z.ai/api/coding/paas/v4",
+        "zai_chat_path": "/chat/completions",
+        "zai_timeout_seconds": 45.0,
+        "zai_connect_timeout_seconds": 15.0,
+        "zai_accept_language": "en-US,en",
+        "debug_prompts": False,
+    }
     defaults.update(overrides)
     return Settings.model_construct(**defaults)
 
@@ -121,7 +120,7 @@ def test_complete_posts_expected_payload(monkeypatch) -> None:
     _AsyncClientStub.response_payload = {"choices": [{"message": {"content": "router-ok"}}]}
     _AsyncClientStub.response_status = 200
     _AsyncClientStub.captured_calls = []
-    monkeypatch.setattr("broodmind.infrastructure.providers.openrouter_provider.httpx.AsyncClient", _AsyncClientStub)
+    monkeypatch.setattr("octopal.infrastructure.providers.openrouter_provider.httpx.AsyncClient", _AsyncClientStub)
 
     provider = OpenRouterProvider(_settings())
     result = asyncio.run(provider.complete([Message(role="user", content="hello")], temperature=0.7))
@@ -144,7 +143,7 @@ def test_complete_with_tools_returns_content_and_tool_calls(monkeypatch) -> None
     }
     _AsyncClientStub.response_status = 200
     _AsyncClientStub.captured_calls = []
-    monkeypatch.setattr("broodmind.infrastructure.providers.openrouter_provider.httpx.AsyncClient", _AsyncClientStub)
+    monkeypatch.setattr("octopal.infrastructure.providers.openrouter_provider.httpx.AsyncClient", _AsyncClientStub)
 
     provider = OpenRouterProvider(_settings())
     result = asyncio.run(
@@ -184,7 +183,7 @@ def test_complete_raises_runtime_error_for_http_failure(monkeypatch) -> None:
     _AsyncClientStub.response_payload = {"error": "bad"}
     _AsyncClientStub.response_status = 401
     _AsyncClientStub.captured_calls = []
-    monkeypatch.setattr("broodmind.infrastructure.providers.openrouter_provider.httpx.AsyncClient", _AsyncClientStub)
+    monkeypatch.setattr("octopal.infrastructure.providers.openrouter_provider.httpx.AsyncClient", _AsyncClientStub)
 
     provider = OpenRouterProvider(_settings())
 

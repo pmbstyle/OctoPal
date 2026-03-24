@@ -4,11 +4,11 @@ import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 
-from broodmind.infrastructure.config.settings import Settings
-from broodmind.infrastructure.store.models import WorkerTemplateRecord
-from broodmind.runtime.workers.contracts import Capability, TaskRequest, WorkerResult
-from broodmind.runtime.workers.runtime import WorkerRuntime
-from broodmind.tools.registry import ToolSpec
+from octopal.infrastructure.config.settings import Settings
+from octopal.infrastructure.store.models import WorkerTemplateRecord
+from octopal.runtime.workers.contracts import Capability, TaskRequest, WorkerResult
+from octopal.runtime.workers.runtime import WorkerRuntime
+from octopal.tools.registry import ToolSpec
 
 
 def test_runtime_does_not_auto_inject_global_mcp_tools(tmp_path: Path) -> None:
@@ -211,4 +211,4 @@ def test_runtime_launch_env_includes_workspace_dir(tmp_path: Path) -> None:
 
     env = captured["env"]
     assert isinstance(env, dict)
-    assert env["BROODMIND_WORKSPACE_DIR"] == str(runtime.workspace_dir.resolve())
+    assert env["OCTOPAL_WORKSPACE_DIR"] == str(runtime.workspace_dir.resolve())

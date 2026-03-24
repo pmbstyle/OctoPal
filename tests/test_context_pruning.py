@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from broodmind.runtime.queen.prompt_builder import _prune_recent_history_window
+from octopal.runtime.octo.prompt_builder import _prune_recent_history_window
 
 
 def test_context_pruning_keeps_recent_tail_under_budget() -> None:

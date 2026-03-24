@@ -4,18 +4,18 @@ import json
 import sys
 from pathlib import Path
 
-from broodmind.tools.skills.management import (
+from octopal.tools.skills.management import (
     _load_skill_inventory,
-    _tool_run_skill_script,
+    _run_skill,
     _tool_add_skill,
     _tool_list_skills,
     _tool_remove_skill,
+    _tool_run_skill_script,
     _tool_use_skill,
-    _run_skill,
-    remove_skill,
-    set_skill_trust,
     get_registered_skill_tools,
     get_skill_management_tools,
+    remove_skill,
+    set_skill_trust,
 )
 
 
@@ -34,7 +34,7 @@ scope: worker
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     inventory = _load_skill_inventory(workspace_dir)
 
@@ -68,7 +68,7 @@ description: Generate images from prompts
                         "name": "Image Lab Override",
                         "description": "Registry override wins",
                         "path": "skills/image-lab/SKILL.md",
-                        "scope": "queen",
+                        "scope": "octo",
                         "enabled": False,
                     }
                 ],
@@ -76,7 +76,7 @@ description: Generate images from prompts
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     inventory = _load_skill_inventory(workspace_dir)
 
@@ -85,7 +85,7 @@ description: Generate images from prompts
     assert inventory[0]["source"] == "registry"
     assert inventory[0]["name"] == "image-lab"
     assert inventory[0]["description"] == "Generate images from prompts"
-    assert inventory[0]["scope"] == "queen"
+    assert inventory[0]["scope"] == "octo"
     assert inventory[0]["enabled"] is False
 
 
@@ -122,7 +122,7 @@ scope: worker
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     inventory = _load_skill_inventory(workspace_dir)
 
@@ -158,7 +158,7 @@ def test_load_skill_inventory_keeps_legacy_registry_skill(tmp_path: Path, monkey
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     inventory = _load_skill_inventory(workspace_dir)
 
@@ -180,7 +180,7 @@ description: Helps write copy
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     payload = json.loads(_tool_add_skill({"path": "skills/writer"}, {}))
 
@@ -203,7 +203,7 @@ description: Helps write copy
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     tools = get_registered_skill_tools()
 
@@ -225,7 +225,7 @@ description: Helps write copy
         encoding="utf-8",
     )
     (scripts_dir / "noop.py").write_text("print('ok')\n", encoding="utf-8")
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     inventory = _load_skill_inventory(workspace_dir)
     payload = json.loads(_run_skill(inventory[0], {}, {"worker": object()}))
@@ -256,12 +256,12 @@ description: Helps write copy
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     payload = json.loads(_tool_use_skill({"skill_id": "writer"}, {"worker": object()}))
 
     assert payload["skill_id"] == "writer"
-    assert "Skills are internal BroodMind tools" in payload["usage_hint"]
+    assert "Skills are internal Octopal tools" in payload["usage_hint"]
     assert "# Writer" in payload["guidance"]
 
 
@@ -295,9 +295,9 @@ print(json.dumps(payload))
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
     monkeypatch.setattr(
-        "broodmind.tools.skills.management.get_skill_env_status",
+        "octopal.tools.skills.management.get_skill_env_status",
         lambda skill_id, workspace_dir: {
             "skill_id": skill_id,
             "kind": "python",
@@ -314,7 +314,7 @@ print(json.dumps(payload))
         },
     )
     monkeypatch.setattr(
-        "broodmind.tools.skills.management.resolve_skill_runtime_execution",
+        "octopal.tools.skills.management.resolve_skill_runtime_execution",
         lambda skill_id, workspace_dir, script_path, explicit_runner: {
             "runner": [sys.executable, str(script_path)],
             "env": None,
@@ -348,9 +348,9 @@ description: Helps write copy
         encoding="utf-8",
     )
     (scripts_dir / "ok.py").write_text("print('ok')\n", encoding="utf-8")
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
     monkeypatch.setattr(
-        "broodmind.tools.skills.management.get_skill_env_status",
+        "octopal.tools.skills.management.get_skill_env_status",
         lambda skill_id, workspace_dir: {
             "skill_id": skill_id,
             "kind": "python",
@@ -385,7 +385,7 @@ name: image-lab
 description: Generate images
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "primaryEnv": "OPENAI_API_KEY",
       "requires": {
         "bins": ["definitely_missing_binary"],
@@ -398,7 +398,7 @@ metadata:
         encoding="utf-8",
     )
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     payload = json.loads(_tool_list_skills({}, {}))
 
@@ -447,7 +447,7 @@ description: Helps write copy
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     payload = json.loads(_tool_list_skills({}, {}))
 
@@ -472,7 +472,7 @@ description: Helps write copy
         encoding="utf-8",
     )
     (scripts_dir / "noop.py").write_text("print('ok')\n", encoding="utf-8")
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     set_skill_trust("writer", workspace_dir=workspace_dir, trusted=False)
     payload = json.loads(_tool_list_skills({}, {}))
@@ -495,7 +495,7 @@ description: Helps write copy
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     payload = remove_skill("writer", workspace_dir=workspace_dir)
 
@@ -516,7 +516,7 @@ description: Helps write copy
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     payload = json.loads(_tool_remove_skill({"id": "writer"}, {}))
 
@@ -537,7 +537,7 @@ description: Generate images
 scope: worker
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "requires": {
         "env": ["OPENAI_API_KEY"]
       }
@@ -549,7 +549,7 @@ metadata:
     )
     (scripts_dir / "noop.py").write_text("print('ok')\n", encoding="utf-8")
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     result = _tool_run_skill_script(
         {"skill_id": "image-lab", "script": "noop.py"},
@@ -600,7 +600,7 @@ scope: worker
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     result = _tool_run_skill_script(
         {"skill_id": "writer", "script": "noop.py"},
@@ -623,7 +623,7 @@ description: Search jobs
 scope: worker
 metadata:
   {
-    "broodmind": {
+    "octopal": {
       "runtime": {
         "python": {
           "packages": ["python-jobspy"]
@@ -636,7 +636,7 @@ metadata:
         encoding="utf-8",
     )
     (scripts_dir / "jobspy.py").write_text("print('ok')\n", encoding="utf-8")
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     result = _tool_run_skill_script(
         {"skill_id": "job-search", "script": "jobspy.py"},
@@ -662,7 +662,7 @@ scope: worker
         encoding="utf-8",
     )
     (scripts_dir / "tool.py").write_text("print('ok')\n", encoding="utf-8")
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace_dir))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace_dir))
 
     result = _tool_run_skill_script(
         {"skill_id": "writer", "script": "tool.py"},

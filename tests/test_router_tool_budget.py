@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import asyncio
 
-from broodmind.infrastructure.providers.base import Message
-from broodmind.runtime.queen.router import (
+from octopal.infrastructure.providers.base import Message
+from octopal.runtime.octo.router import (
     _budget_tool_specs,
     _finalize_response,
     _recover_textual_tool_call,
     _sanitize_messages_for_complete,
     _shrink_tool_specs_for_retry,
 )
-from broodmind.tools.registry import ToolSpec
-from broodmind.tools.tools import get_tools
+from octopal.tools.registry import ToolSpec
+from octopal.tools.tools import get_tools
 
 
 def test_budget_keeps_internal_worker_and_scheduler_tools() -> None:
@@ -68,7 +68,7 @@ def test_route_falls_back_when_tool_run_ends_with_empty_response(monkeypatch) ->
         async def add_message(self, role, content, metadata=None):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         store = object()
         canon = object()
         internal_progress_send = None
@@ -87,7 +87,7 @@ def test_route_falls_back_when_tool_run_ends_with_empty_response(monkeypatch) ->
         def peek_context_wakeup(self, chat_id: int) -> str:
             return ""
 
-    async def fake_build_queen_prompt(**kwargs):
+    async def fake_build_octo_prompt(**kwargs):
         return [Message(role="user", content=str(kwargs["user_text"]))]
 
     async def fake_build_plan(provider, messages, has_tools):
@@ -96,7 +96,7 @@ def test_route_falls_back_when_tool_run_ends_with_empty_response(monkeypatch) ->
     def dummy_tool(args, ctx):
         return {"ok": True}
 
-    def fake_get_queen_tools(queen, chat_id):
+    def fake_get_octo_tools(octo, chat_id):
         return (
             [
                 ToolSpec(
@@ -107,20 +107,20 @@ def test_route_falls_back_when_tool_run_ends_with_empty_response(monkeypatch) ->
                     handler=dummy_tool,
                 )
             ],
-            {"queen": queen, "chat_id": chat_id},
+            {"octo": octo, "chat_id": chat_id},
         )
 
-    import broodmind.runtime.queen.router as router
+    import octopal.runtime.octo.router as router
 
-    monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
-    monkeypatch.setattr(router, "_get_queen_tools", fake_get_queen_tools)
+    monkeypatch.setattr(router, "_get_octo_tools", fake_get_octo_tools)
 
     async def scenario() -> None:
         provider = DummyProvider()
-        queen = DummyQueen()
+        octo = DummyOcto()
         response = await router.route_or_reply(
-            queen,
+            octo,
             provider,
             DummyMemory(),
             "check this",
@@ -156,7 +156,7 @@ def test_route_retries_image_message_with_saved_file_paths(monkeypatch, tmp_path
         async def add_message(self, role, content, metadata=None):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         store = object()
         canon = object()
         internal_progress_send = None
@@ -171,7 +171,7 @@ def test_route_retries_image_message_with_saved_file_paths(monkeypatch, tmp_path
         def peek_context_wakeup(self, chat_id: int) -> str:
             return ""
 
-    async def fake_build_queen_prompt(**kwargs):
+    async def fake_build_octo_prompt(**kwargs):
         return [
             Message(
                 role="user",
@@ -185,16 +185,16 @@ def test_route_retries_image_message_with_saved_file_paths(monkeypatch, tmp_path
     async def fake_build_plan(provider, messages, has_tools):
         return None
 
-    import broodmind.runtime.queen.router as router
+    import octopal.runtime.octo.router as router
 
-    monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(tmp_path))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(tmp_path))
 
     async def scenario() -> None:
         provider = DummyProvider()
         response = await router.route_or_reply(
-            DummyQueen(),
+            DummyOcto(),
             provider,
             DummyMemory(),
             "what is in this image?",
@@ -234,7 +234,7 @@ def test_route_retries_with_fewer_tools_after_invalid_tool_payload(monkeypatch) 
         async def add_message(self, role, content, metadata=None):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         store = object()
         canon = object()
         internal_progress_send = None
@@ -249,13 +249,13 @@ def test_route_retries_with_fewer_tools_after_invalid_tool_payload(monkeypatch) 
         def peek_context_wakeup(self, chat_id: int) -> str:
             return ""
 
-    async def fake_build_queen_prompt(**kwargs):
+    async def fake_build_octo_prompt(**kwargs):
         return [Message(role="user", content=str(kwargs["user_text"]))]
 
     async def fake_build_plan(provider, messages, has_tools):
         return None
 
-    def fake_get_queen_tools(queen, chat_id):
+    def fake_get_octo_tools(octo, chat_id):
         tools = [
             ToolSpec(
                 name=f"dummy_tool_{idx}",
@@ -266,18 +266,18 @@ def test_route_retries_with_fewer_tools_after_invalid_tool_payload(monkeypatch) 
             )
             for idx in range(20)
         ]
-        return tools, {"queen": queen, "chat_id": chat_id}
+        return tools, {"octo": octo, "chat_id": chat_id}
 
-    import broodmind.runtime.queen.router as router
+    import octopal.runtime.octo.router as router
 
-    monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
-    monkeypatch.setattr(router, "_get_queen_tools", fake_get_queen_tools)
+    monkeypatch.setattr(router, "_get_octo_tools", fake_get_octo_tools)
 
     async def scenario() -> None:
         provider = DummyProvider()
         response = await router.route_or_reply(
-            DummyQueen(),
+            DummyOcto(),
             provider,
             DummyMemory(),
             "check this",
@@ -303,7 +303,7 @@ def test_route_passes_saved_file_paths_into_prompt(monkeypatch) -> None:
         async def add_message(self, role, content, metadata=None):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         store = object()
         canon = object()
         internal_progress_send = None
@@ -320,21 +320,21 @@ def test_route_passes_saved_file_paths_into_prompt(monkeypatch) -> None:
 
     captured_kwargs = {}
 
-    async def fake_build_queen_prompt(**kwargs):
+    async def fake_build_octo_prompt(**kwargs):
         captured_kwargs.update(kwargs)
         return [Message(role="user", content=str(kwargs["user_text"]))]
 
     async def fake_build_plan(provider, messages, has_tools):
         return None
 
-    import broodmind.runtime.queen.router as router
+    import octopal.runtime.octo.router as router
 
-    monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
 
     async def scenario() -> None:
         response = await router.route_or_reply(
-            DummyQueen(),
+            DummyOcto(),
             DummyProvider(),
             DummyMemory(),
             "what is in this image?",
@@ -361,7 +361,7 @@ def test_plain_completion_does_not_stream_for_telegram(monkeypatch) -> None:
         async def add_message(self, role, content, metadata=None):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         store = object()
         canon = object()
         is_ws_active = False
@@ -376,20 +376,20 @@ def test_plain_completion_does_not_stream_for_telegram(monkeypatch) -> None:
         def peek_context_wakeup(self, chat_id: int) -> str:
             return ""
 
-    async def fake_build_queen_prompt(**kwargs):
+    async def fake_build_octo_prompt(**kwargs):
         return [Message(role="user", content=str(kwargs["user_text"]))]
 
     async def fake_build_plan(provider, messages, has_tools):
         return None
 
-    import broodmind.runtime.queen.router as router
+    import octopal.runtime.octo.router as router
 
-    monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
 
     async def scenario() -> None:
         response = await router.route_or_reply(
-            DummyQueen(),
+            DummyOcto(),
             DummyProvider(),
             DummyMemory(),
             "hello",
@@ -414,7 +414,7 @@ def test_plain_completion_can_stream_for_websocket(monkeypatch) -> None:
         async def add_message(self, role, content, metadata=None):
             return None
 
-    class DummyQueen:
+    class DummyOcto:
         store = object()
         canon = object()
         is_ws_active = True
@@ -434,21 +434,21 @@ def test_plain_completion_can_stream_for_websocket(monkeypatch) -> None:
         async def internal_progress_send(self, chat_id: int, state: str, text: str, meta: dict) -> None:
             self.progress.append((state, text))
 
-    async def fake_build_queen_prompt(**kwargs):
+    async def fake_build_octo_prompt(**kwargs):
         return [Message(role="user", content=str(kwargs["user_text"]))]
 
     async def fake_build_plan(provider, messages, has_tools):
         return None
 
-    import broodmind.runtime.queen.router as router
+    import octopal.runtime.octo.router as router
 
-    monkeypatch.setattr(router, "build_queen_prompt", fake_build_queen_prompt)
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
     monkeypatch.setattr(router, "_build_plan", fake_build_plan)
 
     async def scenario() -> None:
-        queen = DummyQueen()
+        octo = DummyOcto()
         response = await router.route_or_reply(
-            queen,
+            octo,
             DummyProvider(),
             DummyMemory(),
             "hello",
@@ -456,7 +456,7 @@ def test_plain_completion_can_stream_for_websocket(monkeypatch) -> None:
             "",
         )
         assert response == "Final reply"
-        assert queen.progress == [("partial", "partial text")]
+        assert octo.progress == [("partial", "partial text")]
 
     asyncio.run(scenario())
 

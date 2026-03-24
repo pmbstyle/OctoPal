@@ -157,15 +157,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/dashboard/v2/queen": {
+    "/api/dashboard/v2/octo": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Dashboard V2 Queen */
-        get: operations["dashboard_v2_queen_api_dashboard_v2_queen_get"];
+        /** Dashboard V2 Octo */
+        get: operations["dashboard_v2_octo_api_dashboard_v2_octo_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -307,8 +307,8 @@ export interface components {
                 [key: string]: number;
             };
         };
-        /** DashboardQueenV2 */
-        DashboardQueenV2: {
+        /** DashboardOctoV2 */
+        DashboardOctoV2: {
             /** Contract Version */
             contract_version: string;
             /** Generated At */
@@ -317,8 +317,8 @@ export interface components {
             filters: {
                 [key: string]: unknown;
             };
-            /** Queen */
-            queen: {
+            /** Octo */
+            octo: {
                 [key: string]: unknown;
             };
             /** Queues */
@@ -682,7 +682,7 @@ export interface operations {
             };
         };
     };
-    dashboard_v2_queen_api_dashboard_v2_queen_get: {
+    dashboard_v2_octo_api_dashboard_v2_octo_get: {
         parameters: {
             query?: {
                 last?: number;
@@ -702,7 +702,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["DashboardQueenV2"];
+                    "application/json": components["schemas"]["DashboardOctoV2"];
                 };
             };
             /** @description Validation Error */

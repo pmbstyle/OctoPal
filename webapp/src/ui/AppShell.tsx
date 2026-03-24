@@ -4,8 +4,8 @@ import { NavLink, Outlet } from "react-router-dom";
 import { GlobalFiltersBar } from "./GlobalFiltersBar";
 import type { DashboardFilters } from "./GlobalFiltersBar";
 
-const filtersStorageKey = "broodmind.webapp.filters";
-const tokenStorageKey = "broodmind.webapp.token";
+const filtersStorageKey = "octopal.webapp.filters";
+const tokenStorageKey = "octopal.webapp.token";
 
 const defaultFilters: DashboardFilters = {
   windowMinutes: 60,
@@ -23,7 +23,7 @@ const navItems = [
   { to: "/", label: "Control" },
   { to: "/overview", label: "Overview" },
   { to: "/workers", label: "Workers" },
-  { to: "/queen", label: "Queen" },
+  { to: "/octo", label: "Octo" },
   { to: "/incidents", label: "Incidents" },
   { to: "/system", label: "System" },
   { to: "/actions", label: "Actions" },
@@ -75,12 +75,12 @@ export function AppShell() {
     <div className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto w-full max-w-7xl px-4 py-6 md:px-8 md:py-10">
         <header className="mb-6">
-          <p className="text-xs uppercase tracking-[0.22em] text-cyan-300/80">BroodMind</p>
+          <p className="text-xs uppercase tracking-[0.22em] text-cyan-300/80">Octopal</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-50 md:text-4xl">
             Operations Control Center
           </h1>
           <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Live view for queen activity, worker pool, queue pressure and system health.
+            Live view for octo activity, worker pool, queue pressure and system health.
           </p>
         </header>
         <GlobalFiltersBar filters={filters} onChange={setFilters} />

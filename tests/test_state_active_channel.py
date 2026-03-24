@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from broodmind.runtime.state import write_start_status
+from octopal.runtime.state import write_start_status
 
 
 def test_write_start_status_persists_active_channel(tmp_path) -> None:

@@ -4,28 +4,28 @@ import asyncio
 import time
 from pathlib import Path
 
-from broodmind.runtime.tool_errors import ToolBridgeError
-from broodmind.runtime.workers.agent_worker import (
+from octopal.runtime.tool_errors import ToolBridgeError
+from octopal.runtime.workers.agent_worker import (
     _auto_tune_max_steps,
     _classify_tool_error,
     _detect_tool_loop,
     _execute_tool,
-    _extract_mcp_identity,
     _extract_error_text,
+    _extract_mcp_identity,
     _hash_tool_call,
     _hash_tool_outcome,
     _parse_tool_arguments,
-    _result_has_error,
     _resolve_tool_loop_thresholds,
+    _result_has_error,
     _tool_no_progress_streak,
 )
-from broodmind.runtime.workers.contracts import WorkerSpec
-from broodmind.runtime.workers.runtime import (
+from octopal.runtime.workers.contracts import WorkerSpec
+from octopal.runtime.workers.runtime import (
     _call_mcp_with_name_fallback,
     _extract_mcp_tool_identity,
 )
-from broodmind.tools.registry import ToolSpec
-from broodmind.worker_sdk.worker import Worker
+from octopal.tools.registry import ToolSpec
+from octopal.worker_sdk.worker import Worker
 
 
 def _dummy_worker() -> Worker:
@@ -285,17 +285,17 @@ def test_tool_outcome_hash_changes_on_error_state() -> None:
 
 
 def test_resolve_tool_loop_thresholds_from_env(monkeypatch) -> None:
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_WARNING_THRESHOLD", "5")
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_CRITICAL_THRESHOLD", "9")
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD", "20")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_WARNING_THRESHOLD", "5")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_CRITICAL_THRESHOLD", "9")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD", "20")
     thresholds = _resolve_tool_loop_thresholds()
     assert thresholds == {"warning": 5, "critical": 9, "global_breaker": 20}
 
 
 def test_resolve_tool_loop_thresholds_normalizes_invalid_order(monkeypatch) -> None:
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_WARNING_THRESHOLD", "10")
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_CRITICAL_THRESHOLD", "10")
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD", "1")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_WARNING_THRESHOLD", "10")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_CRITICAL_THRESHOLD", "10")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD", "1")
     thresholds = _resolve_tool_loop_thresholds()
     assert thresholds["warning"] == 10
     assert thresholds["critical"] == 11
@@ -303,9 +303,9 @@ def test_resolve_tool_loop_thresholds_normalizes_invalid_order(monkeypatch) -> N
 
 
 def test_resolve_tool_loop_thresholds_ignores_bad_values(monkeypatch) -> None:
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_WARNING_THRESHOLD", "oops")
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_CRITICAL_THRESHOLD", "0")
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD", "-3")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_WARNING_THRESHOLD", "oops")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_CRITICAL_THRESHOLD", "0")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD", "-3")
     thresholds = _resolve_tool_loop_thresholds()
     assert thresholds["warning"] >= 1
     assert thresholds["critical"] > thresholds["warning"]

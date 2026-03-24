@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import json
 
-import broodmind.tools.web.fetch as fetch_mod
-import broodmind.tools.web.search as search_mod
+import octopal.tools.web.fetch as fetch_mod
+import octopal.tools.web.search as search_mod
 
 
 def test_web_search_returns_structured_error_when_query_missing() -> None:
@@ -24,7 +24,7 @@ def test_web_search_success_uses_normalized_contract(monkeypatch) -> None:
                 "web": {
                     "results": [
                         {
-                            "title": "BroodMind",
+                            "title": "Octopal",
                             "url": "https://example.com",
                             "description": "Agent runtime",
                             "age": "1 day ago",
@@ -49,12 +49,12 @@ def test_web_search_success_uses_normalized_contract(monkeypatch) -> None:
     monkeypatch.setenv("BRAVE_API_KEY", "test-key")
     monkeypatch.setattr(search_mod.httpx, "Client", _ClientStub)
 
-    payload = json.loads(search_mod.web_search({"query": "BroodMind"}))
+    payload = json.loads(search_mod.web_search({"query": "Octopal"}))
 
     assert payload["ok"] is True
     assert payload["source"] == "brave_search"
     assert payload["count"] == 1
-    assert payload["results"][0]["title"] == "BroodMind"
+    assert payload["results"][0]["title"] == "Octopal"
 
 
 def test_web_fetch_returns_structured_error_when_url_missing() -> None:

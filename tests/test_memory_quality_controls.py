@@ -4,9 +4,9 @@ import asyncio
 import uuid
 from datetime import timedelta
 
-from broodmind.runtime.memory.service import MemoryService
-from broodmind.infrastructure.store.models import MemoryEntry
-from broodmind.utils import utc_now
+from octopal.infrastructure.store.models import MemoryEntry
+from octopal.runtime.memory.service import MemoryService
+from octopal.utils import utc_now
 
 
 class _StoreStub:

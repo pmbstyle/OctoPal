@@ -2,18 +2,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
-from broodmind.config.settings import Settings
-from broodmind.gateway.app import build_app
+from octopal.gateway.app import build_app
+from octopal.infrastructure.config.settings import Settings
 
 
 def build_openapi_document() -> dict:
     project_root = Path(__file__).resolve().parents[1]
     settings = Settings(
         TELEGRAM_BOT_TOKEN="dummy:token",
-        BROODMIND_STATE_DIR=project_root / "tmp" / "openapi_state",
-        BROODMIND_WORKSPACE_DIR=project_root / "workspace",
+        OCTOPAL_STATE_DIR=project_root / "tmp" / "openapi_state",
+        OCTOPAL_WORKSPACE_DIR=project_root / "workspace",
     )
     app = build_app(settings)
     return app.openapi()
@@ -33,7 +34,7 @@ def main() -> None:
 
     document = build_openapi_document()
     out_path.write_text(json.dumps(document, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"Wrote OpenAPI schema to {out_path}")
+    sys.stdout.write(f"Wrote OpenAPI schema to {out_path}\n")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from broodmind.runtime.tool_loop import (
+from octopal.runtime.tool_loop import (
     _detect_tool_loop,
     _hash_tool_call,
     _hash_tool_outcome,
@@ -10,8 +10,8 @@ from broodmind.runtime.tool_loop import (
 
 
 def test_hash_tool_call_is_stable_for_same_payload() -> None:
-    one = _hash_tool_call("web_search", {"query": "broodmind"})
-    two = _hash_tool_call("web_search", {"query": "broodmind"})
+    one = _hash_tool_call("web_search", {"query": "octopal"})
+    two = _hash_tool_call("web_search", {"query": "octopal"})
     assert one == two
 
 
@@ -43,9 +43,9 @@ def test_hash_tool_outcome_changes_when_error_flag_changes() -> None:
 
 
 def test_resolve_tool_loop_thresholds_normalizes_invalid_order(monkeypatch) -> None:
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_WARNING_THRESHOLD", "10")
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_CRITICAL_THRESHOLD", "10")
-    monkeypatch.setenv("BROODMIND_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD", "1")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_WARNING_THRESHOLD", "10")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_CRITICAL_THRESHOLD", "10")
+    monkeypatch.setenv("OCTOPAL_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD", "1")
 
     thresholds = _resolve_tool_loop_thresholds()
 

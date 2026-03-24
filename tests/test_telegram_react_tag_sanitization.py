@@ -4,15 +4,19 @@ import asyncio
 import sys
 import types
 
-from broodmind.infrastructure.config.settings import Settings
-from broodmind.runtime.queen.core import QueenReply
-from broodmind.utils import extract_edge_reaction_fallback, extract_reaction_and_strip, strip_reaction_tags
+from octopal.infrastructure.config.settings import Settings
+from octopal.runtime.octo.core import OctoReply
+from octopal.utils import (
+    extract_edge_reaction_fallback,
+    extract_reaction_and_strip,
+    strip_reaction_tags,
+)
 
 if "telegramify_markdown" not in sys.modules:
     sys.modules["telegramify_markdown"] = types.SimpleNamespace(markdownify=lambda text: text)
 
-from broodmind.channels.telegram import handlers as telegram_handlers
-from broodmind.channels.telegram.handlers import _flush_pending_turn_factory
+from octopal.channels.telegram import handlers as telegram_handlers
+from octopal.channels.telegram.handlers import _flush_pending_turn_factory
 
 
 def test_extract_reaction_and_strip_removes_tag() -> None:
@@ -42,9 +46,9 @@ def test_extract_edge_reaction_fallback_handles_short_confirmation_text() -> Non
 
 
 def test_telegram_uses_reply_reaction_fallback_when_immediate_loses_tag(tmp_path) -> None:
-    class DummyQueen:
+    class DummyOcto:
         async def handle_message(self, text: str, chat_id: int, images=None, saved_file_paths=None):
-            return QueenReply(
+            return OctoReply(
                 immediate="Поставила! Посмотрим, появится ли 👻",
                 followup=None,
                 followup_required=False,
@@ -72,12 +76,12 @@ def test_telegram_uses_reply_reaction_fallback_when_immediate_loses_tag(tmp_path
     telegram_handlers._enqueue_send = fake_enqueue_send
 
     settings = Settings(
-        BROODMIND_STATE_DIR=tmp_path / "state",
-        BROODMIND_WORKSPACE_DIR=tmp_path / "workspace",
-        BROODMIND_TELEGRAM_PARSE_MODE="MarkdownV2",
+        OCTOPAL_STATE_DIR=tmp_path / "state",
+        OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
+        OCTOPAL_TELEGRAM_PARSE_MODE="MarkdownV2",
     )
     bot = DummyBot()
-    flush = _flush_pending_turn_factory(DummyQueen(), settings, bot)
+    flush = _flush_pending_turn_factory(DummyOcto(), settings, bot)
 
     try:
         async def scenario() -> None:
@@ -103,9 +107,9 @@ def test_telegram_uses_reply_reaction_fallback_when_immediate_loses_tag(tmp_path
 
 
 def test_telegram_infers_reaction_from_short_text_edge_emoji(tmp_path) -> None:
-    class DummyQueen:
+    class DummyOcto:
         async def handle_message(self, text: str, chat_id: int, images=None, saved_file_paths=None):
-            return QueenReply(
+            return OctoReply(
                 immediate="Поставила! 👻",
                 followup=None,
                 followup_required=False,
@@ -133,12 +137,12 @@ def test_telegram_infers_reaction_from_short_text_edge_emoji(tmp_path) -> None:
     telegram_handlers._enqueue_send = fake_enqueue_send
 
     settings = Settings(
-        BROODMIND_STATE_DIR=tmp_path / "state",
-        BROODMIND_WORKSPACE_DIR=tmp_path / "workspace",
-        BROODMIND_TELEGRAM_PARSE_MODE="MarkdownV2",
+        OCTOPAL_STATE_DIR=tmp_path / "state",
+        OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
+        OCTOPAL_TELEGRAM_PARSE_MODE="MarkdownV2",
     )
     bot = DummyBot()
-    flush = _flush_pending_turn_factory(DummyQueen(), settings, bot)
+    flush = _flush_pending_turn_factory(DummyOcto(), settings, bot)
 
     try:
         async def scenario() -> None:

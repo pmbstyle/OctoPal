@@ -1,11 +1,11 @@
 [project]
-name = "broodmind"
+name = "octopal"
 version = "0.4.5"
-description = "BroodMind autonomous AI agent platform"
+description = "Octopal autonomous AI agent platform"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Proprietary" }
-authors = [{ name = "BroodMind" }]
+authors = [{ name = "Octopal" }]
 
 dependencies = [
   "aiogram>=3.5.0",
@@ -38,7 +38,7 @@ dev = [
 ]
 
 [project.scripts]
-broodmind = "broodmind.cli.main:app"
+octopal = "octopal.cli.main:app"
 
 [build-system]
 requires = ["setuptools>=69", "wheel"]
@@ -51,7 +51,7 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-broodmind = ["*.md", "runtime/queen/prompts/*.md"]
+octopal = ["*.md", "runtime/octo/prompts/*.md"]
 
 [tool.black]
 line-length = 100

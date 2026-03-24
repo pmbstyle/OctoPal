@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from broodmind.cli.configure import _ensure_workspace_bootstrap
-from broodmind.runtime.queen.prompt_builder import build_bootstrap_context_prompt
+from octopal.cli.configure import _ensure_workspace_bootstrap
+from octopal.runtime.octo.prompt_builder import build_bootstrap_context_prompt
 
 
 def test_workspace_bootstrap_creates_required_markdown(tmp_path: Path) -> None:
@@ -40,7 +40,7 @@ def test_workspace_bootstrap_creates_required_markdown(tmp_path: Path) -> None:
 def test_bootstrap_context_includes_experiments_readme(tmp_path: Path, monkeypatch) -> None:
     workspace = tmp_path / "workspace"
     _ensure_workspace_bootstrap(workspace)
-    monkeypatch.setenv("BROODMIND_WORKSPACE_DIR", str(workspace))
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace))
 
     context = asyncio.run(build_bootstrap_context_prompt(store=None, chat_id=123))
 

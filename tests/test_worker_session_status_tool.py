@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 
-from broodmind.tools.workers.management import _tool_worker_session_status
-from broodmind.utils import utc_now
+from octopal.tools.workers.management import _tool_worker_session_status
+from octopal.utils import utc_now
 
 
 class _WorkerStub:
@@ -60,14 +60,14 @@ class _StoreStub:
         return list(self._recent[:limit])
 
 
-class _QueenStub:
+class _OctoStub:
     def __init__(self) -> None:
         self.store = _StoreStub()
         self.runtime = None
 
 
 def test_worker_session_status_summarizes_fabric_state() -> None:
-    payload = json.loads(_tool_worker_session_status({}, {"queen": _QueenStub()}))
+    payload = json.loads(_tool_worker_session_status({}, {"octo": _OctoStub()}))
 
     assert payload["status"] == "ok"
     assert payload["active_count"] == 2
@@ -78,7 +78,7 @@ def test_worker_session_status_summarizes_fabric_state() -> None:
 
 
 def test_worker_session_status_mentions_recent_failures() -> None:
-    payload = json.loads(_tool_worker_session_status({"recent_limit": 5}, {"queen": _QueenStub()}))
+    payload = json.loads(_tool_worker_session_status({"recent_limit": 5}, {"octo": _OctoStub()}))
 
     assert any(worker["worker_id"] == "w3" for worker in payload["recent_workers"])
     assert any("failed" in hint for hint in payload["hints"])

@@ -1,6 +1,6 @@
 # Ops Tools And Templates
 
-This document lists the new operations-focused tools and worker templates added to BroodMind.
+This document lists the new operations-focused tools and worker templates added to Octopal.
 
 ## New Tool Categories
 
@@ -67,7 +67,7 @@ High-impact actions require explicit confirmation by passing `confirm=true`:
 
 ## New Worker Templates
 
-Default templates were added under `src/broodmind/workers/default_templates/`:
+Default templates were added under `src/octopal/workers/default_templates/`:
 
 - `ops_sre`
 - `deploy_manager`
@@ -77,13 +77,13 @@ Default templates were added under `src/broodmind/workers/default_templates/`:
 - `release_notes_writer`
 - `self_controller`
 
-Note: BroodMind discovers active templates from `workspace/workers/`.  
+Note: Octopal discovers active templates from `workspace/workers/`.  
 Copy desired defaults into `workspace/workers/<worker_id>/worker.json` to activate them.
 
 Convenience sync options:
 
-- CLI: `broodmind sync-worker-templates`
-- CLI with overwrite: `broodmind sync-worker-templates --overwrite`
+- CLI: `octopal sync-worker-templates`
+- CLI with overwrite: `octopal sync-worker-templates --overwrite`
 - Script: `python scripts/sync_worker_templates.py`
 - Script with overwrite: `python scripts/sync_worker_templates.py --overwrite`
 
@@ -137,10 +137,10 @@ Example child template:
 - Parent template must have `can_spawn_children=true`.
 - Child template must be in parent `allowed_child_templates`.
 - Child permissions must be a subset of the parent's effective permissions.
-- Queen enforces global lineage limits:
-  - `BROODMIND_WORKER_MAX_SPAWN_DEPTH` (default `2`)
-  - `BROODMIND_WORKER_MAX_CHILDREN_TOTAL` (default `20`)
-  - `BROODMIND_WORKER_MAX_CHILDREN_CONCURRENT` (default `10`)
+- Octo enforces global lineage limits:
+  - `OCTOPAL_WORKER_MAX_SPAWN_DEPTH` (default `2`)
+  - `OCTOPAL_WORKER_MAX_CHILDREN_TOTAL` (default `20`)
+  - `OCTOPAL_WORKER_MAX_CHILDREN_CONCURRENT` (default `10`)
 
 ### Tooling and metadata
 

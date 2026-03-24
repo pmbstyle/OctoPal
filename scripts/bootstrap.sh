@@ -114,9 +114,9 @@ echo "Installing WhatsApp bridge dependencies..."
 
 echo
 echo "Launching onboarding..."
-uv run broodmind configure
+uv run octopal configure
 
 echo
 echo "Bootstrap complete."
 echo "Next steps:"
-echo "  uv run broodmind start"
+echo "  uv run octopal start"

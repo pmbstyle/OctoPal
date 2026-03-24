@@ -32,11 +32,11 @@ if (
   throw new TypeError("Unsupported @whiskeysockets/baileys module shape. Reinstall bridge dependencies.");
 }
 
-const host = process.env.BROODMIND_WHATSAPP_BRIDGE_HOST || "127.0.0.1";
-const port = Number(process.env.BROODMIND_WHATSAPP_BRIDGE_PORT || "8765");
-const authDir = process.env.BROODMIND_WHATSAPP_AUTH_DIR || path.resolve("auth");
-const callbackUrl = (process.env.BROODMIND_WHATSAPP_CALLBACK_URL || "").trim();
-const callbackToken = (process.env.BROODMIND_WHATSAPP_CALLBACK_TOKEN || "").trim();
+const host = process.env.OCTOPAL_WHATSAPP_BRIDGE_HOST || "127.0.0.1";
+const port = Number(process.env.OCTOPAL_WHATSAPP_BRIDGE_PORT || "8765");
+const authDir = process.env.OCTOPAL_WHATSAPP_AUTH_DIR || path.resolve("auth");
+const callbackUrl = (process.env.OCTOPAL_WHATSAPP_CALLBACK_URL || "").trim();
+const callbackToken = (process.env.OCTOPAL_WHATSAPP_CALLBACK_TOKEN || "").trim();
 
 let sock = null;
 let latestQr = "";
@@ -90,7 +90,7 @@ async function postInbound(payload) {
   try {
     const headers = { "content-type": "application/json" };
     if (callbackToken) {
-      headers["x-broodmind-whatsapp-token"] = callbackToken;
+      headers["x-octopal-whatsapp-token"] = callbackToken;
     }
     await fetch(callbackUrl, {
       method: "POST",
@@ -158,7 +158,7 @@ async function bootstrapSocket() {
     version,
     printQRInTerminal: false,
     logger: pino({ level: "silent" }),
-    browser: ["BroodMind", "Chrome", "1.0"],
+    browser: ["Octopal", "Chrome", "1.0"],
     markOnlineOnConnect: false,
     syncFullHistory: false,
   });
