@@ -255,7 +255,7 @@ Workers keep their own scratch workspace by default. To share files from Octo's 
 After you configure your WhatsApp number in the config link Octopal as a new device
 
 ```bash
-uv run octopal whatapp link
+uv run octopal whatsapp link
 ```
 
 
