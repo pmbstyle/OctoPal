@@ -296,8 +296,30 @@ Communication channels, by default, provide full support of functions like:
 
 ### ⚙️ Web dashboard
 
-Dashboard provides a complete view of what's happening within a system in real-time.
-Built-in Tailscale tunneling and token-based authentication prevent unauthorised access.
+The Dashboard provides a real-time, comprehensive view of the system's state, active workers, and communication logs. It is built as a modern Vite + React web application.
+
+- **Secure by default:** Built-in token-based authentication and optional Tailscale integration.
+- **Real-time updates:** Uses WebSockets for live streaming of agent thoughts and tool executions.
+- **Terminal mode:** Access a live view directly from your CLI via `octopal dashboard --watch`.
+
+### 🔒 Remote Access & Security (Tailscale)
+
+Octopal features first-class integration with **Tailscale** to provide secure remote access without opening ports or configuring complex firewalls:
+
+- **Automatic Tunneling:** If Tailscale is installed, Octopal can automatically run `tailscale serve` to expose the gateway to your private tailnet.
+- **IP-Based Authorization:** The WebSocket and Dashboard APIs automatically verify that incoming connections originate from trusted Tailscale nodes or your local machine.
+- **Easy Configuration:** Managed via `config.json` in the `gateway` section.
+
+```json
+{
+  "gateway": {
+    "tailscale_auto_serve": true,
+    "tailscale_ips": "100.x.y.z,100.a.b.c"
+  }
+}
+```
+
+It gracefully degrades if Tailscale is not present or if `tailscale_auto_serve` is set to `false`.
 
 ### 🧩 Skills and skill bundles
 
