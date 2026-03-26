@@ -562,13 +562,24 @@ async def _execute_tool(
     tool_name: str | None,
     tool_input: dict,
     workspace_root: Path,
-    worker_dir: Path,
-    worker: Worker,
-    tool_map: dict[str, Any],
+    worker_dir: Path | Worker,
+    worker: Worker | dict[str, Any],
+    tool_map: dict[str, Any] | None = None,
     *,
     timeout_seconds: int | None = None,
 ) -> tuple[Any, dict[str, Any]]:
     """Execute a tool by name."""
+    if tool_map is None:
+        # Backward compatibility for older call sites/tests that passed:
+        # (tool_name, tool_input, workspace_root, worker, tool_map, ...)
+        legacy_worker = worker_dir
+        legacy_tool_map = worker
+        if not isinstance(legacy_worker, Worker) or not isinstance(legacy_tool_map, dict):
+            raise TypeError("_execute_tool expected either (workspace_root, worker_dir, worker, tool_map) or legacy (workspace_root, worker, tool_map)")
+        worker_dir = workspace_root
+        worker = legacy_worker
+        tool_map = legacy_tool_map
+
     if not tool_name or tool_name not in tool_map:
         return {"error": f"Unknown tool: {tool_name}"}, {
             "retries": 0,
