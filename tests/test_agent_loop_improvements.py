@@ -18,6 +18,7 @@ from octopal.runtime.workers.agent_worker import (
     _resolve_tool_loop_thresholds,
     _result_has_error,
     _tool_no_progress_streak,
+    execute_agent_task,
 )
 from octopal.runtime.workers.contracts import WorkerSpec
 from octopal.runtime.workers.runtime import (
@@ -310,3 +311,80 @@ def test_resolve_tool_loop_thresholds_ignores_bad_values(monkeypatch) -> None:
     assert thresholds["warning"] >= 1
     assert thresholds["critical"] > thresholds["warning"]
     assert thresholds["global_breaker"] > thresholds["critical"]
+
+
+def test_execute_agent_task_counts_completed_cycles_not_raw_llm_calls(monkeypatch, tmp_path: Path) -> None:
+    worker = _dummy_worker()
+
+    async def _noop_log(level: str, message: str) -> None:
+        return None
+
+    monkeypatch.setattr(worker, "log", _noop_log)
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.load_settings", lambda: object())
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.LiteLLMProvider", lambda settings, model=None, config=None: object())
+
+    tool = ToolSpec(
+        name="echo",
+        description="echo",
+        parameters={"type": "object"},
+        permission="filesystem_read",
+        handler=lambda args, ctx: {"ok": True},
+        is_async=False,
+    )
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.get_tools", lambda: [tool])
+
+    responses = iter(
+        [
+            {"content": ""},
+            {"content": ""},
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "function": {"name": "echo", "arguments": "{\"value\": 1}"},
+                    }
+                ]
+            },
+            {"content": '{"type":"result","summary":"done"}'},
+        ]
+    )
+
+    async def _fake_call_llm(provider, messages, tools):
+        return next(responses)
+
+    async def _fake_execute_tool(tool_name, tool_input, workspace_root, worker_dir, worker_obj, tool_map, *, timeout_seconds=None):
+        return {"ok": True}, {"retries": 0, "timed_out": False, "had_error": False, "error_type": "none"}
+
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker._call_llm", _fake_call_llm)
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker._execute_tool", _fake_execute_tool)
+
+    result = asyncio.run(execute_agent_task(worker, tmp_path, tmp_path))
+
+    assert result.summary == "done"
+    assert result.thinking_steps == 2
+    assert result.tools_used == ["echo"]
+
+
+def test_execute_agent_task_stops_after_repeated_empty_turns(monkeypatch, tmp_path: Path) -> None:
+    worker = _dummy_worker()
+
+    async def _noop_log(level: str, message: str) -> None:
+        return None
+
+    monkeypatch.setattr(worker, "log", _noop_log)
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.load_settings", lambda: object())
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.LiteLLMProvider", lambda settings, model=None, config=None: object())
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.get_tools", lambda: [])
+
+    async def _fake_call_llm(provider, messages, tools):
+        return {"content": ""}
+
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker._call_llm", _fake_call_llm)
+
+    result = asyncio.run(execute_agent_task(worker, tmp_path, tmp_path))
+
+    assert result.summary == "Task stopped after 3 empty turns without progress"
+    assert result.thinking_steps == 0
+    assert isinstance(result.output, dict)
+    assert result.output["reason"] == "empty_turn_limit"
+    assert result.output["_telemetry"]["empty_turns"] == 3

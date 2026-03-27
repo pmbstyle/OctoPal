@@ -41,6 +41,7 @@ _LOG_MAX_CHARS = 2000
 _MAX_TOOL_ITERS = 10
 _DEFAULT_TOOL_TIMEOUT_SECONDS = 60
 _DEFAULT_MAX_STEP_CAP = 30
+_MAX_EMPTY_TURNS = 3
 _TRANSIENT_ERROR_HINTS = (
     "timeout",
     "timed out",
@@ -265,6 +266,7 @@ Important:
 
     tools_used = []
     thinking_steps = 0
+    empty_turns = 0
     tool_map = {t.name: t for t in filtered_tools}
     loop_start = asyncio.get_running_loop().time()
     effective_max_steps = _auto_tune_max_steps(spec.max_thinking_steps, spec.available_tools, spec.system_prompt)
@@ -279,6 +281,7 @@ Important:
         "tool_timeouts": 0,
         "tool_errors": 0,
         "tool_result_truncations": 0,
+        "empty_turns": 0,
         "tokens": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
     upstream_failures: dict[str, int] = {}
@@ -286,9 +289,7 @@ Important:
     tool_call_history: list[dict[str, str]] = []
     tool_loop_thresholds = _resolve_tool_loop_thresholds()
 
-    for _iteration in range(effective_max_steps):
-        thinking_steps += 1
-
+    while thinking_steps < effective_max_steps:
         llm_start = time.perf_counter()
         response = await _call_llm(provider, messages, filtered_tools)
         telemetry["llm_calls"] += 1
@@ -304,6 +305,7 @@ Important:
         # Handle OpenAI-style tool_calls
         tool_calls = response.get("tool_calls", [])
         if tool_calls:
+            cycle_steps = thinking_steps + 1
             content = response.get("content", "")
             assistant_msg: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
             if content:
@@ -391,7 +393,7 @@ Important:
                                 telemetry,
                             ),
                             knowledge_proposals=worker.knowledge_proposals,
-                            thinking_steps=thinking_steps,
+                            thinking_steps=cycle_steps,
                             tools_used=tools_used,
                         )
 
@@ -413,7 +415,7 @@ Important:
                                 telemetry,
                             ),
                             knowledge_proposals=worker.knowledge_proposals,
-                            thinking_steps=thinking_steps,
+                            thinking_steps=cycle_steps,
                             tools_used=tools_used,
                         )
                     if _is_upstream_unavailable_error(error_text):
@@ -435,7 +437,7 @@ Important:
                                     telemetry,
                                 ),
                                 knowledge_proposals=worker.knowledge_proposals,
-                                thinking_steps=thinking_steps,
+                                thinking_steps=cycle_steps,
                                 tools_used=tools_used,
                             )
 
@@ -448,6 +450,9 @@ Important:
                     "tool_call_id": tool_call_id,
                     "content": rendered_tool_result.text,
                 })
+            thinking_steps = cycle_steps
+            empty_turns = 0
+            telemetry["empty_turns"] = empty_turns
         else:
             # No tool calls, check if this is a completion
             content = str(response.get("content", "") or "").strip()
@@ -455,36 +460,43 @@ Important:
             # Try to parse structured JSON result, including fenced JSON blocks.
             result_block = _extract_result_block(content)
             if result_block is not None:
+                cycle_steps = thinking_steps + 1
                 return WorkerResult(
                     status=str(result_block.get("status", "completed")) if result_block.get("status") in {"completed", "failed"} else "completed",
                     summary=str(result_block.get("summary", "Task completed")).strip() or "Task completed",
                     output=_attach_telemetry(result_block.get("output"), telemetry),
                     questions=result_block.get("questions", []),
                     knowledge_proposals=worker.knowledge_proposals,
-                    thinking_steps=thinking_steps,
+                    thinking_steps=cycle_steps,
                     tools_used=tools_used,
                 )
 
             # If model produced plain text with no tool call, treat it as completion.
             if content:
+                cycle_steps = thinking_steps + 1
                 return WorkerResult(
                     summary=content,
                     output=_attach_telemetry(None, telemetry),
                     knowledge_proposals=worker.knowledge_proposals,
-                    thinking_steps=thinking_steps,
+                    thinking_steps=cycle_steps,
                     tools_used=tools_used,
                 )
 
-            # If we get here without tool_calls or structured result, we've hit the thinking limit
-            if thinking_steps >= effective_max_steps:
+            # Empty LLM turns do not consume the worker's thinking budget, but they
+            # still count toward a separate no-progress guard to prevent loops.
+            empty_turns += 1
+            telemetry["empty_turns"] = empty_turns
+            if empty_turns >= _MAX_EMPTY_TURNS:
                 return WorkerResult(
-                    summary=f"Task incomplete after {thinking_steps} thinking steps",
-                    output=_attach_telemetry(None, telemetry),
+                    summary=f"Task stopped after {empty_turns} empty turns without progress",
+                    output=_attach_telemetry(
+                        {"degraded": True, "reason": "empty_turn_limit"},
+                        telemetry,
+                    ),
                     knowledge_proposals=worker.knowledge_proposals,
                     thinking_steps=thinking_steps,
                     tools_used=tools_used,
                 )
-            # Continue to next iteration
             continue
 
     # Max iterations reached without completion
