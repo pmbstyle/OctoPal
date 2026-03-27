@@ -9,6 +9,7 @@ from octopal.runtime.workers.runtime import (
     WorkerRuntime,
     _classify_recoverable_error,
     _classify_worker_text_log_level,
+    _sanitize_task_text,
 )
 
 
@@ -45,11 +46,13 @@ class _FakeProcess:
         self.returncode = None
         self.stdin = None
         self.stdout = None
+        self.wait_calls = 0
 
     def kill(self) -> None:
         self.returncode = -9
 
     async def wait(self) -> int:
+        self.wait_calls += 1
         if self.returncode is None:
             self.returncode = 0
         return self.returncode
@@ -292,3 +295,110 @@ def test_worker_text_log_level_downgrades_retry_noise() -> None:
         "Traceback (most recent call last):\nRuntimeError: boom",
         source="stderr",
     ) == "error"
+
+
+def test_sanitize_task_text_redacts_embedded_secrets() -> None:
+    task = (
+        "Account: AliceGhost API key: moltbook_sk_QTfg76PsXsO5QIvgJIC54xPr "
+        "Authorization: Bearer super-secret-token"
+    )
+
+    sanitized = _sanitize_task_text(task, limit=500)
+
+    assert "moltbook_sk_" not in sanitized
+    assert "super-secret-token" not in sanitized
+    assert sanitized.count("[REDACTED_SECRET]") >= 2
+
+
+def test_cleanup_worker_dir_retries_permission_errors(tmp_path: Path) -> None:
+    runtime = WorkerRuntime(
+        store=_StoreStub(),
+        policy=_PolicyStub(),
+        workspace_dir=tmp_path,
+        launcher=_LauncherStub(),
+        mcp_manager=None,
+        settings=Settings(),
+    )
+    worker_dir = tmp_path / "workers" / "w1"
+    worker_dir.mkdir(parents=True)
+
+    calls = {"count": 0}
+
+    def _flaky_rmtree(path: Path) -> None:
+        assert path == worker_dir
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise PermissionError("directory is busy")
+
+    import octopal.runtime.workers.runtime as runtime_mod
+
+    original_rmtree = runtime_mod.shutil.rmtree
+    runtime_mod.shutil.rmtree = _flaky_rmtree
+    try:
+        asyncio.run(runtime._cleanup_worker_dir(worker_dir))
+    finally:
+        runtime_mod.shutil.rmtree = original_rmtree
+
+    assert calls["count"] == 3
+
+
+def test_runtime_waits_for_worker_exit_after_result(tmp_path: Path) -> None:
+    store = _StoreStub()
+    launcher = _LauncherStub()
+    runtime = WorkerRuntime(
+        store=store,
+        policy=_PolicyStub(),
+        workspace_dir=tmp_path,
+        launcher=launcher,
+        mcp_manager=None,
+        settings=Settings(),
+    )
+    process = _FakeProcess(pid=123)
+
+    async def fake_launch(spec_path: str, cwd: str, env: dict[str, str]):
+        return process
+
+    launcher.launch = fake_launch  # type: ignore[method-assign]
+
+    async def fake_read_loop(spec, proc, approval_requester=None):
+        assert proc is process
+        return WorkerResult(summary="ok", output={})
+
+    runtime._read_loop = fake_read_loop  # type: ignore[method-assign]
+
+    result = asyncio.run(runtime.run(_spec()))
+
+    assert result.summary == "ok"
+    assert process.wait_calls >= 1
+
+
+def test_wait_for_worker_exit_terminates_stuck_process(tmp_path: Path) -> None:
+    runtime = WorkerRuntime(
+        store=_StoreStub(),
+        policy=_PolicyStub(),
+        workspace_dir=tmp_path,
+        launcher=_LauncherStub(),
+        mcp_manager=None,
+        settings=Settings(),
+    )
+
+    class _StuckProcess(_FakeProcess):
+        async def wait(self) -> int:
+            self.wait_calls += 1
+            if self.returncode is not None:
+                return self.returncode
+            await asyncio.sleep(10)
+            return 0
+
+    process = _StuckProcess(pid=456)
+    terminated: list[int] = []
+
+    async def _fake_terminate(proc) -> None:
+        terminated.append(proc.pid)
+        proc.returncode = -9
+
+    runtime._terminate_process_tree = _fake_terminate  # type: ignore[method-assign]
+
+    asyncio.run(runtime._wait_for_worker_exit("w1", process))
+
+    assert terminated == [456]

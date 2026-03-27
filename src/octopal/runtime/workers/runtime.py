@@ -10,6 +10,8 @@ import contextlib
 import inspect
 import json
 import os
+import signal
+import re
 import shutil
 import uuid
 from collections.abc import Awaitable, Callable
@@ -42,6 +44,14 @@ _STDERR_BATCH_MAX_LINES = 40
 _STDERR_BATCH_MAX_CHARS = 12000
 
 WORKER_MODULE = "octopal.runtime.workers.agent_worker"
+_TASK_LOG_PREVIEW_CHARS = 100
+_AUDIT_TASK_PREVIEW_CHARS = 200
+_SECRET_PATTERNS = (
+    re.compile(r"(?i)\b(authorization\s*:\s*bearer\s+)([^\s,;]+)"),
+    re.compile(r"(?i)\b(bearer\s+)([^\s,;]+)"),
+    re.compile(r'(?i)\b(api[_ -]?key|token|secret|password)\b(\s*[:=]\s*)(["\']?)([^"\'\s,;]+)\3'),
+    re.compile(r"\b(?:moltbook|openai|sk|rk)_[A-Za-z0-9_-]{12,}\b"),
+)
 
 
 @dataclass
@@ -200,10 +210,11 @@ class WorkerRuntime:
         approval_requester: Callable[[ActionIntent], Awaitable[bool]] | None = None,
     ) -> WorkerResult:
         """Run a worker with the given spec."""
+        task_preview = _sanitize_task_text(spec.task, limit=_TASK_LOG_PREVIEW_CHARS)
         logger.info(
             "WorkerRuntime run: id=%s task=%s timeout=%ss tools=%s",
             spec.id,
-            spec.task[:100],
+            task_preview,
             spec.timeout_seconds,
             len(spec.available_tools),
         )
@@ -241,7 +252,7 @@ class WorkerRuntime:
             "worker_spawned",
             correlation_id=spec.id,
             data={
-                "task": spec.task[:200],
+                "task": _sanitize_task_text(spec.task, limit=_AUDIT_TASK_PREVIEW_CHARS),
                 "template_id": spec.template_id,
                 "lineage_id": spec.lineage_id,
                 "parent_worker_id": spec.parent_worker_id,
@@ -303,6 +314,7 @@ class WorkerRuntime:
                         self._read_loop(spec, process, approval_requester=approval_requester),
                         timeout=attempt_timeout,
                     )
+                    await self._wait_for_worker_exit(spec.id, process)
                     break
                 except Exception as exc:
                     last_error = exc
@@ -805,20 +817,77 @@ class WorkerRuntime:
         return self.workspace_dir / "workers" / worker_id
 
     async def _cleanup_worker_dir(self, worker_dir: Path) -> None:
-        try:
-            if await asyncio.to_thread(worker_dir.exists):
+        if not await asyncio.to_thread(worker_dir.exists):
+            return
+
+        for attempt in range(1, 4):
+            try:
                 await asyncio.to_thread(shutil.rmtree, worker_dir)
                 logger.info("WorkerRuntime cleaned up worker dir: %s", worker_dir)
-        except Exception as exc:
-            logger.warning("WorkerRuntime cleanup failed: %s", exc)
+                return
+            except FileNotFoundError:
+                return
+            except PermissionError as exc:
+                if attempt == 3:
+                    logger.warning("WorkerRuntime cleanup failed after retries: %s", exc)
+                    return
+                await asyncio.sleep(0.1 * attempt)
+            except Exception as exc:
+                logger.warning("WorkerRuntime cleanup failed: %s", exc)
+                return
 
     async def _safe_terminate_process(self, process: asyncio.subprocess.Process) -> None:
         try:
             if process.returncode is None:
-                process.kill()
-                await process.wait()
+                await self._terminate_process_tree(process)
+                await asyncio.wait_for(process.wait(), timeout=5)
         except Exception:
             logger.debug("Failed to terminate worker process cleanly", exc_info=True)
+
+    async def _wait_for_worker_exit(self, worker_id: str, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2)
+            return
+        except TimeoutError:
+            logger.warning(
+                "Worker process did not exit after returning a result; terminating process tree",
+                worker_id=worker_id,
+                pid=process.pid,
+            )
+        except Exception:
+            logger.debug("Failed while waiting for worker process exit", worker_id=worker_id, exc_info=True)
+
+        await self._safe_terminate_process(process)
+
+    async def _terminate_process_tree(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+
+        if os.name == "nt":
+            proc = await asyncio.create_subprocess_exec(
+                "taskkill",
+                "/PID",
+                str(process.pid),
+                "/T",
+                "/F",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.wait()
+            return
+
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2)
+            return
+        except Exception:
+            pass
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGKILL)
 
     def _log_non_json_output(self, text: str) -> None:
         """Log non-JSON output from worker intelligently."""
@@ -1035,6 +1104,30 @@ def _classify_recoverable_error(exc: Exception) -> tuple[bool, str]:
     if "connection reset" in lowered or "temporarily unavailable" in lowered:
         return True, "transient_io"
     return False, "non_recoverable"
+
+
+def _sanitize_task_text(text: str, *, limit: int) -> str:
+    value = (text or "").strip()
+    if not value:
+        return ""
+
+    sanitized = value
+    for pattern in _SECRET_PATTERNS:
+        if pattern.groups < 2:
+            sanitized = pattern.sub("[REDACTED_SECRET]", sanitized)
+            continue
+
+        def _replace(match: re.Match[str]) -> str:
+            groups = match.groups()
+            if len(groups) >= 4:
+                return f"{groups[0]}{groups[1]}{groups[2]}[REDACTED_SECRET]{groups[2]}"
+            return f"{groups[0]}[REDACTED_SECRET]"
+
+        sanitized = pattern.sub(_replace, sanitized)
+
+    if len(sanitized) <= limit:
+        return sanitized
+    return f"{sanitized[:limit]}..."
 
 
 def _attempt_timeout_seconds(base_timeout: int, attempt: int, tools: list[str]) -> float:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Protocol
@@ -26,6 +27,7 @@ class SameEnvLauncher:
         cwd: str,
         env: dict[str, str],
     ) -> asyncio.subprocess.Process:
+        popen_kwargs = _worker_subprocess_kwargs()
         return await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",
@@ -36,6 +38,7 @@ class SameEnvLauncher:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            **popen_kwargs,
         )
 
 
@@ -111,12 +114,14 @@ class DockerLauncher:
             spec_in_container,
         ])
 
+        popen_kwargs = _worker_subprocess_kwargs()
         return await asyncio.create_subprocess_exec(
             *cmd_args,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=_filter_env(env),
+            **popen_kwargs,
         )
 
 
@@ -124,3 +129,9 @@ def _filter_env(env: dict[str, str]) -> dict[str, str]:
     # Docker env must be explicit; keep only a safe subset.
     allowed = {"PYTHONPATH", "OCTOPAL_WORKSPACE_DIR"}
     return {key: value for key, value in env.items() if key in allowed}
+
+
+def _worker_subprocess_kwargs() -> dict[str, object]:
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    return {"start_new_session": True}
