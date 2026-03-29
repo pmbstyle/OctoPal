@@ -83,6 +83,10 @@ class DockerLauncher:
 
         host_ws_path = Path(self.host_workspace).resolve()
         seen_mounts: set[tuple[str, str]] = set()
+        host_skills_dir = host_ws_path / "skills"
+        host_skills_dir.mkdir(parents=True, exist_ok=True)
+        cmd_args.extend(["-v", f"{host_skills_dir}:{container_worker_dir}/skills"])
+        seen_mounts.add((str(host_skills_dir), f"{container_worker_dir}/skills"))
         for rel_path in allowed_paths or []:
             if not isinstance(rel_path, str) or not rel_path.strip():
                 continue
@@ -123,15 +127,18 @@ class DockerLauncher:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=_filter_env(env),
+            env=_filter_env(env, worker_workspace=container_worker_dir),
             **popen_kwargs,
         )
 
 
-def _filter_env(env: dict[str, str]) -> dict[str, str]:
+def _filter_env(env: dict[str, str], *, worker_workspace: str | None = None) -> dict[str, str]:
     # Docker env must be explicit; keep only a safe subset.
     allowed = {"PYTHONPATH", "OCTOPAL_WORKSPACE_DIR"}
-    return {key: value for key, value in env.items() if key in allowed}
+    filtered = {key: value for key, value in env.items() if key in allowed}
+    if worker_workspace:
+        filtered["OCTOPAL_WORKSPACE_DIR"] = worker_workspace
+    return filtered
 
 
 def _host_user_spec() -> str | None:
