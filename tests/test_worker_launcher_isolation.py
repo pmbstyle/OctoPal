@@ -33,7 +33,12 @@ def test_docker_launcher_mounts_only_worker_dir_when_allowed_paths_missing(
         launcher.launch(
             spec_path=str(spec_path),
             cwd=str(worker_dir),
-            env={"PYTHONPATH": "src", "OCTOPAL_WORKSPACE_DIR": "/workspace", "SECRET": "nope"},
+            env={
+                "PYTHONPATH": "src",
+                "OCTOPAL_WORKSPACE_DIR": "/workspace",
+                "BRAVE_API_KEY": "brave-test-key",
+                "SECRET": "nope",
+            },
         )
     )
 
@@ -45,6 +50,7 @@ def test_docker_launcher_mounts_only_worker_dir_when_allowed_paths_missing(
     assert "-e" in args
     assert "OCTOPAL_WORKSPACE_DIR=/workspace/workers/worker-1" in args
     assert "PYTHONPATH=src" in args
+    assert "BRAVE_API_KEY=brave-test-key" in args
     assert f"{workspace}:/workspace" not in args
     assert "SECRET" not in args
     assert "PATH" in captured["kwargs"]["env"]

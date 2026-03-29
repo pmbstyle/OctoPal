@@ -139,7 +139,31 @@ def _filter_container_env(
     env: dict[str, str], *, worker_workspace: str | None = None
 ) -> dict[str, str]:
     # Container env must be explicit; keep only a safe subset.
-    allowed = {"PYTHONPATH", "OCTOPAL_WORKSPACE_DIR"}
+    allowed = {
+        "PYTHONPATH",
+        "OCTOPAL_WORKSPACE_DIR",
+        "OCTOPAL_LLM_PROVIDER",
+        "OCTOPAL_LITELLM_PROVIDER_ID",
+        "OCTOPAL_LITELLM_MODEL",
+        "OCTOPAL_LITELLM_API_KEY",
+        "OCTOPAL_LITELLM_API_BASE",
+        "OCTOPAL_LITELLM_MODEL_PREFIX",
+        "OPENROUTER_API_KEY",
+        "OPENROUTER_BASE_URL",
+        "OPENROUTER_MODEL",
+        "OPENROUTER_TIMEOUT",
+        "ZAI_API_KEY",
+        "ZAI_BASE_URL",
+        "ZAI_MODEL",
+        "LITELLM_NUM_RETRIES",
+        "LITELLM_TIMEOUT",
+        "LITELLM_MAX_CONCURRENCY",
+        "BRAVE_API_KEY",
+        "FIRECRAWL_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_EMBED_MODEL",
+    }
     filtered = {key: value for key, value in env.items() if key in allowed}
     if worker_workspace:
         filtered["OCTOPAL_WORKSPACE_DIR"] = worker_workspace
