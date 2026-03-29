@@ -1081,12 +1081,18 @@ def _settings_env_name(field_name: str) -> str:
 def _tool_env_from_settings(settings: Settings, tool_names: list[str]) -> dict[str, str]:
     lowered_tools = {str(name).strip().lower() for name in tool_names if str(name).strip()}
     env: dict[str, str] = {}
+    brave_api_key = settings.brave_api_key or (
+        settings.config_obj.search.brave_api_key if settings.config_obj else None
+    )
+    firecrawl_api_key = settings.firecrawl_api_key or (
+        settings.config_obj.search.firecrawl_api_key if settings.config_obj else None
+    )
 
-    if "web_search" in lowered_tools and settings.brave_api_key:
-        env["BRAVE_API_KEY"] = settings.brave_api_key
+    if "web_search" in lowered_tools and brave_api_key:
+        env["BRAVE_API_KEY"] = brave_api_key
 
-    if any(name in lowered_tools for name in {"web_fetch", "markdown_new_fetch"}) and settings.firecrawl_api_key:
-        env["FIRECRAWL_API_KEY"] = settings.firecrawl_api_key
+    if any(name in lowered_tools for name in {"web_fetch", "markdown_new_fetch"}) and firecrawl_api_key:
+        env["FIRECRAWL_API_KEY"] = firecrawl_api_key
 
     return env
 
