@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import octopal.runtime.workers.launcher as launcher_mod
 from octopal.runtime.workers.launcher import DockerLauncher
 
 
@@ -25,6 +26,7 @@ def test_docker_launcher_mounts_only_worker_dir_when_allowed_paths_missing(
         return SimpleNamespace(pid=123)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(launcher_mod, "_host_user_spec", lambda: "1000:1000")
 
     launcher = DockerLauncher(image="octopal:test", host_workspace=str(workspace))
     asyncio.run(
@@ -36,6 +38,8 @@ def test_docker_launcher_mounts_only_worker_dir_when_allowed_paths_missing(
     )
 
     args = captured["args"]
+    assert "--user" in args
+    assert "1000:1000" in args
     assert f"{worker_dir}:/workspace/workers/worker-1" in args
     assert f"{workspace}:/workspace" not in args
     assert "SECRET" not in captured["kwargs"]["env"]
@@ -61,6 +65,7 @@ def test_docker_launcher_mounts_worker_dir_and_shared_paths_when_restricted(
         return SimpleNamespace(pid=123)
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _fake_exec)
+    monkeypatch.setattr(launcher_mod, "_host_user_spec", lambda: "1000:1000")
 
     launcher = DockerLauncher(image="octopal:test", host_workspace=str(workspace))
     asyncio.run(
@@ -72,6 +77,8 @@ def test_docker_launcher_mounts_worker_dir_and_shared_paths_when_restricted(
     )
 
     args = captured["args"]
+    assert "--user" in args
+    assert "1000:1000" in args
     assert f"{worker_dir}:/workspace/workers/worker-1" in args
     assert f"{shared_dir}:/workspace/src" in args
     assert f"{shared_dir}:/workspace/workers/worker-1/src" in args

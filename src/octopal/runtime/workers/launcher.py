@@ -73,6 +73,9 @@ class DockerLauncher:
             pass
 
         cmd_args = ["docker", "run", "--rm", "-i"]
+        user_spec = _host_user_spec()
+        if user_spec:
+            cmd_args.extend(["--user", user_spec])
 
         host_worker_dir = Path(cwd).resolve()
         container_worker_dir = f"{container_ws}/workers/{worker_id}"
@@ -129,6 +132,20 @@ def _filter_env(env: dict[str, str]) -> dict[str, str]:
     # Docker env must be explicit; keep only a safe subset.
     allowed = {"PYTHONPATH", "OCTOPAL_WORKSPACE_DIR"}
     return {key: value for key, value in env.items() if key in allowed}
+
+
+def _host_user_spec() -> str | None:
+    if os.name == "nt":
+        return None
+    getuid = getattr(os, "getuid", None)
+    getgid = getattr(os, "getgid", None)
+    if not callable(getuid) or not callable(getgid):
+        return None
+    uid = getuid()
+    gid = getgid()
+    if uid < 0 or gid < 0:
+        return None
+    return f"{uid}:{gid}"
 
 
 def _worker_subprocess_kwargs() -> dict[str, object]:
