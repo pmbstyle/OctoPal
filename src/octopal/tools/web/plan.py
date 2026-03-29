@@ -92,16 +92,20 @@ async def fetch_plan_tool(args: dict[str, Any], ctx: dict[str, Any]) -> str:
         browser_payload: dict[str, Any] | None = None
         try:
             open_resp = await browser_open({"url": url}, ctx)
-            if str(open_resp).lower().startswith("error"):
-                browser_attempt["reason"] = str(open_resp)
+            open_result = _parse_browser_step_output(open_resp, success_text_prefixes=("successfully opened",))
+            if not open_result.get("ok", False):
+                browser_attempt["reason"] = str(open_result.get("error") or open_resp)
             else:
                 snap = await browser_snapshot({}, ctx)
-                if str(snap).lower().startswith("error"):
-                    browser_attempt["reason"] = str(snap)
+                snap_result = _parse_browser_step_output(snap)
+                if not snap_result.get("ok", False):
+                    browser_attempt["reason"] = str(snap_result.get("error") or snap)
                 else:
-                    extract = await browser_extract({"max_chars": max_chars}, ctx)
+                    target_id = snap_result.get("target_id")
+                    extract = await browser_extract({"max_chars": max_chars, "target_id": target_id}, ctx)
                     extract_result = _parse_fetch_output(extract)
-                    snippet = str(extract_result.get("text") or snap)[:max_chars]
+                    snapshot_text = str(snap_result.get("snapshot") or "")
+                    snippet = str(extract_result.get("text") or snapshot_text)[:max_chars]
                     if _has_enough_content({"snippet": snippet}, min_content_chars):
                         browser_attempt["status"] = "ok"
                         browser_attempt["reason"] = (
@@ -117,6 +121,7 @@ async def fetch_plan_tool(args: dict[str, Any], ctx: dict[str, Any]) -> str:
                             "source": "browser_extract" if extract_result.get("ok") else "browser_snapshot",
                             "url": url,
                             "goal": goal,
+                            "target_id": target_id,
                             "snippet": snippet,
                             "next_best_action": _next_best_browser_action(goal),
                         }
@@ -222,6 +227,26 @@ def _parse_fetch_output(raw: Any) -> dict[str, Any]:
         "error": text,
         "rate_limited": "429" in lowered or "rate limit" in lowered,
     }
+
+
+def _parse_browser_step_output(
+    raw: Any, *, success_text_prefixes: tuple[str, ...] = ()
+) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    text = str(raw or "")
+    try:
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    except Exception:
+        pass
+    lowered = text.lower()
+    if any(lowered.startswith(prefix) for prefix in success_text_prefixes):
+        return {"ok": True, "message": text}
+    if lowered.startswith("error"):
+        return {"ok": False, "error": text}
+    return {"ok": True, "snapshot": text}
 
 
 def _has_enough_content(payload: dict[str, Any], min_chars: int) -> bool:

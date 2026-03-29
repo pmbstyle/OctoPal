@@ -223,3 +223,35 @@ def test_browser_workflow_sequences_existing_actions(monkeypatch) -> None:
         ]
 
     asyncio.run(scenario())
+
+
+def test_browser_open_returns_structured_result(monkeypatch) -> None:
+    page = _PageStub()
+    monkeypatch.setattr(browser_actions, "get_browser_manager", lambda: _ManagerStub(page))
+
+    async def scenario() -> None:
+        result = await browser_actions.browser_open({"url": "https://example.com/docs"}, {"chat_id": 7})
+        assert result["ok"] is True
+        assert result["target_id"] == "t1"
+        assert result["url"] == "https://example.com/docs"
+
+    asyncio.run(scenario())
+
+
+def test_browser_snapshot_returns_structured_result(monkeypatch) -> None:
+    page = _PageStub()
+    monkeypatch.setattr(browser_actions, "get_browser_manager", lambda: _ManagerStub(page))
+
+    async def _fake_capture(_page):
+        return {"snapshot": '- button "Save" [ref=e1]', "refs": {"e1": {"role": "button", "name": "Save", "nth": 0}}}
+
+    monkeypatch.setattr(browser_actions, "capture_aria_snapshot", _fake_capture)
+
+    async def scenario() -> None:
+        result = await browser_actions.browser_snapshot({}, {"chat_id": 7})
+        assert result["ok"] is True
+        assert result["target_id"] == "t1"
+        assert result["refs_count"] == 1
+        assert '[ref=e1]' in result["snapshot"]
+
+    asyncio.run(scenario())

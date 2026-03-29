@@ -103,29 +103,66 @@ def test_web_search_can_use_firecrawl_provider(monkeypatch) -> None:
 
 
 def test_web_search_auto_falls_back_to_firecrawl_when_brave_missing(monkeypatch) -> None:
-    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    monkeypatch.setenv("BRAVE_API_KEY", "brave-test")
     monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
 
-    def _fake_run_search(args):
-        assert args["query"] == "Octopal"
+    def _brave_search(_args):
+        return {
+            "ok": False,
+            "source": "brave_search",
+            "provider": "brave",
+            "error": "rate limited",
+            "degraded": False,
+            "fallback_used": False,
+            "rate_limited": True,
+        }
+
+    def _firecrawl_search(_args):
         return {
             "ok": True,
             "source": "firecrawl_search",
             "provider": "firecrawl",
             "query": "Octopal",
-            "count": 0,
-            "results": [],
+            "count": 1,
+            "results": [{"title": "Firecrawl result"}],
             "degraded": False,
             "fallback_used": False,
             "rate_limited": False,
         }
 
-    monkeypatch.setattr(search_mod, "run_search", _fake_run_search)
+    monkeypatch.setattr("octopal.tools.web.providers.brave_provider.search", _brave_search)
+    monkeypatch.setattr("octopal.tools.web.providers.firecrawl_provider.search", _firecrawl_search)
 
     payload = json.loads(search_mod.web_search({"query": "Octopal"}))
 
     assert payload["ok"] is True
     assert payload["provider"] == "firecrawl"
+    assert payload["fallback_used"] is True
+    assert payload["degraded"] is True
+    assert payload["attempted_providers"] == ["brave", "firecrawl"]
+
+
+def test_web_search_explicit_provider_does_not_fail_over(monkeypatch) -> None:
+    monkeypatch.setenv("BRAVE_API_KEY", "brave-test")
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    monkeypatch.setattr(
+        "octopal.tools.web.providers.brave_provider.search",
+        lambda _args: {
+            "ok": False,
+            "source": "brave_search",
+            "provider": "brave",
+            "error": "boom",
+            "degraded": False,
+            "fallback_used": False,
+            "rate_limited": False,
+        },
+    )
+
+    payload = json.loads(search_mod.web_search({"query": "Octopal", "provider": "brave"}))
+
+    assert payload["ok"] is False
+    assert payload["provider"] == "brave"
 
 
 def test_web_fetch_returns_structured_error_when_url_missing() -> None:

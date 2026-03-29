@@ -42,10 +42,10 @@ async def _get_page_and_target(args: dict[str, Any], ctx: dict[str, Any]) -> tup
     return page, resolved_target
 
 
-async def browser_open(args: dict[str, Any], ctx: dict[str, Any]) -> str:
+async def browser_open(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     url = args.get("url")
     if not url:
-        return "Error: url is required"
+        return {"ok": False, "error": "url is required"}
 
     chat_id = _get_chat_id(ctx)
     manager = get_browser_manager()
@@ -57,9 +57,16 @@ async def browser_open(args: dict[str, Any], ctx: dict[str, Any]) -> str:
 
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
-        return f"Successfully opened {url}"
+        pages = await manager.list_pages(chat_id)
+        current = next((row for row in pages if row.get("is_current")), None)
+        return {
+            "ok": True,
+            "message": f"Successfully opened {url}",
+            "url": url,
+            "target_id": (current or {}).get("target_id"),
+        }
     except Exception as e:
-        return f"Error opening {url}: {e}"
+        return {"ok": False, "url": url, "error": f"Error opening {url}: {e}"}
 
 
 async def browser_tabs(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
@@ -93,16 +100,21 @@ async def browser_navigate(args: dict[str, Any], ctx: dict[str, Any]) -> str:
         return f"Error navigating to {url}: {e}"
 
 
-async def browser_snapshot(args: dict[str, Any], ctx: dict[str, Any]) -> str:
+async def browser_snapshot(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     chat_id = _get_chat_id(ctx)
     page, target_id = await _get_page_and_target(args, ctx)
 
     try:
         result = await capture_aria_snapshot(page)
         _SESSION_REFS.setdefault(chat_id, {})[target_id] = result["refs"]
-        return result["snapshot"]
+        return {
+            "ok": True,
+            "target_id": target_id,
+            "snapshot": result["snapshot"],
+            "refs_count": len(result["refs"]),
+        }
     except Exception as e:
-        return f"Error taking snapshot: {e}"
+        return {"ok": False, "target_id": target_id, "error": f"Error taking snapshot: {e}"}
 
 
 async def browser_click(args: dict[str, Any], ctx: dict[str, Any]) -> str:
