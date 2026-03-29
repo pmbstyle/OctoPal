@@ -190,7 +190,7 @@ def markdown_new_fetch(args: dict[str, Any]) -> str:
     markdown_tokens = resp.headers.get("x-markdown-tokens")
 
     if resp.status_code == 200:
-        snippet = resp.text[:max_chars]
+        normalized = _normalize_markdown_new_success(resp.text, max_chars=max_chars)
         result = {
             "ok": True,
             "degraded": False,
@@ -199,8 +199,10 @@ def markdown_new_fetch(args: dict[str, Any]) -> str:
             "source": "markdown.new",
             "url": url,
             "status_code": resp.status_code,
-            "content_type": resp.headers.get("content-type"),
-            "snippet": snippet,
+            "content_type": normalized["content_type"],
+            "raw_content_type": resp.headers.get("content-type"),
+            "snippet": normalized["snippet"],
+            "title": normalized.get("title"),
             "method": method,
             "retain_images": retain_images,
             "rate_limit_remaining": rate_limit_remaining,
@@ -390,3 +392,27 @@ def _safe_int(value: Any) -> int | None:
         return int(str(value).strip())
     except Exception:
         return None
+
+
+def _normalize_markdown_new_success(body_text: str, *, max_chars: int) -> dict[str, Any]:
+    try:
+        parsed = pyjson.loads(body_text)
+    except Exception:
+        return {
+            "snippet": body_text[:max_chars],
+            "content_type": "text/markdown",
+        }
+
+    if not isinstance(parsed, dict):
+        return {
+            "snippet": body_text[:max_chars],
+            "content_type": "text/markdown",
+        }
+
+    content = parsed.get("content")
+    snippet = str(content if content is not None else body_text)[:max_chars]
+    return {
+        "snippet": snippet,
+        "content_type": "text/markdown",
+        "title": parsed.get("title"),
+    }

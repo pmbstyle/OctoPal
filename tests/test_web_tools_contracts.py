@@ -93,3 +93,40 @@ def test_web_fetch_success_uses_normalized_contract(monkeypatch) -> None:
     assert payload["source"] == "basic_fetch"
     assert payload["url"] == "https://example.com"
     assert "Hello" in payload["snippet"]
+
+
+def test_markdown_new_fetch_normalizes_json_envelope(monkeypatch) -> None:
+    class _ResponseStub:
+        status_code = 200
+        text = json.dumps(
+            {
+                "success": True,
+                "title": "Example Domain",
+                "content": "# Example Domain\n\nBody",
+            }
+        )
+        headers = {"content-type": "application/json; charset=utf-8"}
+
+    class _ClientStub:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _ResponseStub()
+
+    monkeypatch.setattr(fetch_mod.httpx, "Client", _ClientStub)
+
+    payload = json.loads(fetch_mod.markdown_new_fetch({"url": "https://example.com"}))
+
+    assert payload["ok"] is True
+    assert payload["source"] == "markdown.new"
+    assert payload["content_type"] == "text/markdown"
+    assert payload["raw_content_type"] == "application/json; charset=utf-8"
+    assert payload["title"] == "Example Domain"
+    assert payload["snippet"].startswith("# Example Domain")
