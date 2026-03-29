@@ -37,6 +37,7 @@ def test_docker_launcher_mounts_only_worker_dir_when_allowed_paths_missing(
                 "PYTHONPATH": "src",
                 "OCTOPAL_WORKSPACE_DIR": "/workspace",
                 "BRAVE_API_KEY": "brave-test-key",
+                "OPENROUTER_API_KEY": "should-not-pass",
                 "SECRET": "nope",
             },
         )
@@ -51,6 +52,7 @@ def test_docker_launcher_mounts_only_worker_dir_when_allowed_paths_missing(
     assert "OCTOPAL_WORKSPACE_DIR=/workspace/workers/worker-1" in args
     assert "PYTHONPATH=src" in args
     assert "BRAVE_API_KEY=brave-test-key" in args
+    assert "OPENROUTER_API_KEY=should-not-pass" not in args
     assert f"{workspace}:/workspace" not in args
     assert "SECRET" not in args
     assert "PATH" in captured["kwargs"]["env"]
