@@ -381,15 +381,21 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="web_search",
-            description="Search the web using Brave Search and return a JSON list of results (title, url, snippet).",
+            description="Search the web via the configured provider registry (auto, Brave, or Firecrawl) and return structured JSON results.",
             parameters={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query text."},
+                    "provider": {
+                        "type": "string",
+                        "description": "Optional search provider override.",
+                        "enum": ["auto", "brave", "firecrawl"],
+                    },
                     "count": {"type": "integer", "description": "Max results to return (1-10)."},
                     "country": {"type": "string", "description": "Country code for localization (e.g., US, CA)."},
                     "search_lang": {"type": "string", "description": "Search language (e.g., en)."},
                     "ui_lang": {"type": "string", "description": "UI language (e.g., en)."},
+                    "location": {"type": "string", "description": "Optional location hint for providers that support it."},
                     "freshness": {
                         "type": "string",
                         "description": "Time filter (e.g., 1d, 7d, 30d).",

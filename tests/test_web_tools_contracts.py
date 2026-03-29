@@ -10,7 +10,7 @@ def test_web_search_returns_structured_error_when_query_missing() -> None:
     payload = json.loads(search_mod.web_search({}))
 
     assert payload["ok"] is False
-    assert payload["source"] == "brave_search"
+    assert payload["source"] == "web_search"
     assert payload["error"] == "query is required"
 
 
@@ -47,14 +47,85 @@ def test_web_search_success_uses_normalized_contract(monkeypatch) -> None:
             return _ResponseStub()
 
     monkeypatch.setenv("BRAVE_API_KEY", "test-key")
-    monkeypatch.setattr(search_mod.httpx, "Client", _ClientStub)
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    monkeypatch.setattr("octopal.tools.web.providers.brave_provider.httpx.Client", _ClientStub)
 
     payload = json.loads(search_mod.web_search({"query": "Octopal"}))
 
     assert payload["ok"] is True
     assert payload["source"] == "brave_search"
+    assert payload["provider"] == "brave"
     assert payload["count"] == 1
     assert payload["results"][0]["title"] == "Octopal"
+
+
+def test_web_search_can_use_firecrawl_provider(monkeypatch) -> None:
+    class _ResponseStub:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "data": {
+                    "web": [
+                        {
+                            "title": "Firecrawl result",
+                            "url": "https://example.com/fc",
+                            "description": "Search via Firecrawl",
+                        }
+                    ]
+                }
+            }
+
+    class _ClientStub:
+        def __init__(self, *args, **kwargs) -> None:
+            return None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _ResponseStub()
+
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+    monkeypatch.setattr("octopal.tools.web.providers.firecrawl_provider.httpx.Client", _ClientStub)
+
+    payload = json.loads(search_mod.web_search({"query": "Octopal", "provider": "firecrawl"}))
+
+    assert payload["ok"] is True
+    assert payload["source"] == "firecrawl_search"
+    assert payload["provider"] == "firecrawl"
+    assert payload["results"][0]["title"] == "Firecrawl result"
+
+
+def test_web_search_auto_falls_back_to_firecrawl_when_brave_missing(monkeypatch) -> None:
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    monkeypatch.setenv("FIRECRAWL_API_KEY", "fc-test")
+
+    def _fake_run_search(args):
+        assert args["query"] == "Octopal"
+        return {
+            "ok": True,
+            "source": "firecrawl_search",
+            "provider": "firecrawl",
+            "query": "Octopal",
+            "count": 0,
+            "results": [],
+            "degraded": False,
+            "fallback_used": False,
+            "rate_limited": False,
+        }
+
+    monkeypatch.setattr(search_mod, "run_search", _fake_run_search)
+
+    payload = json.loads(search_mod.web_search({"query": "Octopal"}))
+
+    assert payload["ok"] is True
+    assert payload["provider"] == "firecrawl"
 
 
 def test_web_fetch_returns_structured_error_when_url_missing() -> None:
