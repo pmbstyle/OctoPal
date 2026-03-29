@@ -1,4 +1,3 @@
-from octopal.tools.catalog import get_tools
 from octopal.tools.diagnostics import (
     ToolResolutionEntry,
     ToolResolutionReport,
@@ -26,3 +25,11 @@ __all__ = [
     "filter_tools",
     "get_tools",
 ]
+
+
+def __getattr__(name: str):
+    if name == "get_tools":
+        from octopal.tools.catalog import get_tools
+
+        return get_tools
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

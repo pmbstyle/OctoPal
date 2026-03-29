@@ -21,8 +21,12 @@ from octopal.tools.browser.actions import (
     browser_click,
     browser_close,
     browser_extract,
+    browser_focus_tab,
+    browser_navigate,
     browser_open,
+    browser_screenshot,
     browser_snapshot,
+    browser_tabs,
     browser_type,
     browser_wait_for,
     browser_workflow,
@@ -30,30 +34,9 @@ from octopal.tools.browser.actions import (
 from octopal.tools.filesystem.download import download_file
 from octopal.tools.filesystem.files import fs_delete, fs_list, fs_move, fs_read, fs_write
 from octopal.tools.inventory import annotate_tool_specs
-from octopal.tools.llm.subtask import run_llm_subtask
-from octopal.tools.mcp.management import get_mcp_mgmt_tools
 from octopal.tools.memory.canon import manage_canon, search_canon
 from octopal.tools.memory.experiments import octo_experiment_log
 from octopal.tools.ops.exec_run import exec_run
-from octopal.tools.ops.management import (
-    artifact_collect,
-    config_audit,
-    coverage_report,
-    db_backup,
-    db_maintenance,
-    db_query_readonly,
-    db_restore,
-    docker_compose_control,
-    git_ops,
-    process_inspect,
-    release_snapshot,
-    rollback_release,
-    secret_scan,
-    self_control,
-    service_health,
-    service_logs,
-    test_run,
-)
 from octopal.tools.registry import ToolSpec
 from octopal.tools.skills.management import get_registered_skill_tools, get_skill_management_tools
 from octopal.tools.web.fetch import markdown_new_fetch, web_fetch
@@ -360,7 +343,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="llm_subtask", # A new permission to control access to this powerful tool
-            handler=lambda args, ctx: run_llm_subtask(args, ctx["octo"].provider),
+            handler=_tool_run_llm_subtask,
             is_async=True,
         ),
         ToolSpec(
@@ -381,15 +364,21 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="web_search",
-            description="Search the web using Brave Search and return a JSON list of results (title, url, snippet).",
+            description="Search the web via the configured provider registry (auto, Brave, or Firecrawl) and return structured JSON results.",
             parameters={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Search query text."},
+                    "provider": {
+                        "type": "string",
+                        "description": "Optional search provider override.",
+                        "enum": ["auto", "brave", "firecrawl"],
+                    },
                     "count": {"type": "integer", "description": "Max results to return (1-10)."},
                     "country": {"type": "string", "description": "Country code for localization (e.g., US, CA)."},
                     "search_lang": {"type": "string", "description": "Search language (e.g., en)."},
                     "ui_lang": {"type": "string", "description": "UI language (e.g., en)."},
+                    "location": {"type": "string", "description": "Optional location hint for providers that support it."},
                     "freshness": {
                         "type": "string",
                         "description": "Time filter (e.g., 1d, 7d, 30d).",
@@ -528,6 +517,8 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "type": "object",
                 "properties": {
                     "url": {"type": "string", "description": "URL to open."},
+                    "target_id": {"type": "string", "description": "Optional existing tab target id."},
+                    "new_tab": {"type": "boolean", "description": "Open in a new tab before loading the URL."},
                 },
                 "required": ["url"],
                 "additionalProperties": False,
@@ -537,9 +528,38 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             is_async=True,
         ),
         ToolSpec(
+            name="browser_tabs",
+            description="List open browser tabs for this chat session, including the active target id.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="network",
+            handler=lambda args, ctx: browser_tabs(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
+            name="browser_focus_tab",
+            description="Switch the active browser tab using a target id returned by browser_tabs.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target_id": {"type": "string", "description": "Tab target id (e.g. 't1')."},
+                },
+                "required": ["target_id"],
+                "additionalProperties": False,
+            },
+            permission="network",
+            handler=lambda args, ctx: browser_focus_tab(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
             name="browser_snapshot",
             description="Capture an accessibility snapshot of the current page. Provides [ref=eN] tags for interacting with elements.",
-            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target_id": {"type": "string", "description": "Optional tab target id to snapshot."},
+                },
+                "additionalProperties": False,
+            },
             permission="network",
             handler=lambda args, ctx: browser_snapshot(args, ctx),
             is_async=True,
@@ -551,6 +571,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "type": "object",
                 "properties": {
                     "ref": {"type": "string", "description": "Element reference (e.g. 'e1')."},
+                    "target_id": {"type": "string", "description": "Optional tab target id for the ref lookup."},
                 },
                 "required": ["ref"],
                 "additionalProperties": False,
@@ -568,6 +589,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                     "ref": {"type": "string", "description": "Element reference (e.g. 'e1')."},
                     "text": {"type": "string", "description": "Text to type."},
                     "press_enter": {"type": "boolean", "description": "Whether to press Enter after typing."},
+                    "target_id": {"type": "string", "description": "Optional tab target id for the ref lookup."},
                 },
                 "required": ["ref", "text"],
                 "additionalProperties": False,
@@ -577,9 +599,31 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             is_async=True,
         ),
         ToolSpec(
+            name="browser_navigate",
+            description="Navigate the current or specified browser tab to a new URL.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to navigate to."},
+                    "target_id": {"type": "string", "description": "Optional tab target id."},
+                },
+                "required": ["url"],
+                "additionalProperties": False,
+            },
+            permission="network",
+            handler=lambda args, ctx: browser_navigate(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
             name="browser_close",
             description="Close the browser session for the current chat.",
-            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target_id": {"type": "string", "description": "Optional tab target id to close instead of the full session."},
+                },
+                "additionalProperties": False,
+            },
             permission="network",
             handler=lambda args, ctx: browser_close(args, ctx),
             is_async=True,
@@ -592,6 +636,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "properties": {
                     "ref": {"type": "string", "description": "Optional element reference from browser_snapshot."},
                     "text": {"type": "string", "description": "Optional visible text to wait for."},
+                    "target_id": {"type": "string", "description": "Optional tab target id."},
                     "state": {
                         "type": "string",
                         "description": "Desired locator state.",
@@ -613,6 +658,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "properties": {
                     "ref": {"type": "string", "description": "Optional element reference from browser_snapshot."},
                     "max_chars": {"type": "integer", "description": "Maximum text length to return (100-20000)."},
+                    "target_id": {"type": "string", "description": "Optional tab target id."},
                 },
                 "additionalProperties": False,
             },
@@ -621,8 +667,23 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             is_async=True,
         ),
         ToolSpec(
+            name="browser_screenshot",
+            description="Capture a PNG screenshot of the current or specified browser tab.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "target_id": {"type": "string", "description": "Optional tab target id."},
+                    "full_page": {"type": "boolean", "description": "Capture the full page instead of only the viewport."},
+                },
+                "additionalProperties": False,
+            },
+            permission="network",
+            handler=lambda args, ctx: browser_screenshot(args, ctx),
+            is_async=True,
+        ),
+        ToolSpec(
             name="browser_workflow",
-            description="Run a short browser workflow as one tool call by sequencing existing browser actions like open, snapshot, click, type, wait_for, extract, and close.",
+            description="Run a short browser workflow as one tool call by sequencing browser actions like open, tabs, focus_tab, navigate, snapshot, screenshot, click, type, wait_for, extract, and close.",
             parameters={
                 "type": "object",
                 "properties": {
@@ -634,12 +695,15 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                             "properties": {
                                 "action": {
                                     "type": "string",
-                                    "enum": ["open", "snapshot", "click", "type", "wait_for", "extract", "close"],
+                                    "enum": ["open", "tabs", "focus_tab", "navigate", "snapshot", "screenshot", "click", "type", "wait_for", "extract", "close"],
                                 },
                                 "url": {"type": "string"},
+                                "target_id": {"type": "string"},
+                                "new_tab": {"type": "boolean"},
                                 "ref": {"type": "string"},
                                 "text": {"type": "string"},
                                 "press_enter": {"type": "boolean"},
+                                "full_page": {"type": "boolean"},
                                 "state": {"type": "string", "enum": ["attached", "detached", "hidden", "visible"]},
                                 "timeout_ms": {"type": "integer"},
                                 "max_chars": {"type": "integer"},
@@ -808,7 +872,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="service_read",
-            handler=lambda args, ctx: service_health(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("service_health", args, ctx),
         ),
         ToolSpec(
             name="service_logs",
@@ -827,7 +891,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="service_read",
-            handler=lambda args, ctx: service_logs(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("service_logs", args, ctx),
         ),
         ToolSpec(
             name="docker_compose_control",
@@ -848,7 +912,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="service_control",
-            handler=lambda args, ctx: docker_compose_control(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("docker_compose_control", args, ctx),
         ),
         ToolSpec(
             name="git_ops",
@@ -866,7 +930,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="deploy_control",
-            handler=lambda args, ctx: git_ops(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("git_ops", args, ctx),
         ),
         ToolSpec(
             name="process_inspect",
@@ -877,7 +941,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="service_read",
-            handler=lambda args, ctx: process_inspect(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("process_inspect", args, ctx),
         ),
         ToolSpec(
             name="db_backup",
@@ -888,7 +952,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="db_admin",
-            handler=lambda args, ctx: db_backup(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("db_backup", args, ctx),
         ),
         ToolSpec(
             name="db_restore",
@@ -904,7 +968,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="db_admin",
-            handler=lambda args, ctx: db_restore(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("db_restore", args, ctx),
         ),
         ToolSpec(
             name="db_maintenance",
@@ -915,7 +979,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="db_admin",
-            handler=lambda args, ctx: db_maintenance(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("db_maintenance", args, ctx),
         ),
         ToolSpec(
             name="db_query_readonly",
@@ -927,7 +991,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="db_admin",
-            handler=lambda args, ctx: db_query_readonly(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("db_query_readonly", args, ctx),
         ),
         ToolSpec(
             name="secret_scan",
@@ -938,14 +1002,14 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="security_audit",
-            handler=lambda args, ctx: secret_scan(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("secret_scan", args, ctx),
         ),
         ToolSpec(
             name="config_audit",
             description="Audit runtime configuration presence and critical keys.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="security_audit",
-            handler=lambda args, ctx: config_audit(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("config_audit", args, ctx),
         ),
         ToolSpec(
             name="gateway_status",
@@ -964,14 +1028,14 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="exec",
-            handler=lambda args, ctx: test_run(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("test_run", args, ctx),
         ),
         ToolSpec(
             name="coverage_report",
             description="Read coverage.xml summary if available.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             permission="exec",
-            handler=lambda args, ctx: coverage_report(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("coverage_report", args, ctx),
         ),
         ToolSpec(
             name="artifact_collect",
@@ -982,7 +1046,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="filesystem_read",
-            handler=lambda args, ctx: artifact_collect(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("artifact_collect", args, ctx),
         ),
         ToolSpec(
             name="release_snapshot",
@@ -993,7 +1057,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="deploy_control",
-            handler=lambda args, ctx: release_snapshot(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("release_snapshot", args, ctx),
         ),
         ToolSpec(
             name="rollback_release",
@@ -1004,7 +1068,7 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="deploy_control",
-            handler=lambda args, ctx: rollback_release(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("rollback_release", args, ctx),
         ),
         ToolSpec(
             name="octo_context_reset",
@@ -1046,19 +1110,97 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             permission="self_control",
-            handler=lambda args, ctx: self_control(args, ctx),
+            handler=lambda args, ctx: _tool_ops_management("self_control", args, ctx),
         ),
     ]
     tools.extend(get_skill_management_tools())
     tools.extend(get_registered_skill_tools())
     tools.extend(get_worker_tools())
-    tools.extend(get_mcp_mgmt_tools())
+    tools.extend(_get_mcp_management_tools())
     if mcp_manager:
         mcp_tools = mcp_manager.get_all_tools()
         if mcp_tools:
             logger.info("Injecting %d MCP tools into registry", len(mcp_tools))
             tools.extend(mcp_tools)
     return annotate_tool_specs(tools)
+
+
+def _tool_run_llm_subtask(args, ctx):
+    from octopal.tools.llm.subtask import run_llm_subtask
+
+    return run_llm_subtask(args, ctx["octo"].provider)
+
+
+def _tool_ops_management(name: str, args, ctx):
+    from octopal.tools.ops import management as ops_management
+
+    handler = getattr(ops_management, name)
+    return handler(args, ctx)
+
+
+def _get_mcp_management_tools() -> list[ToolSpec]:
+    try:
+        from octopal.tools.mcp.management import get_mcp_mgmt_tools
+    except ModuleNotFoundError as exc:
+        if exc.name == "mcp":
+            return _get_fallback_mcp_management_tools()
+        raise
+
+    return get_mcp_mgmt_tools()
+
+
+def _fallback_mcp_unavailable(_args, _ctx) -> str:
+    return "Error: MCP dependencies are not installed in this environment."
+
+
+def _get_fallback_mcp_management_tools() -> list[ToolSpec]:
+    return [
+        ToolSpec(
+            name="mcp_connect",
+            description="Connect to an external MCP server.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": True},
+            permission="self_control",
+            handler=_fallback_mcp_unavailable,
+            is_async=True,
+        ),
+        ToolSpec(
+            name="mcp_disconnect",
+            description="Disconnect from an MCP server.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": True},
+            permission="self_control",
+            handler=_fallback_mcp_unavailable,
+            is_async=True,
+        ),
+        ToolSpec(
+            name="mcp_list",
+            description="List active MCP servers and their tools.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="self_control",
+            handler=_fallback_mcp_unavailable,
+        ),
+        ToolSpec(
+            name="mcp_status",
+            description="Show status for all known MCP servers.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="self_control",
+            handler=_fallback_mcp_unavailable,
+        ),
+        ToolSpec(
+            name="mcp_call",
+            description="Call an MCP tool on a specific server.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": True},
+            permission="mcp_exec",
+            handler=_fallback_mcp_unavailable,
+            is_async=True,
+        ),
+        ToolSpec(
+            name="mcp_discover",
+            description="Summarize MCP server readiness, exposed tools, and next actions.",
+            parameters={"type": "object", "properties": {}, "additionalProperties": False},
+            permission="self_control",
+            handler=_fallback_mcp_unavailable,
+        ),
+    ]
 
 
 async def _tool_check_schedule(args, ctx) -> str:
