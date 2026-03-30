@@ -609,12 +609,9 @@ def restart(
 @app.command()
 def version() -> None:
     """Show the version of Octopal."""
-    from importlib.metadata import version as get_version
-    try:
-        v = get_version("octopal")
-    except Exception:
-        v = "0.1.0 (dev)"
-    console.print(f"Octopal [bold cyan]v{v}[/bold cyan]")
+    from octopal import __version__
+
+    console.print(f"Octopal [bold cyan]v{__version__}[/bold cyan]")
 
 
 @app.command()

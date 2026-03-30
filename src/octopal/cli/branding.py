@@ -1,12 +1,11 @@
 import sys
 import textwrap
-from importlib.metadata import PackageNotFoundError
-from importlib.metadata import version as get_version
 
 from rich import print
 from rich.align import Align
 from rich.console import Group
 from rich.text import Text
+from octopal import __version__
 
 OCTO_SILVER = "#6aafae"
 OCTO_BLUE = "#0f4e5d"
@@ -32,11 +31,6 @@ def print_banner() -> None:
     ░▀▀▀░▀▀▀░░▀░░▀▀▀░▀░░░▀░▀░▀▀▀
     """).strip()
 
-    try:
-        current_version = get_version("octopal")
-    except PackageNotFoundError:
-        current_version = "dev"
-
     output_encoding = (sys.stdout.encoding or "utf-8").lower()
     banner_text.encode(output_encoding, errors="strict")
 
@@ -48,7 +42,7 @@ def print_banner() -> None:
         Text(""),
         Align.center(tagline),
         Align.center(subline),
-        Align.center(Text(f"v{current_version}", style=f"bold {OCTO_SILVER}")),
+        Align.center(Text(f"v{__version__}", style=f"bold {OCTO_SILVER}")),
     )
     print("\n")
     print(Align.center(content))
