@@ -26,16 +26,19 @@ def _split_brand_text(block: str) -> Text:
 
 def print_banner() -> None:
     banner_text = textwrap.dedent(r"""
-    ░█▀█░█▀▀░▀█▀░█▀█░█▀█░█▀█░█░░
-    ░█░█░█░░░░█░░█░█░█▀▀░█▀█░█░░
-    ░▀▀▀░▀▀▀░░▀░░▀▀▀░▀░░░▀░▀░▀▀▀
+░█████╗░░█████╗░████████╗░█████╗░██████╗░░█████╗░██╗░░░░░
+██╔══██╗██╔══██╗╚══██╔══╝██╔══██╗██╔══██╗██╔══██╗██║░░░░░
+██║░░██║██║░░╚═╝░░░██║░░░██║░░██║██████╔╝███████║██║░░░░░
+██║░░██║██║░░██╗░░░██║░░░██║░░██║██╔═══╝░██╔══██║██║░░░░░
+╚█████╔╝╚█████╔╝░░░██║░░░╚█████╔╝██║░░░░░██║░░██║███████╗
+░╚════╝░░╚════╝░░░░╚═╝░░░░╚════╝░╚═╝░░░░░╚═╝░░╚═╝╚══════╝
     """).strip()
 
     output_encoding = (sys.stdout.encoding or "utf-8").lower()
     banner_text.encode(output_encoding, errors="strict")
 
     tagline = Text("Your trusted AI pal", style=f"italic {OCTO_SILVER}")
-    subline = Text("MULTI-AGENT AI ORCHESTRATION, FAST AND SECURE!", style=OCTO_WHITE)
+    subline = Text("SECURE MULTI-AGENT EXECUTION RUNTIME", style=OCTO_WHITE)
 
     content = Group(
         Align.center(_split_brand_text(banner_text)),

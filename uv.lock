@@ -208,68 +208,6 @@ wheels = [
 ]
 
 [[package]]
-name = "octopal"
-version = "0.4.5"
-source = { editable = "." }
-dependencies = [
-    { name = "aiogram" },
-    { name = "colorama" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "inquirerpy" },
-    { name = "jsonschema" },
-    { name = "litellm" },
-    { name = "mcp" },
-    { name = "playwright" },
-    { name = "pydantic" },
-    { name = "pydantic-settings" },
-    { name = "python-dotenv" },
-    { name = "rich" },
-    { name = "structlog" },
-    { name = "telegramify-markdown" },
-    { name = "typer" },
-    { name = "uvicorn" },
-    { name = "websockets" },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "black" },
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiogram", specifier = ">=3.5.0" },
-    { name = "black", marker = "extra == 'dev'", specifier = ">=24.4.0" },
-    { name = "colorama", specifier = ">=0.4.6" },
-    { name = "fastapi", specifier = ">=0.110.0" },
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "inquirerpy", specifier = ">=0.3.4" },
-    { name = "jsonschema", specifier = ">=4.22.0" },
-    { name = "litellm", specifier = ">=1.50.0" },
-    { name = "mcp", specifier = ">=1.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.9.0" },
-    { name = "playwright", specifier = ">=1.49.0" },
-    { name = "pydantic", specifier = ">=2.7.0" },
-    { name = "pydantic-settings", specifier = ">=2.2.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
-    { name = "python-dotenv", specifier = ">=1.0.1" },
-    { name = "rich", specifier = ">=13.7.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
-    { name = "structlog", specifier = ">=24.1.0" },
-    { name = "telegramify-markdown", specifier = ">=0.5.4" },
-    { name = "typer", specifier = ">=0.12.0" },
-    { name = "uvicorn", specifier = ">=0.27.0" },
-    { name = "websockets", specifier = ">=12.0" },
-]
-provides-extras = ["dev"]
-
-[[package]]
 name = "certifi"
 version = "2026.1.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1269,6 +1207,67 @@ sdist = { url = "https://files.pythonhosted.org/packages/a2/6e/371856a3fb9d31ca8
 wheels = [
     { url = "https://files.pythonhosted.org/packages/79/7b/2c79738432f5c924bef5071f933bcc9efd0473bac3b4aa584a6f7c1c8df8/mypy_extensions-1.1.0-py3-none-any.whl", hash = "sha256:1be4cccdb0f2482337c4743e60421de3a356cd97508abadd57d47403e94f5505", size = 4963, upload-time = "2025-04-22T14:54:22.983Z" },
 ]
+
+[[package]]
+name = "octopal"
+source = { editable = "." }
+dependencies = [
+    { name = "aiogram" },
+    { name = "colorama" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "inquirerpy" },
+    { name = "jsonschema" },
+    { name = "litellm" },
+    { name = "mcp" },
+    { name = "playwright" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "python-dotenv" },
+    { name = "rich" },
+    { name = "structlog" },
+    { name = "telegramify-markdown" },
+    { name = "typer" },
+    { name = "uvicorn" },
+    { name = "websockets" },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "black" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiogram", specifier = ">=3.5.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=24.4.0" },
+    { name = "colorama", specifier = ">=0.4.6" },
+    { name = "fastapi", specifier = ">=0.110.0" },
+    { name = "httpx", specifier = ">=0.27.0" },
+    { name = "inquirerpy", specifier = ">=0.3.4" },
+    { name = "jsonschema", specifier = ">=4.22.0" },
+    { name = "litellm", specifier = ">=1.50.0" },
+    { name = "mcp", specifier = ">=1.0.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.9.0" },
+    { name = "playwright", specifier = ">=1.49.0" },
+    { name = "pydantic", specifier = ">=2.7.0" },
+    { name = "pydantic-settings", specifier = ">=2.2.0" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.23.0" },
+    { name = "python-dotenv", specifier = ">=1.0.1" },
+    { name = "rich", specifier = ">=13.7.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4.0" },
+    { name = "structlog", specifier = ">=24.1.0" },
+    { name = "telegramify-markdown", specifier = ">=0.5.4" },
+    { name = "typer", specifier = ">=0.12.0" },
+    { name = "uvicorn", specifier = ">=0.27.0" },
+    { name = "websockets", specifier = ">=12.0" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "openai"
