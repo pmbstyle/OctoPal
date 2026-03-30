@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm, IntPrompt, Prompt
-from rich.text import Text
 
 from octopal.cli.wizard.models import (
     WizardConfirmParams,
@@ -20,7 +19,6 @@ OCTO_SILVER = "#6aafae"
 OCTO_BLUE = "#0f4e5d"
 OCTO_WHITE = "#ebebeb"
 SURFACE_BLUE = "#5fa8c8"
-SUBTLE_STEEL = "#5f8ea3"
 
 
 class WizardPrompter:
@@ -50,10 +48,7 @@ class RichWizardPrompter(WizardPrompter):
     surface: str = SURFACE_BLUE
 
     def intro(self, title: str, body: str | None = None) -> None:
-        rendered = _brand_text(title)
-        rendered.append("\n")
-        if body:
-            rendered.append(body, style=SUBTLE_STEEL)
+        rendered = title if not body else f"{title}\n{body}"
         self.console.print(
             Panel(
                 rendered,
@@ -157,21 +152,6 @@ class RichWizardPrompter(WizardPrompter):
 
 def _choice_name[T](option: WizardSelectOption[T]) -> str:
     return f"{option.label} - {option.hint}" if option.hint else option.label
-
-
-def _brand_text(title: str) -> Text:
-    if "Octopal" not in title:
-        return Text(title, style=f"bold {OCTO_WHITE}")
-
-    rendered = Text()
-    before, _, after = title.partition("Octopal")
-    if before:
-        rendered.append(before, style=f"bold {OCTO_WHITE}")
-    rendered.append("Octo", style=f"bold {OCTO_SILVER}")
-    rendered.append("pal", style=f"bold {OCTO_BLUE}")
-    if after:
-        rendered.append(after, style=f"bold {OCTO_WHITE}")
-    return rendered
 
 
 def _inquirer_select[T](params: WizardSelectParams[T]) -> T:

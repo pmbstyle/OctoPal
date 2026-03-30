@@ -149,27 +149,7 @@ def configure_wizard() -> None:
         save_config(config)
         console.print("[green]Migration complete. Continuing with wizard...[/green]")
 
-    setup_mode = prompter.select(
-        WizardSelectParams(
-            message="Setup mode",
-            initial_value="quick",
-            options=[
-                WizardSelectOption(
-                    value="quick",
-                    label="Quick Setup",
-                    hint="Configure the essentials and keep the defaults moving.",
-                ),
-                WizardSelectOption(
-                    value="advanced",
-                    label="Advanced Setup",
-                    hint="Tune transport, runtime, and provider details step by step.",
-                ),
-            ],
-        )
-    )
-    advanced_mode = setup_mode == "advanced"
-
-    sections = _build_sections(config, advanced_mode, prompter)
+    sections = _build_sections(config, prompter)
     for section in sections:
         if section.run is not None:
             section.run(config)
@@ -214,7 +194,7 @@ def configure_wizard() -> None:
         _edit_section(config, sections, prompter)
 
 
-def _configure_user_channel(config: OctopalConfig, advanced: bool, prompter) -> None:
+def _configure_user_channel(config: OctopalConfig, prompter) -> None:
     _print_section_header("Channel Access")
 
     channel = prompter.select(
@@ -275,14 +255,13 @@ def _configure_user_channel(config: OctopalConfig, advanced: bool, prompter) -> 
         )
         config.whatsapp.allowed_numbers = [n.strip() for n in allowed.split(",") if n.strip()]
 
-        if advanced:
-            config.whatsapp.bridge_host = prompter.text(
-                WizardTextParams(
-                    message="Bridge host",
-                    initial_value=config.whatsapp.bridge_host,
-                )
+        config.whatsapp.bridge_host = prompter.text(
+            WizardTextParams(
+                message="Bridge host",
+                initial_value=config.whatsapp.bridge_host,
             )
-            config.whatsapp.bridge_port = IntPrompt.ask("Bridge port", default=config.whatsapp.bridge_port)
+        )
+        config.whatsapp.bridge_port = IntPrompt.ask("Bridge port", default=config.whatsapp.bridge_port)
     else:
         prompter.note(
             "Telegram",
@@ -309,32 +288,31 @@ def _configure_user_channel(config: OctopalConfig, advanced: bool, prompter) -> 
         )
         config.telegram.allowed_chat_ids = [i.strip() for i in allowed_ids.split(",") if i.strip()]
 
-        if advanced:
-            config.telegram.parse_mode = prompter.select(
-                WizardSelectParams(
-                    message="Parse mode",
-                    initial_value=config.telegram.parse_mode,
-                    options=[
-                        WizardSelectOption(value="MarkdownV2", label="MarkdownV2"),
-                        WizardSelectOption(value="HTML", label="HTML"),
-                        WizardSelectOption(value="Markdown", label="Markdown"),
-                    ],
-                )
+        config.telegram.parse_mode = prompter.select(
+            WizardSelectParams(
+                message="Parse mode",
+                initial_value=config.telegram.parse_mode,
+                options=[
+                    WizardSelectOption(value="MarkdownV2", label="MarkdownV2"),
+                    WizardSelectOption(value="HTML", label="HTML"),
+                    WizardSelectOption(value="Markdown", label="Markdown"),
+                ],
             )
+        )
 
 
 def _configure_llm(
     master_config: OctopalConfig,
     label: str,
     config: LLMConfig,
-    advanced: bool,
     prompter: WizardPrompter | None = None,
 ) -> None:
     prompter = _resolve_prompter(prompter)
     _print_section_header(f"{label} LLM Settings")
 
     provider_choices = _render_provider_select_list(prompter)
-    current_id = config.provider_id or "zai"
+    previous_provider_id = config.provider_id or "zai"
+    current_id = previous_provider_id
     provider_id = prompter.select(
         WizardSelectParams(
             message=f"{label} provider",
@@ -377,47 +355,32 @@ def _configure_llm(
     )
 
     if entry.supports_custom_base_url:
-        current_base = config.api_base or entry.default_api_base or ""
-        if advanced:
-            config.api_base = prompter.text(
-                WizardTextParams(
-                    message=entry.base_url_label,
-                    initial_value=current_base,
-                )
+        provider_changed = provider_id != previous_provider_id
+        current_base = entry.default_api_base or ""
+        if not provider_changed:
+            current_base = config.api_base or entry.default_api_base or ""
+        config.api_base = prompter.text(
+            WizardTextParams(
+                message=entry.base_url_label,
+                initial_value=current_base,
             )
-        else:
-            use_default_base = prompter.confirm(
-                WizardConfirmParams(
-                    message=f"Use recommended endpoint for {label}?",
-                    initial_value=True,
-                )
+        )
+
+    if entry.supports_model_prefix_override:
+        config.model_prefix = prompter.text(
+            WizardTextParams(
+                message="Provider prefix (LiteLLM)",
+                initial_value=config.model_prefix or entry.model_prefix,
             )
-            if use_default_base:
-                config.api_base = current_base or None
-            else:
-                config.api_base = prompter.text(
-                    WizardTextParams(
-                        message=entry.base_url_label,
-                        initial_value=current_base,
-                    )
-                )
+        )
 
-    if advanced:
-        if entry.supports_model_prefix_override:
-            config.model_prefix = prompter.text(
-                WizardTextParams(
-                    message="Provider prefix (LiteLLM)",
-                    initial_value=config.model_prefix or entry.model_prefix,
-                )
-            )
-
-        # Runtime settings (global for now, but could be per-provider)
-        if label == "Octo":
-            master_config.litellm.timeout = IntPrompt.ask("Request timeout (sec)", default=int(master_config.litellm.timeout))
-            master_config.litellm.num_retries = IntPrompt.ask("Max retries", default=master_config.litellm.num_retries)
+    # Runtime settings (global for now, but could be per-provider)
+    if label == "Octo":
+        master_config.litellm.timeout = IntPrompt.ask("Request timeout (sec)", default=int(master_config.litellm.timeout))
+        master_config.litellm.num_retries = IntPrompt.ask("Max retries", default=master_config.litellm.num_retries)
 
 
-def _configure_worker_settings(config: OctopalConfig, advanced: bool, prompter) -> None:
+def _configure_worker_settings(config: OctopalConfig, prompter) -> None:
     wants_separate = prompter.confirm(
         WizardConfirmParams(
             message="Configure separate LLM settings for Workers?",
@@ -429,9 +392,9 @@ def _configure_worker_settings(config: OctopalConfig, advanced: bool, prompter) 
         config.worker_llm_overrides = {}
         return
 
-    _configure_llm(config, "Worker (Default)", config.worker_llm_default, advanced, prompter)
+    _configure_llm(config, "Worker (Default)", config.worker_llm_default, prompter)
 
-    if advanced and prompter.confirm(
+    if prompter.confirm(
         WizardConfirmParams(
             message="Add specific worker overrides? (e.g. for 'researcher')",
             initial_value=bool(config.worker_llm_overrides),
@@ -454,7 +417,7 @@ def _configure_worker_overrides(config: OctopalConfig, prompter) -> None:
         if name not in config.worker_llm_overrides:
             config.worker_llm_overrides[name] = LLMConfig()
 
-        _configure_llm(config, f"Override: {name}", config.worker_llm_overrides[name], False, prompter)
+        _configure_llm(config, f"Override: {name}", config.worker_llm_overrides[name], prompter)
 
         if not Confirm.ask("Add another override?", default=True):
             break
@@ -617,22 +580,19 @@ def _configure_runtime_advanced(config: OctopalConfig, prompter) -> None:
             )
         )
 
-    _configure_dashboard(config, prompter)
-
-
-def _build_sections(config: OctopalConfig, advanced: bool, prompter) -> list[WizardSection]:
+def _build_sections(config: OctopalConfig, prompter) -> list[WizardSection]:
     sections = [
         WizardSection(
             key="channel",
             title="Channel Access",
             render_status=lambda cfg: f"{cfg.user_channel}",
-            run=lambda cfg: _configure_user_channel(cfg, advanced, prompter),
+            run=lambda cfg: _configure_user_channel(cfg, prompter),
         ),
         WizardSection(
             key="octo-llm",
             title="Octo LLM",
             render_status=lambda cfg: f"{cfg.llm.provider_id or 'unset'} / {cfg.llm.model or 'unset'}",
-            run=lambda cfg: _configure_llm(cfg, "Octo", cfg.llm, advanced, prompter),
+            run=lambda cfg: _configure_llm(cfg, "Octo", cfg.llm, prompter),
         ),
         WizardSection(
             key="worker-llm",
@@ -642,7 +602,7 @@ def _build_sections(config: OctopalConfig, advanced: bool, prompter) -> list[Wiz
                 if not cfg.worker_llm_default.provider_id
                 else f"{cfg.worker_llm_default.provider_id} / {cfg.worker_llm_default.model or 'unset'}"
             ),
-            run=lambda cfg: _configure_worker_settings(cfg, advanced, prompter),
+            run=lambda cfg: _configure_worker_settings(cfg, prompter),
         ),
         WizardSection(
             key="storage",
@@ -662,16 +622,13 @@ def _build_sections(config: OctopalConfig, advanced: bool, prompter) -> list[Wiz
             render_status=lambda cfg: _dashboard_status(cfg),
             run=lambda cfg: _configure_dashboard(cfg, prompter),
         ),
+        WizardSection(
+            key="runtime",
+            title="Advanced Runtime",
+            render_status=lambda cfg: f"{cfg.log_level} / {cfg.workers.launcher}",
+            run=lambda cfg: _configure_runtime_advanced(cfg, prompter),
+        ),
     ]
-    if advanced:
-        sections.append(
-            WizardSection(
-                key="runtime",
-                title="Advanced Runtime",
-                render_status=lambda cfg: f"{cfg.log_level} / {cfg.workers.launcher}",
-                run=lambda cfg: _configure_runtime_advanced(cfg, prompter),
-            )
-        )
     return sections
 
 

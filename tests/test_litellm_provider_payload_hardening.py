@@ -30,7 +30,7 @@ def _settings() -> Settings:
         openrouter_timeout=30.0,
         zai_api_key="z-test",
         zai_model="glm-5",
-        zai_base_url="https://api.z.ai/api/coding/paas/v4",
+        zai_base_url="https://api.z.ai/api/paas/v4/",
         zai_chat_path="/chat/completions",
         zai_timeout_seconds=45.0,
         zai_connect_timeout_seconds=15.0,
@@ -55,7 +55,7 @@ def _minimax_settings() -> Settings:
         litellm_provider_id="minimax",
         litellm_model="MiniMax-M2.7",
         litellm_api_key="mini-test",
-        litellm_api_base="https://api.minimax.io/v1",
+        litellm_api_base="https://api.minimax.io/anthropic/v1",
         debug_prompts=False,
     )
 

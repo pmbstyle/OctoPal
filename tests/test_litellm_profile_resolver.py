@@ -29,7 +29,7 @@ def _base_settings(**overrides) -> Settings:
         "openrouter_timeout": 30.0,
         "zai_api_key": None,
         "zai_model": "glm-5",
-        "zai_base_url": "https://api.z.ai/api/coding/paas/v4",
+        "zai_base_url": "https://api.z.ai/api/paas/v4/",
         "zai_chat_path": "/chat/completions",
         "zai_timeout_seconds": 45.0,
         "zai_connect_timeout_seconds": 15.0,
