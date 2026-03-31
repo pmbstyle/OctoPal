@@ -1068,6 +1068,21 @@ def _build_connector_manager(settings: Settings):
     )
 
 
+def _connector_next_action(name: str, status: dict[str, object]) -> str:
+    state = str(status.get("status", "unknown") or "unknown")
+    if state == "ready":
+        return "none"
+    if state in {"not_configured", "needs_auth"}:
+        return f"run `octopal connector auth {name}`"
+    if state == "needs_reauth":
+        return f"re-run `octopal connector auth {name}`"
+    if state in {"unsupported_service_configuration", "misconfigured"}:
+        return "run `octopal configure`"
+    if state == "disabled":
+        return "enable in `octopal configure`"
+    return "inspect config"
+
+
 @connector_app.command("status")
 def connector_status(json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON.")) -> None:
     """Show connector status and any required next action."""
@@ -1083,15 +1098,18 @@ def connector_status(json_output: bool = typer.Option(False, "--json", help="Pri
     table.add_column("Connector", style="white")
     table.add_column("Status", style="white")
     table.add_column("Services", style="dim")
+    table.add_column("Next action", style="white", width=32)
     table.add_column("Message", style="dim", width=60)
 
     for name in sorted(statuses):
         status = statuses[name]
         services = ", ".join(status.get("services", []) or []) or "-"
+        next_action = _connector_next_action(name, status)
         table.add_row(
             name,
             str(status.get("status", "unknown")),
             services,
+            next_action,
             str(status.get("message", "")),
         )
 
