@@ -306,6 +306,11 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                     "description": {"type": "string", "description": "Brief description of the task purpose."},
                     "worker_id": {"type": "string", "description": "Optional: Specific worker template ID to use."},
                     "inputs": {"type": "object", "description": "Optional: Inputs for the worker."},
+                    "notify_user": {
+                        "type": "string",
+                        "enum": ["never", "if_significant", "always"],
+                        "description": "When the user should hear about this scheduled task: never, only if significant, or always.",
+                    },
                 },
                 "required": ["name", "frequency", "task"],
                 "additionalProperties": False,
@@ -1254,6 +1259,7 @@ async def _tool_check_schedule(args, ctx) -> str:
                 "description": t.get("description"),
                 "inputs": t.get("inputs") if isinstance(t.get("inputs"), dict) else {},
                 "last_run_at": t.get("last_run_at"),
+                "notify_user": t.get("notify_user"),
             }
             for t in due_tasks
         ],
@@ -1308,6 +1314,7 @@ async def _tool_scheduler_status(args, ctx) -> str:
                 "next_run_at": task.get("next_run_at"),
                 "last_run_at": task.get("last_run_at"),
                 "description": task.get("description"),
+                "notify_user": task.get("notify_user"),
             }
             for task in preview
         ],
@@ -1325,6 +1332,7 @@ def _tool_schedule_task(args, ctx) -> str:
             description=args.get("description"),
             worker_id=args.get("worker_id"),
             inputs=args.get("inputs"),
+            notify_user=args.get("notify_user"),
         )
     except ValueError as exc:
         return f"schedule_task error: {exc}"
@@ -1335,6 +1343,7 @@ def _tool_schedule_task(args, ctx) -> str:
             "task_id": task_id,
             "name": args["name"],
             "frequency": args["frequency"],
+            "notify_user": args.get("notify_user", "if_significant"),
         },
         ensure_ascii=False,
     )

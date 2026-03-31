@@ -28,6 +28,7 @@ class _StoreStub:
         worker_id: str | None = None,
         inputs: dict | None = None,
         enabled: bool = True,
+        metadata: dict | None = None,
     ) -> None:
         self.last_upsert = {
             "task_id": task_id,
@@ -38,6 +39,7 @@ class _StoreStub:
             "worker_id": worker_id,
             "inputs": inputs,
             "enabled": enabled,
+            "metadata": metadata,
         }
 
     def get_scheduled_tasks(self, enabled_only: bool = False) -> list[dict]:
@@ -91,10 +93,12 @@ def test_schedule_task_normalizes_valid_frequency(tmp_path: Path) -> None:
         name="Digest",
         frequency="daily at 7:05",
         task_text="Generate digest",
+        notify_user="always",
     )
     assert task_id == "digest"
     assert store.last_upsert is not None
     assert store.last_upsert["frequency"] == "Daily at 07:05"
+    assert store.last_upsert["metadata"] == {"notify_user": "always"}
 
 
 def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
@@ -108,6 +112,7 @@ def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
                 "worker_id": "writer",
                 "task_text": "Generate a concise digest",
                 "inputs_json": json.dumps({"section": "news", "max_items": 5}),
+                "metadata_json": json.dumps({"notify_user": "always"}),
                 "last_run_at": None,
                 "enabled": 1,
             }
@@ -120,6 +125,7 @@ def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
     assert payload["due_count"] == 1
     assert payload["due_tasks"][0]["task_id"] == "daily_digest"
     assert payload["due_tasks"][0]["inputs"] == {"section": "news", "max_items": 5}
+    assert payload["due_tasks"][0]["notify_user"] == "always"
 
 
 def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> None:
@@ -133,6 +139,7 @@ def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> No
                 "worker_id": "writer",
                 "task_text": "Generate a concise digest",
                 "inputs_json": json.dumps({"section": "news"}),
+                "metadata_json": json.dumps({"notify_user": "if_significant"}),
                 "last_run_at": None,
                 "enabled": 1,
             },
@@ -144,6 +151,7 @@ def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> No
                 "worker_id": None,
                 "task_text": "Compact memory",
                 "inputs_json": "{}",
+                "metadata_json": json.dumps({"notify_user": "never"}),
                 "last_run_at": None,
                 "enabled": 0,
             },
@@ -160,7 +168,22 @@ def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> No
     assert payload["next_due_task"]["task_id"] == "daily_digest"
     assert payload["tasks"][0]["due_now"] is True
     assert payload["tasks"][0]["next_run_at"] is not None
+    assert payload["tasks"][0]["notify_user"] == "if_significant"
     assert any("due now" in hint for hint in payload["hints"])
+
+
+def test_schedule_task_rejects_invalid_notify_user(tmp_path: Path) -> None:
+    scheduler = SchedulerService(store=_StoreStub(), workspace_dir=tmp_path)
+    result = _tool_schedule_task(
+        {
+            "name": "Digest",
+            "frequency": "Every 30 minutes",
+            "task": "Generate digest",
+            "notify_user": "sometimes",
+        },
+        {"octo": SimpleNamespace(scheduler=scheduler)},
+    )
+    assert result.startswith("schedule_task error:")
 
 
 def test_octo_marks_scheduled_task_after_successful_worker_run_even_if_store_lags() -> None:

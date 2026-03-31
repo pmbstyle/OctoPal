@@ -920,11 +920,12 @@ class SQLiteStore(Store):
 
     def upsert_scheduled_task(self, task_id: str, name: str, frequency: str, task_text: str,
                              description: str | None = None, worker_id: str | None = None,
-                             inputs: dict | None = None, enabled: bool = True) -> None:
+                             inputs: dict | None = None, enabled: bool = True,
+                             metadata: dict[str, Any] | None = None) -> None:
         self._conn.execute(
             """
-            INSERT INTO scheduled_tasks (id, name, description, frequency, worker_id, task_text, inputs_json, enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO scheduled_tasks (id, name, description, frequency, worker_id, task_text, inputs_json, enabled, metadata_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 description = excluded.description,
@@ -932,9 +933,20 @@ class SQLiteStore(Store):
                 worker_id = excluded.worker_id,
                 task_text = excluded.task_text,
                 inputs_json = excluded.inputs_json,
-                enabled = excluded.enabled
+                enabled = excluded.enabled,
+                metadata_json = excluded.metadata_json
             """,
-            (task_id, name, description, frequency, worker_id, task_text, json.dumps(inputs) if inputs else None, 1 if enabled else 0),
+            (
+                task_id,
+                name,
+                description,
+                frequency,
+                worker_id,
+                task_text,
+                json.dumps(inputs) if inputs else None,
+                1 if enabled else 0,
+                json.dumps(metadata) if metadata else None,
+            ),
         )
         self._conn.commit()
 

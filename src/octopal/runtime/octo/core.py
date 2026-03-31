@@ -504,7 +504,12 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
     while True:
         correlation_id: str | None = None
         try:
-            task_text, result, correlation_id = await asyncio.wait_for(queue.get(), timeout=_QUEUE_IDLE_TIMEOUT_SECONDS)
+            item = await asyncio.wait_for(queue.get(), timeout=_QUEUE_IDLE_TIMEOUT_SECONDS)
+            notify_user = None
+            if len(item) == 4:
+                task_text, result, correlation_id, notify_user = item
+            else:
+                task_text, result, correlation_id = item
         except TimeoutError:
             break
         try:
@@ -553,6 +558,7 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
                     pending_closure=pending_closure,
                     suppress_followup=octo.should_suppress_turn_followups(correlation_id),
                     should_force=should_force_worker_followup(result),
+                    notify_user=notify_user,
                     forced_text_factory=build_forced_worker_followup,
                 )
                 if delivery.reason == "forced_substantive_followup":
@@ -607,6 +613,7 @@ def _enqueue_internal_result(
     result: WorkerResult,
     *,
     correlation_id: str | None,
+    notify_user: str | None = None,
 ) -> None:
     loop = asyncio.get_running_loop()
     queue = _INTERNAL_QUEUES.get(chat_id)
@@ -622,7 +629,7 @@ def _enqueue_internal_result(
     if chat_id not in _INTERNAL_TASKS or _INTERNAL_TASKS[chat_id].done():
         _INTERNAL_TASKS[chat_id] = asyncio.create_task(_internal_worker(octo, chat_id, queue))
     octo.mark_internal_result_pending(correlation_id)
-    queue.put_nowait((task_text, result, correlation_id))
+    queue.put_nowait((task_text, result, correlation_id, notify_user))
     logger.info("Queued internal worker result", chat_id=chat_id, queue_size=queue.qsize())
     _publish_runtime_metrics()
 
@@ -658,6 +665,7 @@ class Octo:
     _lineage_children_total: dict[str, int] | None = None
     _lineage_children_active: dict[str, set[str]] | None = None
     _worker_correlation_by_run_id: dict[str, str] | None = None
+    _scheduled_notify_user_by_run_id: dict[str, str] | None = None
     _active_workers_by_correlation: dict[str, set[str]] | None = None
     _pending_internal_results_by_correlation: dict[str, int] | None = None
     _housekeeping_cfg: dict[str, int] | None = None
@@ -691,6 +699,8 @@ class Octo:
             self._lineage_children_active = {}
         if self._worker_correlation_by_run_id is None:
             self._worker_correlation_by_run_id = {}
+        if self._scheduled_notify_user_by_run_id is None:
+            self._scheduled_notify_user_by_run_id = {}
         if self._active_workers_by_correlation is None:
             self._active_workers_by_correlation = {}
         if self._pending_internal_results_by_correlation is None:
@@ -972,6 +982,7 @@ class Octo:
         self._lineage_children_total.clear()
         self._lineage_children_active.clear()
         self._worker_correlation_by_run_id.clear()
+        self._scheduled_notify_user_by_run_id.clear()
         self._active_workers_by_correlation.clear()
         self._pending_internal_results_by_correlation.clear()
 
@@ -1814,6 +1825,12 @@ class Octo:
                 tools=tools,
                 scheduled_task_id=scheduled_task_id,
             )
+            if scheduled_task_id and self.scheduler:
+                scheduled_task = self.scheduler.get_task(scheduled_task_id)
+                if scheduled_task is not None:
+                    self._scheduled_notify_user_by_run_id[run_id] = str(
+                        scheduled_task.get("notify_user") or "if_significant"
+                    )
             self._register_worker_lineage(
                 run_id=run_id,
                 lineage_id=effective_lineage_id,
@@ -1931,6 +1948,7 @@ class Octo:
                         chat_id=chat_id,
                         reason="parent_failed",
                     )
+                scheduled_notify_user = self._scheduled_notify_user_by_run_id.pop(run_id, None)
                 self._mark_worker_inactive(run_id)
                 _enqueue_internal_result(
                     self,
@@ -1938,6 +1956,7 @@ class Octo:
                     task,
                     result,
                     correlation_id=task_request.correlation_id,
+                    notify_user=scheduled_notify_user,
                 )
 
             asyncio.create_task(_runner())
@@ -2015,6 +2034,7 @@ class Octo:
 
     def _mark_worker_inactive(self, run_id: str) -> None:
         correlation_id = self._worker_correlation_by_run_id.pop(run_id, None)
+        self._scheduled_notify_user_by_run_id.pop(run_id, None)
         if correlation_id:
             active_by_correlation = self._active_workers_by_correlation.get(correlation_id)
             if active_by_correlation and run_id in active_by_correlation:

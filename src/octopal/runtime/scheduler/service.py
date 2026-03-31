@@ -16,6 +16,15 @@ logger = structlog.get_logger(__name__)
 _EVERY_MINUTES_RE = re.compile(r"^every\s+(\d+)\s+minutes?$", re.IGNORECASE)
 _EVERY_HOURS_RE = re.compile(r"^every\s+(\d+)\s+hours?$", re.IGNORECASE)
 _DAILY_AT_RE = re.compile(r"^daily\s+at\s+(\d{1,2}):(\d{2})$", re.IGNORECASE)
+_NOTIFY_USER_POLICIES = {"never", "if_significant", "always"}
+
+
+def normalize_notify_user_policy(notify_user: str | None) -> str:
+    value = str(notify_user or "if_significant").strip().lower()
+    if value not in _NOTIFY_USER_POLICIES:
+        allowed = ", ".join(sorted(_NOTIFY_USER_POLICIES))
+        raise ValueError(f"notify_user must be one of: {allowed}.")
+    return value
 
 
 class SchedulerService:
@@ -26,9 +35,10 @@ class SchedulerService:
 
     def schedule_task(self, name: str, frequency: str, task_text: str,
                       description: str | None = None, worker_id: str | None = None,
-                      inputs: dict | None = None) -> str:
+                      inputs: dict | None = None, notify_user: str | None = None) -> str:
         """Add or update a scheduled task."""
         normalized_frequency = self._validate_and_normalize_frequency(frequency)
+        normalized_notify_user = normalize_notify_user_policy(notify_user)
         task_id = self._generate_id(name)
         self.store.upsert_scheduled_task(
             task_id=task_id,
@@ -37,7 +47,8 @@ class SchedulerService:
             task_text=task_text,
             description=description,
             worker_id=worker_id,
-            inputs=inputs
+            inputs=inputs,
+            metadata={"notify_user": normalized_notify_user},
         )
         self.sync_to_markdown()
         return task_id
@@ -81,6 +92,13 @@ class SchedulerService:
         self.store.update_task_last_run(task_id, utc_now())
         self.sync_to_markdown()
 
+    def get_task(self, task_id: str) -> dict[str, Any] | None:
+        for task in self.store.get_scheduled_tasks():
+            if str(task.get("id") or "") != task_id:
+                continue
+            return self._normalize_task_record(task)
+        return None
+
     def sync_to_markdown(self) -> None:
         """Update HEARTBEAT.md to reflect the database state."""
         tasks = self.store.get_scheduled_tasks()
@@ -93,6 +111,8 @@ class SchedulerService:
             if t['description']:
                 lines.append(f"- **Description**: {t['description']}")
             lines.append(f"- **Frequency**: {t['frequency']}")
+            normalized = self._normalize_task_record(t)
+            lines.append(f"- **Notify user**: {normalized['notify_user']}")
             if t['worker_id']:
                 lines.append(f"- **Worker**: {t['worker_id']}")
             lines.append(f"- **Task**: {t['task_text']}")
@@ -185,7 +205,9 @@ class SchedulerService:
     def _normalize_task_record(self, task: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(task)
         raw_inputs = normalized.get("inputs_json")
+        raw_metadata = normalized.get("metadata_json")
         inputs: dict[str, Any] = {}
+        metadata: dict[str, Any] = {}
         if isinstance(raw_inputs, str) and raw_inputs.strip():
             try:
                 parsed = json.loads(raw_inputs)
@@ -193,7 +215,20 @@ class SchedulerService:
                     inputs = parsed
             except json.JSONDecodeError:
                 logger.warning("Invalid scheduled task inputs_json", task_id=normalized.get("id"))
+        if isinstance(raw_metadata, str) and raw_metadata.strip():
+            try:
+                parsed = json.loads(raw_metadata)
+                if isinstance(parsed, dict):
+                    metadata = parsed
+            except json.JSONDecodeError:
+                logger.warning("Invalid scheduled task metadata_json", task_id=normalized.get("id"))
         normalized["inputs"] = inputs
+        normalized["metadata"] = metadata
+        try:
+            normalized["notify_user"] = normalize_notify_user_policy(metadata.get("notify_user"))
+        except ValueError:
+            logger.warning("Invalid scheduled task notify_user policy", task_id=normalized.get("id"))
+            normalized["notify_user"] = "if_significant"
         return normalized
 
     def _build_task_preview(self, task: dict[str, Any], now: datetime) -> dict[str, Any]:

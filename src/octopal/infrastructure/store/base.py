@@ -88,7 +88,8 @@ class Store(Protocol):
 
     def upsert_scheduled_task(self, task_id: str, name: str, frequency: str, task_text: str,
                              description: str | None = None, worker_id: str | None = None,
-                             inputs: dict | None = None, enabled: bool = True) -> None: ...
+                             inputs: dict | None = None, enabled: bool = True,
+                             metadata: dict[str, Any] | None = None) -> None: ...
 
     def update_task_last_run(self, task_id: str, ts: datetime) -> None: ...
 

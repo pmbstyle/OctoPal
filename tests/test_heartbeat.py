@@ -79,6 +79,35 @@ def test_resolve_worker_followup_delivery_uses_deferred_mode_when_suppressed():
     assert decision.reason == "suppressed_turn_followup"
 
 
+def test_resolve_worker_followup_delivery_honors_scheduled_notify_never():
+    decision = resolve_worker_followup_delivery(
+        "Подготовила сводку.",
+        result=WorkerResult(summary="Prepared report.", output={"report_path": "research/report.md"}),
+        pending_closure=False,
+        suppress_followup=False,
+        should_force=True,
+        notify_user="never",
+        forced_text_factory=build_forced_worker_followup,
+    )
+    assert decision.mode == DeliveryMode.SILENT
+    assert decision.reason == "scheduled_notify_never"
+
+
+def test_resolve_worker_followup_delivery_honors_scheduled_notify_always():
+    decision = resolve_worker_followup_delivery(
+        "NO_USER_RESPONSE",
+        result=WorkerResult(summary="Prepared report.", output={"report_path": "research/report.md"}),
+        pending_closure=False,
+        suppress_followup=False,
+        should_force=False,
+        notify_user="always",
+        forced_text_factory=build_forced_worker_followup,
+    )
+    assert decision.mode == DeliveryMode.IMMEDIATE
+    assert decision.reason == "scheduled_notify_always"
+    assert "research/report.md" in decision.text
+
+
 def test_force_worker_followup_for_substantive_results():
     result = WorkerResult(
         summary="Created research/jobs/2026-03-10.md with seven ranked AI/ML roles across Canada and USA, including salary ranges and fit notes for each company.",
