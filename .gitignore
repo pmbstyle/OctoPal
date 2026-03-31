@@ -53,3 +53,5 @@ HEARTBEAT.md
 /src/octopal/infrastructure/store/__pycache__
 config.json
 /src/octopal/cli/wizard/__pycache__
+/src/octopal/infrastructure/connectors/__pycache__
+/src/octopal/tools/connectors/__pycache__
