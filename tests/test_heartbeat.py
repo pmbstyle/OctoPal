@@ -306,6 +306,65 @@ async def test_batched_worker_followups_send_single_combined_message(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_suppressed_worker_followup_is_deferred_until_internal_turn_finishes(monkeypatch):
+    monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
+    monkeypatch.setattr(octo_core, "_QUEUE_IDLE_TIMEOUT_SECONDS", 0.01)
+    octo_core._WORKER_FOLLOWUP_BATCHES.clear()
+
+    sent_messages = []
+    memory_messages = []
+
+    class DummyMemory:
+        async def add_message(self, role, text, metadata):
+            memory_messages.append((role, text, metadata))
+
+    async def _send(chat_id, text):
+        sent_messages.append((chat_id, text))
+
+    async def _route_worker_result_back_to_octo(_octo, _chat_id, _task_text, _result):
+        return "Подготовила итог по расписанию."
+
+    monkeypatch.setattr(
+        octo_core,
+        "route_worker_result_back_to_octo",
+        _route_worker_result_back_to_octo,
+    )
+
+    octo = Octo(
+        approvals=None,
+        memory=DummyMemory(),
+        canon=None,
+        provider=None,
+        store=None,
+        policy=None,
+        runtime=None,
+        internal_send=_send,
+    )
+    correlation_id = "heartbeat-turn"
+    octo.suppress_turn_followups(correlation_id)
+    octo.mark_internal_result_pending(correlation_id)
+
+    queue: asyncio.Queue = asyncio.Queue()
+    queue.put_nowait(
+        (
+            "[Scheduled] Prepare summary",
+            WorkerResult(summary="Built the scheduled summary.", output={"report_path": "research/digest.md"}),
+            correlation_id,
+        )
+    )
+
+    await octo_core._internal_worker(octo, 123, queue)
+    await asyncio.sleep(0.03)
+
+    assert sent_messages == [(123, "Подготовила итог по расписанию.")]
+    assert octo.should_suppress_turn_followups(correlation_id) is False
+    assert any(
+        role == "assistant" and text == "Подготовила итог по расписанию."
+        for role, text, _metadata in memory_messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_batched_worker_followups_wait_for_pending_internal_results(monkeypatch):
     monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
     octo_core._WORKER_FOLLOWUP_BATCHES.clear()

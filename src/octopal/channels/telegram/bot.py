@@ -30,8 +30,10 @@ def build_dispatcher(settings: Settings, bot: Bot) -> Dispatcher:
 async def _heartbeat_poker(octo: Octo, interval_seconds: int, chat_id: int):
     """Periodically triggers the octo's heartbeat logic."""
     logger.info("Starting application-level heartbeat with interval=%ss", interval_seconds)
+    loop = asyncio.get_running_loop()
+    next_tick = loop.time() + interval_seconds
     while True:
-        await asyncio.sleep(interval_seconds)
+        await asyncio.sleep(max(0.0, next_tick - loop.time()))
         logger.info("Triggering internal heartbeat for chat_id=%s", chat_id)
         try:
             context_hint = await octo.build_heartbeat_context_hint(chat_id)
@@ -62,6 +64,11 @@ async def _heartbeat_poker(octo: Octo, interval_seconds: int, chat_id: int):
                     )
         except Exception:
             logger.exception("Internal heartbeat execution failed")
+        finally:
+            next_tick += interval_seconds
+            now = loop.time()
+            if next_tick < now:
+                next_tick = now + interval_seconds
 
 
 async def run_bot(settings: Settings, existing_octo: Octo | None = None) -> None:

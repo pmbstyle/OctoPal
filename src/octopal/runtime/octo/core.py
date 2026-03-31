@@ -446,6 +446,12 @@ def _schedule_worker_followup_flush(octo: Octo, chat_id: int, correlation_id: st
     batch = _WORKER_FOLLOWUP_BATCHES.get(batch_key)
     if batch is None:
         return
+    if octo.should_suppress_turn_followups(correlation_id):
+        existing_task = batch.task
+        if existing_task and not existing_task.done():
+            existing_task.cancel()
+        batch.task = None
+        return
     if not octo.should_flush_worker_followups(correlation_id):
         existing_task = batch.task
         if existing_task and not existing_task.done():
@@ -544,7 +550,20 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
                     logger.info("Forcing substantive worker follow-up", chat_id=chat_id)
                     final_text = build_forced_worker_followup(result)
 
-                if suppress_followup:
+                if suppress_followup and should_send_worker_followup(final_text):
+                    await _enqueue_batched_worker_followup(
+                        octo,
+                        chat_id,
+                        correlation_id,
+                        final_text,
+                    )
+                    octo.clear_pending_conversational_closure(correlation_id)
+                    logger.info(
+                        "Internal worker follow-up deferred",
+                        chat_id=chat_id,
+                        reason="suppressed_turn_followup",
+                    )
+                elif suppress_followup:
                     octo.clear_pending_conversational_closure(correlation_id)
                     logger.info(
                         "Internal worker follow-up skipped",
@@ -565,6 +584,8 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
             logger.exception("Failed to process internal worker result")
         finally:
             octo.mark_internal_result_processed(correlation_id)
+            if octo.should_flush_worker_followups(correlation_id):
+                octo.clear_suppressed_turn_followups(correlation_id)
             _schedule_worker_followup_flush(octo, chat_id, correlation_id)
             queue.task_done()
     _INTERNAL_TASKS.pop(chat_id, None)
