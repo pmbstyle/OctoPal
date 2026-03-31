@@ -60,7 +60,14 @@ class ConnectorManager:
         status = await connector.get_status()
         if status.get("status") == "ready":
             logger.info("Starting connector", name=name)
-            await connector.start()
+            try:
+                await connector.start()
+            except Exception:
+                logger.exception(
+                    "Connector failed to start; continuing Octopal startup without it",
+                    name=name,
+                )
+                await self._disconnect_managed_servers(connector)
             return
 
         logger.info(

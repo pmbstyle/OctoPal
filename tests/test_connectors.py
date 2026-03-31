@@ -128,6 +128,36 @@ def test_connector_manager_reconciles_ready_google_connector_into_running_mcp() 
     assert mcp.disconnected == []
 
 
+def test_connector_manager_continues_startup_when_ready_google_connector_fails_to_start() -> None:
+    config = OctopalConfig()
+    config.connectors.instances["google"] = ConnectorInstanceConfig(
+        enabled=True,
+        enabled_services=["gmail"],
+        credentials={"client_id": "client-id", "client_secret": "client-secret"},
+        auth={"authorized_services": ["gmail"], "refresh_token": "refresh-token"},
+    )
+
+    class _MCP:
+        def __init__(self) -> None:
+            self.connected: list[str] = []
+            self.disconnected: list[str] = []
+
+        async def connect_server(self, mcp_config):
+            self.connected.append(mcp_config.id)
+            raise RuntimeError("boom")
+
+        async def disconnect_server(self, server_id: str, *, intentional: bool = True):
+            self.disconnected.append(server_id)
+
+    mcp = _MCP()
+    manager = ConnectorManager(config=config.connectors, mcp_manager=mcp, octo_config=config)
+
+    asyncio.run(manager.load_and_start_all())
+
+    assert mcp.connected == ["google-gmail"]
+    assert mcp.disconnected == ["google-gmail"]
+
+
 def test_connector_manager_reconciles_not_ready_google_connector_into_disconnected_mcp() -> None:
     config = OctopalConfig()
     config.connectors.instances["google"] = ConnectorInstanceConfig(
