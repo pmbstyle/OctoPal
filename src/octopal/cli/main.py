@@ -1098,7 +1098,7 @@ def _connector_disconnect_message(name: str, *, forget_credentials: bool) -> str
 def _print_google_auth_setup_help() -> None:
     console.print()
     console.print("[bold]Google OAuth setup[/bold]")
-    console.print("You need an OAuth client ID and client secret from Google Cloud.")
+    console.print("You need your own Google OAuth Desktop App credentials from Google Cloud.")
     console.print("Create credentials for a [bold]Desktop app[/bold], not a service account.")
     console.print("  1. Open [cyan]https://console.cloud.google.com/apis/credentials[/cyan]")
     console.print("  2. Create or select a Google Cloud project")
@@ -1106,6 +1106,7 @@ def _print_google_auth_setup_help() -> None:
     console.print("  4. Configure the OAuth consent screen if Google asks you to")
     console.print("  5. Create OAuth credentials for a [bold]Desktop app[/bold]")
     console.print("  6. Copy the client ID and client secret here")
+    console.print("Docs: [cyan]docs/google_gmail_connector_setup.md[/cyan]")
     console.print()
 
 
@@ -1179,9 +1180,11 @@ def connector_auth(
     current_client_secret = str(instance.credentials.client_secret or "")
     if name == "google" and (not current_client_id or not current_client_secret):
         _print_google_auth_setup_help()
-    resolved_client_id = client_id or current_client_id or typer.prompt("Google client ID")
+    resolved_client_id = client_id or current_client_id or typer.prompt(
+        "Your Google OAuth Desktop App client ID"
+    )
     resolved_client_secret = client_secret or current_client_secret or typer.prompt(
-        "Google client secret",
+        "Your Google OAuth Desktop App client secret",
         hide_input=True,
     )
 
