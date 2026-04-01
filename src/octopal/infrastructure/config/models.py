@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from octopal.channels import DEFAULT_USER_CHANNEL
 
@@ -81,6 +81,57 @@ class SearchConfig(BaseModel):
     firecrawl_api_key: str | None = None
 
 
+class ConnectorCredentials(BaseModel):
+    client_id: str | None = None
+    client_secret: str | None = None
+
+
+class ConnectorAuthState(BaseModel):
+    authorized_services: list[str] = Field(default_factory=list)
+    refresh_token: str | None = None
+    access_token: str | None = None
+    last_error: str | None = None
+
+
+class ConnectorInstanceConfig(BaseModel):
+    enabled: bool = False
+    enabled_services: list[str] = Field(default_factory=list)
+    credentials: ConnectorCredentials = Field(default_factory=ConnectorCredentials)
+    auth: ConnectorAuthState = Field(default_factory=ConnectorAuthState)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_settings(cls, data: object):
+        if not isinstance(data, dict):
+            return data
+        payload = dict(data)
+        legacy_settings = payload.pop("settings", None)
+        if not isinstance(legacy_settings, dict):
+            return payload
+
+        payload.setdefault("enabled_services", legacy_settings.get("enabled_services", []))
+
+        credentials = payload.get("credentials")
+        if not isinstance(credentials, dict):
+            credentials = {}
+        credentials.setdefault("client_id", legacy_settings.get("client_id"))
+        credentials.setdefault("client_secret", legacy_settings.get("client_secret"))
+        payload["credentials"] = credentials
+
+        auth = payload.get("auth")
+        if not isinstance(auth, dict):
+            auth = {}
+        auth.setdefault("authorized_services", legacy_settings.get("authorized_services", []))
+        auth.setdefault("refresh_token", legacy_settings.get("refresh_token"))
+        auth.setdefault("access_token", legacy_settings.get("token"))
+        payload["auth"] = auth
+        return payload
+
+
+class ConnectorsConfig(BaseModel):
+    instances: dict[str, ConnectorInstanceConfig] = Field(default_factory=dict)
+
+
 class OctopalConfig(BaseModel):
     user_channel: str = DEFAULT_USER_CHANNEL
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
@@ -99,6 +150,7 @@ class OctopalConfig(BaseModel):
     workers: WorkerRuntimeConfig = Field(default_factory=WorkerRuntimeConfig)
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    connectors: ConnectorsConfig = Field(default_factory=ConnectorsConfig)
 
     log_level: str = "INFO"
     debug_prompts: bool = False

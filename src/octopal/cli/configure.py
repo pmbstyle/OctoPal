@@ -137,6 +137,7 @@ def configure_wizard() -> None:
     )
 
     config = load_config()
+    original_config = config.model_copy(deep=True)
 
     # Check if migration is needed
     env_file = _resolve_env_file()
@@ -184,7 +185,7 @@ def configure_wizard() -> None:
         if action == "save":
             save_config(config)
             console.print(f"[bold {SUCCESS}]Settings saved to config.json![/bold {SUCCESS}]")
-            _print_next_steps(config)
+            _print_next_steps(config, original_config)
             break
 
         if action == "cancel":
@@ -580,6 +581,74 @@ def _configure_runtime_advanced(config: OctopalConfig, prompter) -> None:
             )
         )
 
+
+def _configure_connectors(config: OctopalConfig, prompter) -> None:
+    _print_section_header("Connectors")
+
+    prompter.note(
+        "Connectors (experimental)",
+        [
+            "Connectors allow Octo to link with external services through explicit CLI setup.",
+            "For now, Google connector support is limited to Gmail.",
+            "After saving, Octopal will tell you which CLI command to run next for authorization.",
+        ],
+    )
+
+    available_connectors = [
+        WizardSelectOption(
+            value="google",
+            label="Google",
+            hint="Integrate with Gmail. Other Google services can land later as separate supported flows.",
+        ),
+    ]
+
+    initial_values = [
+        name for name, instance in config.connectors.instances.items()
+        if instance.enabled
+    ]
+
+    selected = prompter.multiselect(
+        WizardMultiSelectParams(
+            message="Select connectors to enable",
+            initial_values=initial_values,
+            options=available_connectors,
+        )
+    )
+
+    selected_set = set(selected)
+    from octopal.infrastructure.config.models import ConnectorInstanceConfig
+
+    # Update enabled status for all available connectors
+    for option in available_connectors:
+        name = option.value
+        is_enabled = name in selected_set
+
+        if name not in config.connectors.instances:
+            config.connectors.instances[name] = ConnectorInstanceConfig(enabled=is_enabled)
+        else:
+            config.connectors.instances[name].enabled = is_enabled
+
+        # Granular settings for Google
+        if name == "google" and is_enabled:
+            google_services = [
+                WizardSelectOption(value="gmail", label="Gmail"),
+            ]
+
+            current_google_services = config.connectors.instances[name].enabled_services or ["gmail"]
+            current_google_services = [
+                service for service in current_google_services if service in {"gmail"}
+            ] or ["gmail"]
+
+            selected_google = prompter.multiselect(
+                WizardMultiSelectParams(
+                    message="Select specific Google services to enable",
+                    initial_values=current_google_services,
+                    options=google_services,
+                )
+            )
+            config.connectors.instances[name].enabled_services = selected_google
+
+
 def _build_sections(config: OctopalConfig, prompter) -> list[WizardSection]:
     sections = [
         WizardSection(
@@ -617,6 +686,12 @@ def _build_sections(config: OctopalConfig, prompter) -> list[WizardSection]:
             run=lambda cfg: _configure_features(cfg, prompter),
         ),
         WizardSection(
+            key="connectors",
+            title="Connectors",
+            render_status=lambda cfg: _connectors_status(cfg),
+            run=lambda cfg: _configure_connectors(cfg, prompter),
+        ),
+        WizardSection(
             key="dashboard",
             title="Dashboard",
             render_status=lambda cfg: _dashboard_status(cfg),
@@ -642,6 +717,15 @@ def _features_status(config: OctopalConfig) -> str:
         if is_enabled
     ]
     return ", ".join(enabled) if enabled else "No optional tools enabled"
+
+
+def _connectors_status(config: OctopalConfig) -> str:
+    enabled = [
+        name.capitalize()
+        for name, instance in config.connectors.instances.items()
+        if instance.enabled
+    ]
+    return ", ".join(enabled) if enabled else "No connectors enabled"
 
 
 def _dashboard_status(config: OctopalConfig) -> str:
@@ -719,10 +803,60 @@ def _print_review(config: OctopalConfig) -> None:
     console.print(Panel(table, title="Configuration Summary", border_style=SUCCESS, padding=(1, 2)))
 
 
-def _print_next_steps(config: OctopalConfig) -> None:
+def _enabled_services(config: OctopalConfig, connector_name: str) -> list[str]:
+    instance = config.connectors.instances.get(connector_name)
+    if not instance or not instance.enabled:
+        return []
+    return [str(service).strip().lower() for service in instance.enabled_services if str(service).strip()]
+
+
+def _authorized_services(config: OctopalConfig, connector_name: str) -> list[str]:
+    instance = config.connectors.instances.get(connector_name)
+    if not instance:
+        return []
+    return [
+        str(service).strip().lower()
+        for service in instance.auth.authorized_services
+        if str(service).strip()
+    ]
+
+
+def _collect_connector_next_steps(config: OctopalConfig, previous_config: OctopalConfig | None = None) -> list[str]:
+    lines: list[str] = []
+    previous_config = previous_config or OctopalConfig()
+
+    google = config.connectors.instances.get("google")
+    if google and google.enabled:
+        current_services = set(_enabled_services(config, "google"))
+        previous_services = set(_enabled_services(previous_config, "google"))
+        authorized_services = set(_authorized_services(config, "google"))
+        has_refresh_token = bool(google.auth.refresh_token)
+        previous_google = previous_config.connectors.instances.get("google")
+
+        needs_auth = not has_refresh_token or not current_services.issubset(authorized_services)
+        services_added = sorted(current_services - previous_services)
+        newly_enabled = previous_google is None or not previous_google.enabled
+
+        if needs_auth or services_added or newly_enabled:
+            lines.append(
+                "  [magenta]octopal connector auth google[/magenta] - Authorize Google for the enabled services."
+            )
+            lines.append(
+                "  [magenta]octopal connector status[/magenta] - Verify connector status after authorization."
+            )
+            lines.append(
+                "  [magenta]octopal restart[/magenta] - Reload Octopal after connector authorization."
+            )
+
+    return lines
+
+
+def _print_next_steps(config: OctopalConfig, previous_config: OctopalConfig | None = None) -> None:
     console.print("\n[bold]Suggested next steps:[/bold]")
     console.print("  [magenta]octopal start[/magenta] - Launch the Octo")
     console.print("  [magenta]octopal status[/magenta] - Check connectivity")
+    for line in _collect_connector_next_steps(config, previous_config):
+        console.print(line)
 
 
 def _ensure_workspace_bootstrap(workspace_dir: Path) -> None:

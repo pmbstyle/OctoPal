@@ -56,6 +56,7 @@ workers_app = typer.Typer(add_completion=False)
 audit_app = typer.Typer(add_completion=False)
 memory_app = typer.Typer(add_completion=False)
 config_app = typer.Typer(add_completion=False)
+connector_app = typer.Typer(add_completion=False)
 whatsapp_app = typer.Typer(add_completion=False)
 tools_app = typer.Typer(add_completion=False)
 skill_app = typer.Typer(add_completion=False)
@@ -1057,6 +1058,187 @@ def config_show(reveal_secrets: bool = typer.Option(False, "--reveal-secrets", h
     console.print()
 
 
+def _build_connector_manager(settings: Settings):
+    from octopal.infrastructure.connectors.manager import ConnectorManager
+
+    return ConnectorManager(
+        config=settings.connectors,
+        mcp_manager=None,
+        octo_config=settings.config_obj,
+    )
+
+
+def _connector_next_action(name: str, status: dict[str, object]) -> str:
+    state = str(status.get("status", "unknown") or "unknown")
+    if state == "ready":
+        return "none"
+    if state in {"not_configured", "needs_auth"}:
+        return f"run `octopal connector auth {name}`"
+    if state == "needs_reauth":
+        return f"re-run `octopal connector auth {name}`"
+    if state in {"unsupported_service_configuration", "misconfigured"}:
+        return "run `octopal configure`"
+    if state == "disabled":
+        return "enable in `octopal configure`"
+    return "inspect config"
+
+
+def _connector_disconnect_message(name: str, *, forget_credentials: bool) -> str:
+    if forget_credentials:
+        return (
+            f"[bold yellow]{name} disconnected.[/bold yellow] "
+            "Stored client credentials were removed."
+        )
+    return (
+        f"[bold yellow]{name} disconnected.[/bold yellow] "
+        "Stored client credentials were kept so you can re-authorize later."
+    )
+
+
+def _print_google_auth_setup_help() -> None:
+    console.print()
+    console.print("[bold]Google OAuth setup[/bold]")
+    console.print("You need your own Google OAuth Desktop App credentials from Google Cloud.")
+    console.print("Create credentials for a [bold]Desktop app[/bold], not a service account.")
+    console.print("  1. Open [cyan]https://console.cloud.google.com/apis/credentials[/cyan]")
+    console.print("  2. Create or select a Google Cloud project")
+    console.print("  3. Enable the [bold]Gmail API[/bold]")
+    console.print("  4. Configure the OAuth consent screen if Google asks you to")
+    console.print("  5. Create OAuth credentials for a [bold]Desktop app[/bold]")
+    console.print("  6. Copy the client ID and client secret here")
+    console.print("Docs: [cyan]docs/google_gmail_connector_setup.md[/cyan]")
+    console.print()
+
+
+def _print_google_headless_auth_help(auth_url: str) -> None:
+    console.print()
+    console.print("[bold]Headless Google authorization[/bold]")
+    console.print("No runnable browser was found on this machine, so Octopal switched to a manual flow.")
+    console.print("Open this URL in a browser on your own computer:")
+    console.print(f"  [cyan]{auth_url}[/cyan]")
+    console.print("After approval, Google will redirect to a localhost URL in your browser.")
+    console.print("That page may fail to load on your computer or VPS, and that is expected.")
+    console.print("Copy the full URL from your browser address bar and paste it back here.")
+    console.print()
+
+
+@connector_app.command("status")
+def connector_status(json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON.")) -> None:
+    """Show connector status and any required next action."""
+    settings = load_settings()
+    manager = _build_connector_manager(settings)
+    statuses = asyncio.run(manager.get_all_statuses())
+
+    if json_output:
+        console.print(json.dumps({"connectors": statuses}, ensure_ascii=False, indent=2))
+        return
+
+    table = Table(box=box.SIMPLE, show_header=True, header_style="bold bright_cyan")
+    table.add_column("Connector", style="white")
+    table.add_column("Status", style="white")
+    table.add_column("Services", style="dim")
+    table.add_column("Next action", style="white", width=32)
+    table.add_column("Message", style="dim", width=60)
+
+    for name in sorted(statuses):
+        status = statuses[name]
+        services = ", ".join(status.get("services", []) or []) or "-"
+        next_action = _connector_next_action(name, status)
+        table.add_row(
+            name,
+            str(status.get("status", "unknown")),
+            services,
+            next_action,
+            str(status.get("message", "")),
+        )
+
+    console.print(table)
+
+
+@connector_app.command("auth")
+def connector_auth(
+    name: str = typer.Argument(..., help="Connector name to authorize."),
+    client_id: str | None = typer.Option(None, "--client-id", help="OAuth client ID to use."),
+    client_secret: str | None = typer.Option(None, "--client-secret", help="OAuth client secret to use."),
+) -> None:
+    """Authorize a configured connector via CLI."""
+    settings = load_settings()
+    manager = _build_connector_manager(settings)
+    connector = manager.get_connector(name)
+    if connector is None:
+        console.print(f"[bold red]Unknown connector:[/bold red] {name}")
+        raise typer.Exit(code=1)
+
+    instance = settings.connectors.instances.get(name)
+    if instance is None or not instance.enabled:
+        console.print(
+            f"[bold yellow]{name} is not enabled.[/bold yellow] Run [magenta]octopal configure[/magenta] first."
+        )
+        raise typer.Exit(code=1)
+
+    if name == "google":
+        _print_google_auth_setup_help()
+    resolved_client_id = client_id or typer.prompt(
+        "Your Google OAuth Desktop App client ID"
+    )
+    resolved_client_secret = client_secret or typer.prompt(
+        "Your Google OAuth Desktop App client secret",
+        hide_input=True,
+    )
+
+    asyncio.run(
+        connector.configure(
+            {
+                "client_id": resolved_client_id,
+                "client_secret": resolved_client_secret,
+            }
+        )
+    )
+
+    result = asyncio.run(connector.authorize())
+    if result.get("status") == "manual_required" and name == "google":
+        start = asyncio.run(connector.begin_manual_authorize())
+        _print_google_headless_auth_help(start["auth_url"])
+        authorization_response = typer.prompt("Authorization response URL")
+        result = asyncio.run(connector.complete_manual_authorize(authorization_response))
+
+    if result.get("status") != "success":
+        console.print(f"[bold red]Authorization failed:[/bold red] {result.get('error', 'unknown error')}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[bold green][V] {result['message']}[/bold green]")
+    console.print("Run [magenta]octopal connector status[/magenta] to confirm readiness.")
+
+
+@connector_app.command("disconnect")
+def connector_disconnect(
+    name: str = typer.Argument(..., help="Connector name to disconnect."),
+    forget_credentials: bool = typer.Option(
+        False,
+        "--forget-credentials",
+        help="Also remove stored client_id/client_secret.",
+    ),
+) -> None:
+    """Disconnect a connector and clear its authorization state."""
+    settings = load_settings()
+    manager = _build_connector_manager(settings)
+
+    try:
+        result = asyncio.run(
+            manager.disconnect_connector(name, forget_credentials=forget_credentials)
+        )
+    except RuntimeError as exc:
+        console.print(f"[bold red]{exc}[/bold red]")
+        raise typer.Exit(code=1) from None
+
+    if result.get("status") != "success":
+        console.print(f"[bold red]Disconnect failed:[/bold red] {result.get('message', 'unknown error')}")
+        raise typer.Exit(code=1)
+
+    console.print(_connector_disconnect_message(name, forget_credentials=forget_credentials))
+    console.print("Run [magenta]octopal connector status[/magenta] to verify the updated state.")
+
+
 @app.command()
 def logs(follow: bool = typer.Option(False, "--follow", "-f")) -> None:
     settings = load_settings()
@@ -1570,6 +1752,7 @@ app.add_typer(workers_app, name="workers")
 app.add_typer(audit_app, name="audit")
 app.add_typer(memory_app, name="memory")
 app.add_typer(config_app, name="config")
+app.add_typer(connector_app, name="connector")
 app.add_typer(whatsapp_app, name="whatsapp")
 app.add_typer(tools_app, name="tools")
 app.add_typer(skill_app, name="skill")

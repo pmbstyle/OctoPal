@@ -16,6 +16,7 @@ import structlog
 
 from octopal.browser.manager import get_browser_manager
 from octopal.channels.telegram.approvals import ApprovalManager
+from octopal.infrastructure.connectors.manager import ConnectorManager
 from octopal.infrastructure.logging import correlation_id_var
 from octopal.infrastructure.mcp.manager import MCPManager
 from octopal.infrastructure.providers.base import InferenceProvider
@@ -645,6 +646,7 @@ class Octo:
     canon: CanonService
     scheduler: SchedulerService | None = None
     mcp_manager: MCPManager | None = None
+    connector_manager: ConnectorManager | None = None
     internal_send: callable | None = None
     internal_progress_send: callable | None = None
     internal_typing_control: callable | None = None
@@ -1094,6 +1096,10 @@ class Octo:
         # Load and connect MCP servers
         if self.mcp_manager:
             await self.mcp_manager.load_and_connect_all()
+
+        # Load and start connectors
+        if self.connector_manager:
+            await self.connector_manager.load_and_start_all()
 
         wake_up_prompt = (
             "You are waking up. Read AGENTS.md and inspect available workers internally. "
