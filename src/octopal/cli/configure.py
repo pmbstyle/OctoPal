@@ -586,7 +586,7 @@ def _configure_connectors(config: OctopalConfig, prompter) -> None:
     _print_section_header("Connectors")
 
     prompter.note(
-        "Connectors",
+        "Connectors (experimental)",
         [
             "Connectors allow Octo to link with external services through explicit CLI setup.",
             "For now, Google connector support is limited to Gmail.",
