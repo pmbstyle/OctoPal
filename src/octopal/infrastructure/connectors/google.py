@@ -29,14 +29,18 @@ def _oauthlib_insecure_transport_for_localhost():
 
 
 class GoogleConnector(Connector):
-    _SUPPORTED_SERVICES = ("gmail",)
-    _MCP_SERVER_IDS = ("google-gmail",)
+    _SUPPORTED_SERVICES = ("gmail", "calendar")
 
     def __init__(self, manager: Any):
         self.manager = manager
         self._pending_manual_auth: dict[str, str] | None = None
         self._service_scopes = {
             "gmail": "https://www.googleapis.com/auth/gmail.modify",
+            "calendar": "https://www.googleapis.com/auth/calendar",
+        }
+        self._service_server_ids = {
+            "gmail": "google-gmail",
+            "calendar": "google-calendar",
         }
 
     @property
@@ -50,7 +54,12 @@ class GoogleConnector(Connector):
         return list(self._SUPPORTED_SERVICES)
 
     def managed_server_ids(self) -> list[str]:
-        return list(self._MCP_SERVER_IDS)
+        enabled_services = self._get_enabled_services()
+        return [
+            self._service_server_ids[service]
+            for service in enabled_services
+            if service in self._service_server_ids
+        ]
 
     def _get_enabled_services(self) -> list[str]:
         config = self._get_config()
@@ -113,7 +122,7 @@ class GoogleConnector(Connector):
                 "status": "unsupported_service_configuration",
                 "message": (
                     "Google connector is configured with unsupported services: "
-                    f"{', '.join(unsupported_services)}. Re-run `octopal configure` and keep only Gmail."
+                    f"{', '.join(unsupported_services)}. Re-run `octopal configure` and keep only supported Google services."
                 ),
                 "services": enabled_services,
                 "supported_services": self.supported_services(),
@@ -212,7 +221,7 @@ class GoogleConnector(Connector):
             return {
                 "error": (
                     "Unsupported Google services are enabled: "
-                    f"{', '.join(unsupported_services)}. Re-run `octopal configure` and keep only Gmail."
+                    f"{', '.join(unsupported_services)}. Re-run `octopal configure` and keep only supported Google services."
                 )
             }
 
@@ -350,7 +359,7 @@ class GoogleConnector(Connector):
             return {"error": f"Failed to complete manual Google authorization: {e}"}
 
     async def start(self) -> None:
-        """Start the Gmail MCP server when the connector is ready."""
+        """Start any Google MCP servers needed by the enabled services."""
         if self.manager.mcp_manager is None:
             return
 
@@ -358,28 +367,39 @@ class GoogleConnector(Connector):
         if not config or not config.enabled:
             return
 
-        enabled_services = self._get_enabled_services()
-        if "gmail" not in enabled_services:
-            return
-
         from octopal.infrastructure.mcp.manager import MCPServerConfig
 
-        common_env = {
-            "GMAIL_CLIENT_ID": config.credentials.client_id,
-            "GMAIL_CLIENT_SECRET": config.credentials.client_secret,
-            "GMAIL_REFRESH_TOKEN": config.auth.refresh_token,
-        }
+        enabled_services = self._get_enabled_services()
 
         if "gmail" in enabled_services:
             gmail_cfg = MCPServerConfig(
-                id="google-gmail",
+                id=self._service_server_ids["gmail"],
                 name="Gmail Connector",
                 command=sys.executable,
                 args=["-m", "octopal.mcp_servers.gmail"],
-                env=common_env,
+                env={
+                    "GMAIL_CLIENT_ID": config.credentials.client_id,
+                    "GMAIL_CLIENT_SECRET": config.credentials.client_secret,
+                    "GMAIL_REFRESH_TOKEN": config.auth.refresh_token,
+                },
                 transport="stdio"
             )
             await self.manager.mcp_manager.connect_server(gmail_cfg)
+
+        if "calendar" in enabled_services:
+            calendar_cfg = MCPServerConfig(
+                id=self._service_server_ids["calendar"],
+                name="Google Calendar Connector",
+                command=sys.executable,
+                args=["-m", "octopal.mcp_servers.calendar"],
+                env={
+                    "GOOGLE_CALENDAR_CLIENT_ID": config.credentials.client_id,
+                    "GOOGLE_CALENDAR_CLIENT_SECRET": config.credentials.client_secret,
+                    "GOOGLE_CALENDAR_REFRESH_TOKEN": config.auth.refresh_token,
+                },
+                transport="stdio"
+            )
+            await self.manager.mcp_manager.connect_server(calendar_cfg)
 
     async def disconnect(self, *, forget_credentials: bool = False) -> dict[str, Any]:
         """Disconnect Gmail integration and clear authorization state."""

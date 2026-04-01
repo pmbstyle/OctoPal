@@ -1,7 +1,7 @@
-# Google Gmail Connector Setup
+# Google Connector Setup
 
 This guide explains how a self-hosted Octopal user can create the Google OAuth
-credentials needed for the Gmail connector.
+credentials needed for the Google connector.
 
 For a higher-level overview of connectors, see
 [connectors.md](connectors.md).
@@ -11,7 +11,7 @@ For the current list of supported connectors, see
 
 ## What you need
 
-For the current Gmail connector flow, each user should bring their own Google
+For the current Google connector flow, each user should bring their own Google
 OAuth credentials.
 
 You need:
@@ -28,25 +28,28 @@ Open:
 
 If needed, create a new project first.
 
-## Step 2: Enable the Gmail API
+## Step 2: Enable the APIs you want
 
 In your project:
 - Open `APIs & Services`
 - Open `Library`
-- Search for `Gmail API`
-- Click `Enable`
+- Search for and enable the APIs you plan to use
 
-Direct link:
+Current connector services:
+- `Gmail API`
+- `Google Calendar API`
 
-`https://console.cloud.google.com/apis/api/gmail.googleapis.com`
+Direct links:
 
-Wait a minute or two after enabling the API before retrying auth or Gmail tool
-calls.
+- `https://console.cloud.google.com/apis/api/gmail.googleapis.com`
+- `https://console.cloud.google.com/apis/api/calendar-json.googleapis.com`
+
+Wait a minute or two after enabling an API before retrying auth or tool calls.
 
 ## Step 3: Configure the OAuth consent screen
 
 Google may ask you to configure the OAuth consent screen before you can create
- credentials.
+credentials.
 
 Typical fields:
 - App name: `Octopal`
@@ -65,7 +68,7 @@ In `APIs & Services -> Credentials`:
 - Click `Create credentials`
 - Choose `OAuth client ID`
 - Application type: `Desktop app`
-- Give it a name like `Octopal Gmail`
+- Give it a name like `Octopal Google`
 
 Then copy:
 - `Client ID`
@@ -116,7 +119,8 @@ uv run octopal restart
 
 ## Notes
 
-- Current scope: Gmail only
+- Current services: Gmail and Google Calendar
 - Current model: user-provided OAuth credentials
 - A shared verified Octopal Google app is not required for this self-hosted flow
-- Current Gmail connector is read-focused: search, list, and read mailbox data
+- Gmail is read-focused today
+- Calendar currently supports listing calendars, listing/searching events, reading events, and creating events

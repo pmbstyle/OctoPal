@@ -159,7 +159,7 @@ def test_connector_auth_prints_google_setup_help_when_credentials_missing(tmp_pa
     assert "your own Google OAuth Desktop App credentials" in result.stdout
     assert "Desktop app" in result.stdout
     assert "console.cloud.google.com/apis/credentials" in result.stdout
-    assert "docs/google_gmail_connector_setup.md" in result.stdout
+    assert "docs/google_connector_setup.md" in result.stdout
 
 
 def test_connector_auth_prompts_for_credentials_even_when_saved(tmp_path, monkeypatch) -> None:

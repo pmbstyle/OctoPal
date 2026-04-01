@@ -6,6 +6,7 @@ import json
 from octopal.infrastructure.config.models import ConnectorInstanceConfig, OctopalConfig
 from octopal.infrastructure.connectors.manager import ConnectorManager
 from octopal.tools.catalog import get_tools
+from octopal.tools.connectors.calendar import get_calendar_connector_tools
 from octopal.tools.connectors.gmail import get_gmail_connector_tools
 from octopal.tools.connectors.status import connector_status_read
 
@@ -63,6 +64,19 @@ def test_catalog_includes_first_class_gmail_tools_when_mcp_manager_is_present() 
     assert "gmail_get_message" in names
 
 
+def test_catalog_includes_first_class_calendar_tools_when_mcp_manager_is_present() -> None:
+    class _Manager:
+        def get_all_tools(self):
+            return []
+
+    tools = get_tools(mcp_manager=_Manager())
+    names = {tool.name for tool in tools}
+
+    assert "calendar_list_calendars" in names
+    assert "calendar_list_events" in names
+    assert "calendar_create_event" in names
+
+
 def test_gmail_connector_tool_proxies_and_parses_json_payload() -> None:
     class _Text:
         def __init__(self, text: str) -> None:
@@ -85,3 +99,29 @@ def test_gmail_connector_tool_proxies_and_parses_json_payload() -> None:
 
     assert payload["messages"][0]["id"] == "msg-1"
     assert payload["result_size_estimate"] == 1
+
+
+def test_calendar_connector_tool_proxies_and_parses_json_payload() -> None:
+    class _Text:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _Result:
+        def __init__(self, text: str) -> None:
+            self.content = [_Text(text)]
+
+    class _Manager:
+        async def call_tool(self, server_id, tool_name, args, allow_name_fallback=False):
+            assert server_id == "google-calendar"
+            assert tool_name == "list_events"
+            assert args == {"calendar_id": "primary", "max_results": 1}
+            assert allow_name_fallback is True
+            return _Result('{"events":[{"id":"evt-1"}],"calendar_id":"primary"}')
+
+    tools = {tool.name: tool for tool in get_calendar_connector_tools(_Manager())}
+    payload = asyncio.run(
+        tools["calendar_list_events"].handler({"calendar_id": "primary", "max_results": 1}, {})
+    )
+
+    assert payload["events"][0]["id"] == "evt-1"
+    assert payload["calendar_id"] == "primary"

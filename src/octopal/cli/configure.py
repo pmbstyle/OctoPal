@@ -589,7 +589,7 @@ def _configure_connectors(config: OctopalConfig, prompter) -> None:
         "Connectors (experimental)",
         [
             "Connectors allow Octo to link with external services through explicit CLI setup.",
-            "For now, Google connector support is limited to Gmail.",
+            "Google connector support currently covers Gmail and Calendar.",
             "After saving, Octopal will tell you which CLI command to run next for authorization.",
         ],
     )
@@ -598,7 +598,7 @@ def _configure_connectors(config: OctopalConfig, prompter) -> None:
         WizardSelectOption(
             value="google",
             label="Google",
-            hint="Integrate with Gmail. Other Google services can land later as separate supported flows.",
+            hint="Integrate with Gmail and Google Calendar. More Google services can land on the same connector flow later.",
         ),
     ]
 
@@ -632,11 +632,12 @@ def _configure_connectors(config: OctopalConfig, prompter) -> None:
         if name == "google" and is_enabled:
             google_services = [
                 WizardSelectOption(value="gmail", label="Gmail"),
+                WizardSelectOption(value="calendar", label="Calendar"),
             ]
 
             current_google_services = config.connectors.instances[name].enabled_services or ["gmail"]
             current_google_services = [
-                service for service in current_google_services if service in {"gmail"}
+                service for service in current_google_services if service in {"gmail", "calendar"}
             ] or ["gmail"]
 
             selected_google = prompter.multiselect(

@@ -1102,11 +1102,11 @@ def _print_google_auth_setup_help() -> None:
     console.print("Create credentials for a [bold]Desktop app[/bold], not a service account.")
     console.print("  1. Open [cyan]https://console.cloud.google.com/apis/credentials[/cyan]")
     console.print("  2. Create or select a Google Cloud project")
-    console.print("  3. Enable the [bold]Gmail API[/bold]")
+    console.print("  3. Enable the [bold]Gmail API[/bold] and/or [bold]Google Calendar API[/bold]")
     console.print("  4. Configure the OAuth consent screen if Google asks you to")
     console.print("  5. Create OAuth credentials for a [bold]Desktop app[/bold]")
     console.print("  6. Copy the client ID and client secret here")
-    console.print("Docs: [cyan]docs/google_gmail_connector_setup.md[/cyan]")
+    console.print("Docs: [cyan]docs/google_connector_setup.md[/cyan]")
     console.print()
 
 

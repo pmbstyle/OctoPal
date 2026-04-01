@@ -4,8 +4,9 @@ This document lists the connectors that are currently supported in Octopal.
 
 ## Google
 
-Current supported service:
+Current supported services:
 - Gmail
+- Calendar
 
 What it can do today:
 - list recent emails
@@ -15,6 +16,11 @@ What it can do today:
 - count unread emails
 - inspect labels
 - inspect the connected mailbox profile
+- list calendars
+- list events
+- search events
+- read an event by ID
+- create an event
 
 What it does not do yet:
 - send email
@@ -22,13 +28,16 @@ What it does not do yet:
 - mark messages read or unread
 - move messages between labels/folders
 - download attachment contents
+- update or delete calendar events
+- free/busy lookup
+- attendee response management
 
 Setup guide:
-- [google_gmail_connector_setup.md](google_gmail_connector_setup.md)
+- [google_connector_setup.md](google_connector_setup.md)
 
 CLI flow:
 1. Run `octopal configure`
-2. Enable `Google -> Gmail`
+2. Enable `Google -> Gmail` and/or `Google -> Calendar`
 3. Run `octopal connector auth google`
 4. Run `octopal connector status`
 5. Restart Octopal if needed
