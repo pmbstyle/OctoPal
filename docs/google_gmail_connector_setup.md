@@ -3,6 +3,12 @@
 This guide explains how a self-hosted Octopal user can create the Google OAuth
 credentials needed for the Gmail connector.
 
+For a higher-level overview of connectors, see
+[connectors.md](connectors.md).
+
+For the current list of supported connectors, see
+[connectors_list.md](connectors_list.md).
+
 ## What you need
 
 For the current Gmail connector flow, each user should bring their own Google
@@ -33,6 +39,9 @@ In your project:
 Direct link:
 
 `https://console.cloud.google.com/apis/api/gmail.googleapis.com`
+
+Wait a minute or two after enabling the API before retrying auth or Gmail tool
+calls.
 
 ## Step 3: Configure the OAuth consent screen
 
@@ -73,7 +82,7 @@ The current Octopal CLI flow expects a `Desktop app` OAuth client.
 Use:
 
 ```bash
-octopal connector auth google
+uv run octopal connector auth google
 ```
 
 When prompted, paste:
@@ -96,13 +105,13 @@ If you are on a VPS or another headless machine:
 Check status:
 
 ```bash
-octopal connector status
+uv run octopal connector status
 ```
 
 If needed, restart Octopal:
 
 ```bash
-octopal restart
+uv run octopal restart
 ```
 
 ## Notes
@@ -110,3 +119,4 @@ octopal restart
 - Current scope: Gmail only
 - Current model: user-provided OAuth credentials
 - A shared verified Octopal Google app is not required for this self-hosted flow
+- Current Gmail connector is read-focused: search, list, and read mailbox data
