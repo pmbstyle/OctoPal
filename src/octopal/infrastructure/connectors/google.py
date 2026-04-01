@@ -364,9 +364,9 @@ class GoogleConnector(Connector):
         from octopal.infrastructure.mcp.manager import MCPServerConfig
 
         common_env = {
-            "GOOGLE_CLIENT_ID": config.credentials.client_id,
-            "GOOGLE_CLIENT_SECRET": config.credentials.client_secret,
-            "GOOGLE_REFRESH_TOKEN": config.auth.refresh_token,
+            "GMAIL_CLIENT_ID": config.credentials.client_id,
+            "GMAIL_CLIENT_SECRET": config.credentials.client_secret,
+            "GMAIL_REFRESH_TOKEN": config.auth.refresh_token,
         }
 
         if "gmail" in enabled_services:
@@ -374,7 +374,7 @@ class GoogleConnector(Connector):
                 id="google-gmail",
                 name="Gmail Connector",
                 command="npx",
-                args=["-y", "@modelcontextprotocol/server-gmail"],
+                args=["-y", "@chinchillaenterprises/mcp-gmail"],
                 env=common_env,
                 transport="stdio"
             )

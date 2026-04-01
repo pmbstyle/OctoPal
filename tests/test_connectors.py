@@ -128,6 +128,40 @@ def test_connector_manager_reconciles_ready_google_connector_into_running_mcp() 
     assert mcp.disconnected == []
 
 
+def test_connector_manager_uses_real_gmail_mcp_package_and_env_names() -> None:
+    config = OctopalConfig()
+    config.connectors.instances["google"] = ConnectorInstanceConfig(
+        enabled=True,
+        enabled_services=["gmail"],
+        credentials={"client_id": "client-id", "client_secret": "client-secret"},
+        auth={"authorized_services": ["gmail"], "refresh_token": "refresh-token"},
+    )
+
+    class _MCP:
+        def __init__(self) -> None:
+            self.configs = []
+
+        async def connect_server(self, mcp_config):
+            self.configs.append(mcp_config)
+            return []
+
+        async def disconnect_server(self, server_id: str, *, intentional: bool = True):
+            return None
+
+    mcp = _MCP()
+    manager = ConnectorManager(config=config.connectors, mcp_manager=mcp, octo_config=config)
+
+    asyncio.run(manager.load_and_start_all())
+
+    assert len(mcp.configs) == 1
+    gmail_cfg = mcp.configs[0]
+    assert gmail_cfg.command == "npx"
+    assert gmail_cfg.args == ["-y", "@chinchillaenterprises/mcp-gmail"]
+    assert gmail_cfg.env["GMAIL_CLIENT_ID"] == "client-id"
+    assert gmail_cfg.env["GMAIL_CLIENT_SECRET"] == "client-secret"
+    assert gmail_cfg.env["GMAIL_REFRESH_TOKEN"] == "refresh-token"
+
+
 def test_connector_manager_continues_startup_when_ready_google_connector_fails_to_start() -> None:
     config = OctopalConfig()
     config.connectors.instances["google"] = ConnectorInstanceConfig(
