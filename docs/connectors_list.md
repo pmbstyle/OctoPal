@@ -21,6 +21,8 @@ What it can do today:
 - search events
 - read an event by ID
 - create an event
+- update an event
+- delete an event
 
 What it does not do yet:
 - send email
@@ -28,7 +30,6 @@ What it does not do yet:
 - mark messages read or unread
 - move messages between labels/folders
 - download attachment contents
-- update or delete calendar events
 - free/busy lookup
 - attendee response management
 

@@ -75,6 +75,8 @@ def test_catalog_includes_first_class_calendar_tools_when_mcp_manager_is_present
     assert "calendar_list_calendars" in names
     assert "calendar_list_events" in names
     assert "calendar_create_event" in names
+    assert "calendar_update_event" in names
+    assert "calendar_delete_event" in names
 
 
 def test_gmail_connector_tool_proxies_and_parses_json_payload() -> None:

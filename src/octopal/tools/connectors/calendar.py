@@ -205,4 +205,43 @@ def get_calendar_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
             fallback_manager=mcp_manager,
             capabilities=("calendar_write", "connector_use"),
         ),
+        _calendar_tool(
+            name="calendar_update_event",
+            remote_tool_name="update_event",
+            description="Update one or more mutable fields on a Google Calendar event.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "calendar_id": {"type": "string"},
+                    "event_id": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "description": {"type": "string"},
+                    "location": {"type": "string"},
+                    "start": {"type": "object"},
+                    "end": {"type": "object"},
+                    "attendees": {"type": "array", "items": {"type": "object"}},
+                    "time_zone": {"type": "string"},
+                },
+                "required": ["event_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("calendar_write", "connector_use"),
+        ),
+        _calendar_tool(
+            name="calendar_delete_event",
+            remote_tool_name="delete_event",
+            description="Delete a Google Calendar event by event ID.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "calendar_id": {"type": "string"},
+                    "event_id": {"type": "string"},
+                },
+                "required": ["event_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("calendar_write", "connector_use"),
+        ),
     ]

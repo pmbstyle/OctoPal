@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import httpx
 
-from octopal.mcp_servers.calendar import _normalize_event, _parse_google_api_error
+from octopal.mcp_servers.calendar import (
+    CalendarApiClient,
+    _build_event_patch_body,
+    _normalize_event,
+    _parse_google_api_error,
+)
 
 
 def test_normalize_event_keeps_core_calendar_fields() -> None:
@@ -49,3 +54,49 @@ def test_parse_calendar_api_error_prefers_reason_and_message_from_json_payload()
     assert error.status_code == 403
     assert error.reason == "insufficientPermissions"
     assert "Request had insufficient authentication scopes." in str(error)
+
+
+def test_build_event_patch_body_keeps_only_supplied_fields() -> None:
+    body = _build_event_patch_body(
+        summary="Updated planning",
+        start={"dateTime": "2026-04-02T16:00:00Z"},
+        time_zone="UTC",
+    )
+
+    assert body == {
+        "summary": "Updated planning",
+        "start": {"dateTime": "2026-04-02T16:00:00Z", "timeZone": "UTC"},
+    }
+
+
+def test_build_event_patch_body_applies_time_zone_to_start_and_end_when_present() -> None:
+    body = _build_event_patch_body(
+        start={"dateTime": "2026-04-02T16:00:00Z"},
+        end={"dateTime": "2026-04-02T17:00:00Z"},
+        time_zone="America/New_York",
+    )
+
+    assert body["start"]["timeZone"] == "America/New_York"
+    assert body["end"]["timeZone"] == "America/New_York"
+
+
+def test_calendar_request_returns_empty_payload_for_delete_without_body() -> None:
+    client = object.__new__(CalendarApiClient)
+    client._credentials = type("_Creds", (), {"valid": True, "token": "token"})()
+
+    class _HTTPClient:
+        async def request(self, method, path, params=None, json=None, headers=None):
+            return httpx.Response(204, request=httpx.Request(method, f"https://example.test{path}"))
+
+    client._client = _HTTPClient()
+
+    async def _token() -> str:
+        return "token"
+
+    client._access_token = _token  # type: ignore[method-assign]
+
+    import asyncio
+
+    payload = asyncio.run(client._request("DELETE", "/calendars/primary/events/evt-1"))
+
+    assert payload == {}

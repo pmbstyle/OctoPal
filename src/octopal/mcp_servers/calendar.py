@@ -115,6 +115,37 @@ def _normalize_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_event_patch_body(
+    *,
+    summary: str | None = None,
+    description: str | None = None,
+    location: str | None = None,
+    start: dict[str, Any] | None = None,
+    end: dict[str, Any] | None = None,
+    attendees: list[dict[str, Any]] | None = None,
+    time_zone: str | None = None,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {}
+    if summary is not None:
+        body["summary"] = summary
+    if description is not None:
+        body["description"] = description
+    if location is not None:
+        body["location"] = location
+    if attendees is not None:
+        body["attendees"] = attendees
+    if start is not None:
+        body["start"] = dict(start)
+    if end is not None:
+        body["end"] = dict(end)
+    if time_zone:
+        if "start" in body:
+            body["start"].setdefault("timeZone", time_zone)
+        if "end" in body:
+            body["end"].setdefault("timeZone", time_zone)
+    return body
+
+
 class CalendarApiClient:
     def __init__(self) -> None:
         self._credentials = self._load_credentials()
@@ -181,6 +212,8 @@ class CalendarApiClient:
             )
         if response.is_error:
             raise _parse_google_api_error(response)
+        if not response.content or response.status_code == 204:
+            return {}
         return response.json()
 
     async def list_calendars(self) -> dict[str, Any]:
@@ -262,29 +295,59 @@ class CalendarApiClient:
         attendees: list[dict[str, Any]] | None = None,
         time_zone: str | None = None,
     ) -> dict[str, Any]:
-        body: dict[str, Any] = {
-            "summary": summary,
-            "start": dict(start),
-            "end": dict(end),
-        }
-        if description:
-            body["description"] = description
-        if location:
-            body["location"] = location
-        if attendees:
-            body["attendees"] = attendees
-        if time_zone:
-            body["start"].setdefault("timeZone", time_zone)
-            body["end"].setdefault("timeZone", time_zone)
+        body = _build_event_patch_body(
+            summary=summary,
+            description=description,
+            location=location,
+            start=start,
+            end=end,
+            attendees=attendees,
+            time_zone=time_zone,
+        )
 
         payload = await self._request("POST", f"/calendars/{calendar_id}/events", json_body=body)
         return _normalize_event(payload)
+
+    async def update_event(
+        self,
+        *,
+        calendar_id: str = "primary",
+        event_id: str,
+        summary: str | None = None,
+        description: str | None = None,
+        location: str | None = None,
+        start: dict[str, Any] | None = None,
+        end: dict[str, Any] | None = None,
+        attendees: list[dict[str, Any]] | None = None,
+        time_zone: str | None = None,
+    ) -> dict[str, Any]:
+        body = _build_event_patch_body(
+            summary=summary,
+            description=description,
+            location=location,
+            start=start,
+            end=end,
+            attendees=attendees,
+            time_zone=time_zone,
+        )
+        if not body:
+            raise ValueError("At least one mutable event field must be provided for update.")
+        payload = await self._request(
+            "PATCH",
+            f"/calendars/{calendar_id}/events/{event_id}",
+            json_body=body,
+        )
+        return _normalize_event(payload)
+
+    async def delete_event(self, *, calendar_id: str = "primary", event_id: str) -> dict[str, Any]:
+        await self._request("DELETE", f"/calendars/{calendar_id}/events/{event_id}")
+        return {"ok": True, "calendar_id": calendar_id, "event_id": event_id, "status": "deleted"}
 
 
 mcp = FastMCP(
     name="Octopal Google Calendar",
     instructions=(
-        "Use these tools to inspect and create events in the connected Google Calendar account. "
+        "Use these tools to inspect, create, update, and delete events in the connected Google Calendar account. "
         "Prefer listing calendars or events before fetching a single event when context is missing."
     ),
     log_level="ERROR",
@@ -374,6 +437,38 @@ async def create_event(
         attendees=attendees,
         time_zone=time_zone,
     )
+
+
+@mcp.tool(name="update_event")
+async def update_event(
+    event_id: str,
+    calendar_id: str = "primary",
+    summary: str | None = None,
+    description: str | None = None,
+    location: str | None = None,
+    start: dict[str, Any] | None = None,
+    end: dict[str, Any] | None = None,
+    attendees: list[dict[str, Any]] | None = None,
+    time_zone: str | None = None,
+) -> dict[str, Any]:
+    """Update a calendar event with partial field changes."""
+    return await _client().update_event(
+        calendar_id=calendar_id,
+        event_id=event_id,
+        summary=summary,
+        description=description,
+        location=location,
+        start=start,
+        end=end,
+        attendees=attendees,
+        time_zone=time_zone,
+    )
+
+
+@mcp.tool(name="delete_event")
+async def delete_event(event_id: str, calendar_id: str = "primary") -> dict[str, Any]:
+    """Delete a calendar event."""
+    return await _client().delete_event(calendar_id=calendar_id, event_id=event_id)
 
 
 def main() -> None:
