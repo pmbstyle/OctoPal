@@ -368,9 +368,13 @@ See [docs/skills.md](docs/skills.md) for the current format and behavior.
 
 ### 🛜 Connectors (experimental)
 
-Connectors are the integration layer between Octopal and external services.
+Connectors are the integration layer between Octopal and external services. Octopal will operate with selected services on your behalf.
 
-Currently available `Google` connector with `Gmail`, `Calendar`, and `Drive`.
+- **Google Connector**
+
+   <img src="https://www.gstatic.com/images/branding/productlogos/gmail_2020q4/v11/192px.svg" height="60"> <img src="https://www.gstatic.com/images/branding/productlogos/calendar_2020q4/v13/192px.svg" height="60"> <img src="https://www.gstatic.com/images/branding/productlogos/drive_2020q4/v10/192px.svg" height="60">
+
+   Gmail | Google Calendar | Google Drive
 
 See [docs/connectors.md](docs/connectors.md) for more info.
 
