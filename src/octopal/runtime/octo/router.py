@@ -1178,9 +1178,7 @@ async def _finalize_response(
         _, rewritten_visible_text = extract_reaction_and_strip(rewritten)
         if rewritten and not looks_like_textual_tool_invocation(rewritten_visible_text):
             return rewritten
-        if internal_followup:
-            return "NO_USER_RESPONSE"
-        return "I completed the check."
+        return "NO_USER_RESPONSE"
     return cleaned
 
 

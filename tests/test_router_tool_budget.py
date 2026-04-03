@@ -574,6 +574,23 @@ def test_finalize_response_preserves_control_token_without_rewrite() -> None:
     asyncio.run(scenario())
 
 
+def test_finalize_response_returns_no_user_response_when_non_followup_rewrite_still_bad() -> None:
+    class DummyProvider:
+        async def complete(self, messages, **kwargs):
+            return "FOLLOWUP_REQUIRED"
+
+    async def scenario() -> None:
+        result = await _finalize_response(
+            DummyProvider(),
+            [Message(role="system", content="Rewrite if needed.")],
+            "list_workers",
+            internal_followup=False,
+        )
+        assert result == "NO_USER_RESPONSE"
+
+    asyncio.run(scenario())
+
+
 def test_finalize_response_preserves_reaction_only_reply() -> None:
     class DummyProvider:
         async def complete(self, messages, **kwargs):
