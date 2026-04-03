@@ -413,6 +413,34 @@ async def drive_read_text_file(
     }
 
 
+async def drive_upload_and_get_link(
+    args: dict[str, Any],
+    ctx: dict[str, Any],
+    *,
+    fallback_manager: Any = None,
+) -> dict[str, Any]:
+    payload = await drive_upload_from_workspace(args, ctx, fallback_manager=fallback_manager)
+    if not isinstance(payload, dict):
+        return {"ok": False, "error": "Unexpected upload response from Drive connector."}
+    if payload.get("ok") is False:
+        return payload
+
+    web_view_link = payload.get("web_view_link")
+    file_id = payload.get("id")
+    return {
+        "ok": True,
+        "file_id": file_id,
+        "name": payload.get("name"),
+        "web_view_link": web_view_link,
+        "uploaded_from": payload.get("uploaded_from"),
+        "bytes_read": payload.get("bytes_read"),
+        "note": (
+            "This link uses the file's existing Drive permissions. "
+            "No sharing settings were changed."
+        ),
+    }
+
+
 def get_drive_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
     if mcp_manager is None:
         return []
@@ -705,6 +733,34 @@ def get_drive_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
             },
             permission="filesystem_read",
             handler=lambda args, ctx, _manager=mcp_manager: drive_upload_from_workspace(
+                args,
+                ctx,
+                fallback_manager=_manager,
+            ),
+            is_async=True,
+            metadata=ToolMetadata(
+                category="connectors",
+                risk="guarded",
+                profile_tags=("execution",),
+                capabilities=("drive_write", "filesystem_read", "connector_use"),
+            ),
+        ),
+        ToolSpec(
+            name="drive_upload_and_get_link",
+            description="Upload a workspace file to Google Drive and return its Drive view link without changing permissions.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "name": {"type": "string"},
+                    "mime_type": {"type": "string"},
+                    "parent_id": {"type": "string"},
+                },
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+            permission="filesystem_read",
+            handler=lambda args, ctx, _manager=mcp_manager: drive_upload_and_get_link(
                 args,
                 ctx,
                 fallback_manager=_manager,

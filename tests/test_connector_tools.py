@@ -100,6 +100,7 @@ def test_catalog_includes_first_class_drive_tools_when_mcp_manager_is_present() 
     assert "drive_trash_file" in names
     assert "drive_download_to_workspace" in names
     assert "drive_upload_from_workspace" in names
+    assert "drive_upload_and_get_link" in names
     assert "drive_update_from_workspace" in names
 
 
@@ -299,6 +300,42 @@ def test_drive_upload_from_workspace_reads_file(tmp_path) -> None:
 
     assert payload["id"] == "drive-file-1"
     assert payload["uploaded_from"] == "notes.txt"
+
+
+def test_drive_upload_and_get_link_returns_view_link(tmp_path) -> None:
+    upload_file = tmp_path / "notes.txt"
+    upload_file.write_text("hello", encoding="utf-8")
+
+    class _Text:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _Result:
+        def __init__(self, text: str) -> None:
+            self.content = [_Text(text)]
+
+    class _Manager:
+        async def call_tool(self, server_id, tool_name, args, allow_name_fallback=False):
+            assert server_id == "google-drive"
+            assert tool_name == "upload_file"
+            assert args["name"] == "notes.txt"
+            assert args["content_base64"] == "aGVsbG8="
+            assert allow_name_fallback is True
+            return _Result(
+                '{"id":"drive-file-3","name":"notes.txt","web_view_link":"https://drive.google.com/file/d/drive-file-3/view"}'
+            )
+
+    tools = {tool.name: tool for tool in get_drive_connector_tools(_Manager())}
+    payload = asyncio.run(
+        tools["drive_upload_and_get_link"].handler(
+            {"path": "notes.txt"},
+            {"base_dir": tmp_path},
+        )
+    )
+
+    assert payload["ok"] is True
+    assert payload["file_id"] == "drive-file-3"
+    assert payload["web_view_link"] == "https://drive.google.com/file/d/drive-file-3/view"
 
 
 def test_drive_update_from_workspace_reads_file(tmp_path) -> None:
