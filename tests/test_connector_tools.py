@@ -92,8 +92,12 @@ def test_catalog_includes_first_class_drive_tools_when_mcp_manager_is_present() 
     assert "drive_list_files" in names
     assert "drive_get_file" in names
     assert "drive_upload_file_content" in names
+    assert "drive_update_file_content" in names
+    assert "drive_list_children" in names
+    assert "drive_trash_file" in names
     assert "drive_download_to_workspace" in names
     assert "drive_upload_from_workspace" in names
+    assert "drive_update_from_workspace" in names
 
 
 def test_gmail_connector_tool_proxies_and_parses_json_payload() -> None:
@@ -207,6 +211,31 @@ def test_drive_connector_tool_proxies_and_parses_json_payload() -> None:
     assert payload["files"][0]["id"] == "file-1"
 
 
+def test_drive_list_children_tool_proxies_and_parses_json_payload() -> None:
+    class _Text:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _Result:
+        def __init__(self, text: str) -> None:
+            self.content = [_Text(text)]
+
+    class _Manager:
+        async def call_tool(self, server_id, tool_name, args, allow_name_fallback=False):
+            assert server_id == "google-drive"
+            assert tool_name == "list_children"
+            assert args == {"parent_id": "folder-1", "page_size": 2}
+            assert allow_name_fallback is True
+            return _Result('{"files":[{"id":"file-2","name":"child.txt"}]}')
+
+    tools = {tool.name: tool for tool in get_drive_connector_tools(_Manager())}
+    payload = asyncio.run(
+        tools["drive_list_children"].handler({"parent_id": "folder-1", "page_size": 2}, {})
+    )
+
+    assert payload["files"][0]["name"] == "child.txt"
+
+
 def test_drive_download_to_workspace_writes_file(tmp_path) -> None:
     class _Text:
         def __init__(self, text: str) -> None:
@@ -267,3 +296,36 @@ def test_drive_upload_from_workspace_reads_file(tmp_path) -> None:
 
     assert payload["id"] == "drive-file-1"
     assert payload["uploaded_from"] == "notes.txt"
+
+
+def test_drive_update_from_workspace_reads_file(tmp_path) -> None:
+    update_file = tmp_path / "notes.txt"
+    update_file.write_text("updated", encoding="utf-8")
+
+    class _Text:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class _Result:
+        def __init__(self, text: str) -> None:
+            self.content = [_Text(text)]
+
+    class _Manager:
+        async def call_tool(self, server_id, tool_name, args, allow_name_fallback=False):
+            assert server_id == "google-drive"
+            assert tool_name == "update_file"
+            assert args["file_id"] == "drive-file-1"
+            assert args["content_base64"] == "dXBkYXRlZA=="
+            assert allow_name_fallback is True
+            return _Result('{"id":"drive-file-1","name":"notes.txt","modified_time":"2026-04-02T12:00:00Z"}')
+
+    tools = {tool.name: tool for tool in get_drive_connector_tools(_Manager())}
+    payload = asyncio.run(
+        tools["drive_update_from_workspace"].handler(
+            {"file_id": "drive-file-1", "path": "notes.txt"},
+            {"base_dir": tmp_path},
+        )
+    )
+
+    assert payload["id"] == "drive-file-1"
+    assert payload["updated_from"] == "notes.txt"

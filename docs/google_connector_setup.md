@@ -126,4 +126,4 @@ uv run octopal restart
 - A shared verified Octopal Google app is not required for this self-hosted flow
 - Gmail is read-focused today
 - Calendar currently supports listing calendars, listing/searching events, reading events, and creating events
-- Drive currently supports listing/searching files, reading metadata, downloading files, exporting Google Docs-native files, uploading files, creating folders, and moving files between Drive and workspace
+- Drive currently supports listing/searching files, listing folder children, reading metadata, downloading files, exporting Google Docs-native files, uploading new files, updating existing files, creating folders, trashing files, and moving files between Drive and workspace

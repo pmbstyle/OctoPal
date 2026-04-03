@@ -265,6 +265,16 @@ class DriveApiClient:
     ) -> dict[str, Any]:
         return await self.list_files(query=query, page_size=page_size, page_token=page_token, corpora=corpora)
 
+    async def list_children(
+        self,
+        *,
+        parent_id: str,
+        page_size: int = 25,
+        page_token: str | None = None,
+    ) -> dict[str, Any]:
+        query = f"'{parent_id}' in parents and trashed = false"
+        return await self.list_files(query=query, page_size=page_size, page_token=page_token)
+
     async def get_file(self, file_id: str) -> dict[str, Any]:
         payload = await self._request(
             "GET",
@@ -339,6 +349,38 @@ class DriveApiClient:
         )
         return _normalize_file(payload)
 
+    async def update_file(
+        self,
+        *,
+        file_id: str,
+        content_base64: str,
+        mime_type: str = "application/octet-stream",
+        name: str | None = None,
+    ) -> dict[str, Any]:
+        content = base64.b64decode(content_base64.encode("ascii"))
+        metadata: dict[str, Any] = {}
+        if name:
+            metadata["name"] = name
+        body, boundary = _multipart_related_body(metadata, content, mime_type)
+        payload = await self._request(
+            "PATCH",
+            f"/files/{file_id}",
+            client=self._upload_client,
+            params={"uploadType": "multipart", "fields": self._FILE_FIELDS},
+            headers={"Content-Type": f'multipart/related; boundary="{boundary}"'},
+            content=body,
+        )
+        return _normalize_file(payload)
+
+    async def trash_file(self, *, file_id: str) -> dict[str, Any]:
+        payload = await self._request(
+            "PATCH",
+            f"/files/{file_id}",
+            params={"fields": self._FILE_FIELDS},
+            json_body={"trashed": True},
+        )
+        return _normalize_file(payload)
+
 
 mcp = FastMCP(
     name="Octopal Google Drive",
@@ -391,6 +433,20 @@ async def search_files(
     )
 
 
+@mcp.tool(name="list_children")
+async def list_children(
+    parent_id: str,
+    page_size: int = 25,
+    page_token: str | None = None,
+) -> dict[str, Any]:
+    """List files directly inside a specific Drive folder."""
+    return await _client().list_children(
+        parent_id=parent_id,
+        page_size=page_size,
+        page_token=page_token,
+    )
+
+
 @mcp.tool(name="get_file")
 async def get_file(file_id: str) -> dict[str, Any]:
     """Return Drive file metadata by file ID."""
@@ -429,6 +485,28 @@ async def upload_file(
         mime_type=mime_type,
         parent_id=parent_id,
     )
+
+
+@mcp.tool(name="update_file")
+async def update_file(
+    file_id: str,
+    content_base64: str,
+    mime_type: str = "application/octet-stream",
+    name: str | None = None,
+) -> dict[str, Any]:
+    """Replace content for an existing Drive file, optionally renaming it."""
+    return await _client().update_file(
+        file_id=file_id,
+        content_base64=content_base64,
+        mime_type=mime_type,
+        name=name,
+    )
+
+
+@mcp.tool(name="trash_file")
+async def trash_file(file_id: str) -> dict[str, Any]:
+    """Move a Drive file to trash."""
+    return await _client().trash_file(file_id=file_id)
 
 
 def main() -> None:

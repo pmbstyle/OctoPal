@@ -228,6 +228,60 @@ async def drive_upload_from_workspace(
     return payload
 
 
+async def drive_update_from_workspace(
+    args: dict[str, Any],
+    ctx: dict[str, Any],
+    *,
+    fallback_manager: Any = None,
+) -> dict[str, Any]:
+    manager = _resolve_mcp_manager(ctx, fallback_manager)
+    if manager is None:
+        return {
+            "ok": False,
+            "error": "Drive tools are unavailable because no MCP manager is active.",
+            "hint": "Restart Octopal after authorizing the Google Drive connector.",
+        }
+
+    path = str((args or {}).get("path", "") or "").strip()
+    file_id = str((args or {}).get("file_id", "") or "").strip()
+    if not path:
+        return {"ok": False, "error": "path is required."}
+    if not file_id:
+        return {"ok": False, "error": "file_id is required."}
+
+    workspace_root, worker_dir, allowed_paths = _get_paths(ctx)
+    try:
+        source = _resolve_tool_path(
+            path,
+            workspace_root=workspace_root,
+            worker_dir=worker_dir,
+            allowed_paths=allowed_paths,
+            must_exist=True,
+        )
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+    content = source.read_bytes()
+    update_args = {
+        "file_id": file_id,
+        "content_base64": base64.b64encode(content).decode("ascii"),
+        "mime_type": str(
+            (args or {}).get("mime_type", "")
+            or mimetypes.guess_type(source.name)[0]
+            or "application/octet-stream"
+        ),
+    }
+    name = str((args or {}).get("name", "") or "").strip()
+    if name:
+        update_args["name"] = name
+
+    payload = await _drive_mcp_proxy("update_file", update_args, ctx, fallback_manager=manager)
+    if isinstance(payload, dict):
+        payload.setdefault("updated_from", path)
+        payload.setdefault("bytes_read", len(content))
+    return payload
+
+
 def get_drive_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
     if mcp_manager is None:
         return []
@@ -282,6 +336,23 @@ def get_drive_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
             capabilities=("drive_read", "connector_use"),
         ),
         _drive_tool(
+            name="drive_list_children",
+            remote_tool_name="list_children",
+            description="List files directly inside a Drive folder.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "parent_id": {"type": "string"},
+                    "page_size": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "page_token": {"type": "string"},
+                },
+                "required": ["parent_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("drive_read", "connector_use"),
+        ),
+        _drive_tool(
             name="drive_create_folder",
             remote_tool_name="create_folder",
             description="Create a new folder in Google Drive.",
@@ -292,6 +363,19 @@ def get_drive_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
                     "parent_id": {"type": "string"},
                 },
                 "required": ["name"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("drive_write", "connector_use"),
+        ),
+        _drive_tool(
+            name="drive_trash_file",
+            remote_tool_name="trash_file",
+            description="Move a Drive file to trash.",
+            parameters={
+                "type": "object",
+                "properties": {"file_id": {"type": "string"}},
+                "required": ["file_id"],
                 "additionalProperties": False,
             },
             fallback_manager=mcp_manager,
@@ -344,6 +428,24 @@ def get_drive_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
             fallback_manager=mcp_manager,
             capabilities=("drive_write", "connector_use"),
         ),
+        _drive_tool(
+            name="drive_update_file_content",
+            remote_tool_name="update_file",
+            description="Update an existing Drive file from base64 content.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string"},
+                    "content_base64": {"type": "string"},
+                    "mime_type": {"type": "string"},
+                    "name": {"type": "string"},
+                },
+                "required": ["file_id", "content_base64"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("drive_write", "connector_use"),
+        ),
         ToolSpec(
             name="drive_download_to_workspace",
             description="Download a Google Drive file into the workspace or worker scratch directory.",
@@ -387,6 +489,34 @@ def get_drive_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
             },
             permission="filesystem_read",
             handler=lambda args, ctx, _manager=mcp_manager: drive_upload_from_workspace(
+                args,
+                ctx,
+                fallback_manager=_manager,
+            ),
+            is_async=True,
+            metadata=ToolMetadata(
+                category="connectors",
+                risk="guarded",
+                profile_tags=("execution",),
+                capabilities=("drive_write", "filesystem_read", "connector_use"),
+            ),
+        ),
+        ToolSpec(
+            name="drive_update_from_workspace",
+            description="Update an existing Google Drive file from a workspace file.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "file_id": {"type": "string"},
+                    "path": {"type": "string"},
+                    "name": {"type": "string"},
+                    "mime_type": {"type": "string"},
+                },
+                "required": ["file_id", "path"],
+                "additionalProperties": False,
+            },
+            permission="filesystem_read",
+            handler=lambda args, ctx, _manager=mcp_manager: drive_update_from_workspace(
                 args,
                 ctx,
                 fallback_manager=_manager,

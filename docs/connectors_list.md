@@ -28,10 +28,13 @@ What it can do today:
 - list recent Drive files
 - search Drive files
 - inspect Drive file metadata
+- list files inside Drive folders
 - create Drive folders
 - download Drive file contents
 - export Google Docs-native files
 - upload new files to Drive
+- update existing Drive files
+- move Drive files to trash
 - move files between Drive and workspace
 
 What it does not do yet:
