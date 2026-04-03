@@ -36,6 +36,8 @@ What it can do today:
 - update existing Drive files
 - move Drive files to trash
 - move files between Drive and workspace
+- upload a workspace file and return its Drive link
+- read and write text files without manual base64 handling
 
 What it does not do yet:
 - send email
@@ -50,7 +52,7 @@ Setup guide:
 
 CLI flow:
 1. Run `octopal configure`
-2. Enable `Google -> Gmail` and/or `Google -> Calendar`
+2. Enable any needed Google services such as `Gmail`, `Calendar`, and/or `Drive`
 3. Run `octopal connector auth google`
 4. Run `octopal connector status`
 5. Restart Octopal if needed
