@@ -473,6 +473,56 @@ async def test_background_delivery_keeps_user_visible_heartbeat_reply_and_record
 
 
 @pytest.mark.asyncio
+async def test_background_delivery_rewrites_unwrapped_heartbeat_result_to_explicit_user_visible(monkeypatch):
+    memory_messages = []
+
+    class DummyMemory:
+        async def add_message(self, role, text, metadata):
+            memory_messages.append((role, text, metadata))
+
+    class DummyProvider:
+        async def complete(self, _messages):
+            return "<user_visible>Утренний брифинг готов.</user_visible>"
+
+    async def _route_or_reply(*args, **kwargs):
+        return "Утренний брифинг готов."
+
+    async def _bootstrap_context(*args, **kwargs):
+        return SimpleNamespace(content="", hash="", files=[])
+
+    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply)
+    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_context)
+
+    octo = Octo(
+        approvals=None,
+        memory=DummyMemory(),
+        canon=None,
+        provider=DummyProvider(),
+        store=None,
+        policy=None,
+        runtime=None,
+    )
+
+    reply = await octo.handle_message(
+        "heartbeat task",
+        123,
+        persist_to_memory=False,
+        track_progress=False,
+        include_wakeup=False,
+        background_delivery=True,
+    )
+
+    assert reply.delivery_mode == DeliveryMode.IMMEDIATE
+    assert reply.immediate == "Утренний брифинг готов."
+    assert any(
+        role == "assistant"
+        and text == "Утренний брифинг готов."
+        and metadata.get("background_delivery") is True
+        for role, text, metadata in memory_messages
+    )
+
+
+@pytest.mark.asyncio
 async def test_background_delivery_suppresses_low_signal_heartbeat_update(monkeypatch):
     memory_messages = []
 

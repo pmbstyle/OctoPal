@@ -19,7 +19,7 @@ from octopal.channels.telegram.approvals import ApprovalManager
 from octopal.infrastructure.connectors.manager import ConnectorManager
 from octopal.infrastructure.logging import correlation_id_var
 from octopal.infrastructure.mcp.manager import MCPManager
-from octopal.infrastructure.providers.base import InferenceProvider
+from octopal.infrastructure.providers.base import InferenceProvider, Message
 from octopal.infrastructure.store.base import Store
 from octopal.infrastructure.store.models import AuditEvent
 from octopal.runtime.housekeeping import (
@@ -41,6 +41,7 @@ from octopal.runtime.octo.prompt_builder import (
     build_bootstrap_context_prompt,
 )
 from octopal.runtime.octo.router import (
+    _complete_text,
     build_forced_worker_followup,
     normalize_plain_text,
     route_or_reply,
@@ -104,6 +105,45 @@ def _coerce_control_plane_reply(text: str) -> str:
     if has_no_user_response_suffix(value):
         return "NO_USER_RESPONSE"
     return "HEARTBEAT_OK"
+
+
+async def _normalize_heartbeat_delivery_reply(provider: InferenceProvider | None, text: str) -> str:
+    """Normalize heartbeat output to the explicit delivery contract."""
+    value = normalize_plain_text(text or "")
+    explicit = extract_heartbeat_user_visible_message(value)
+    if explicit:
+        return explicit
+    if is_control_response(value) or has_no_user_response_suffix(value):
+        return _coerce_control_plane_reply(value)
+    if provider is None:
+        return _coerce_control_plane_reply(value)
+
+    rewrite_prompt = (
+        "Rewrite the draft heartbeat reply into the strict heartbeat delivery contract.\n"
+        "Return exactly one of:\n"
+        "- HEARTBEAT_OK\n"
+        "- NO_USER_RESPONSE\n"
+        "- <user_visible>...</user_visible>\n"
+        "Use <user_visible> only for a completed result that is explicitly user-facing.\n"
+        "Do not include planning, self-talk, tool notes, or any extra text outside the wrapper."
+    )
+    try:
+        rewritten = await _complete_text(
+            provider,
+            [
+                Message(role="system", content=rewrite_prompt),
+                Message(role="user", content=f"<draft>\n{value}\n</draft>"),
+            ],
+            context="heartbeat_delivery_rewrite",
+        )
+    except Exception:
+        logger.debug("Heartbeat delivery rewrite failed", exc_info=True)
+        return _coerce_control_plane_reply(value)
+
+    explicit = extract_heartbeat_user_visible_message(rewritten)
+    if explicit:
+        return explicit
+    return _coerce_control_plane_reply(rewritten)
 
 
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
@@ -1756,9 +1796,8 @@ class Octo:
             reply_text, wants_followup = _extract_followup_required_marker(reply_text)
             if not track_progress:
                 wants_followup = False
-                explicit_background_text = extract_heartbeat_user_visible_message(reply_text)
-                if background_delivery and explicit_background_text:
-                    reply_text = explicit_background_text
+                if background_delivery:
+                    reply_text = await _normalize_heartbeat_delivery_reply(self.provider, reply_text)
                 else:
                     reply_text = _coerce_control_plane_reply(reply_text)
             logger.info("Octo response ready")
