@@ -713,6 +713,7 @@ class Octo:
     mcp_manager: MCPManager | None = None
     connector_manager: ConnectorManager | None = None
     internal_send: callable | None = None
+    internal_send_file: callable | None = None
     internal_progress_send: callable | None = None
     internal_typing_control: callable | None = None
     _cleanup_task: asyncio.Task | None = None
@@ -723,6 +724,7 @@ class Octo:
     _ws_active: bool = False
     _ws_owner: str | None = None
     _tg_send: callable | None = None
+    _tg_send_file: callable | None = None
     _tg_progress: callable | None = None
     _tg_typing: callable | None = None
     _spawn_limits: dict[str, int] | None = None
@@ -826,6 +828,7 @@ class Octo:
         self._restore_worker_registry_state()
         self._thinking_count = 0
         self._tg_send = self.internal_send
+        self._tg_send_file = self.internal_send_file
         self._tg_progress = self.internal_progress_send
         self._tg_typing = self.internal_typing_control
 
@@ -869,6 +872,7 @@ class Octo:
         self,
         is_ws: bool,
         send: callable | None = None,
+        send_file: callable | None = None,
         progress: callable | None = None,
         typing: callable | None = None,
         owner_id: str | None = None,
@@ -894,12 +898,14 @@ class Octo:
         self._ws_active = is_ws
         if is_ws:
             self.internal_send = send
+            self.internal_send_file = send_file
             self.internal_progress_send = progress
             self.internal_typing_control = typing
             self._ws_owner = owner_id or "ws-default"
             logger.info("Octo switched to WebSocket output channel")
         else:
             self.internal_send = self._tg_send
+            self.internal_send_file = self._tg_send_file
             self.internal_progress_send = self._tg_progress
             self.internal_typing_control = self._tg_typing
             self._ws_owner = None

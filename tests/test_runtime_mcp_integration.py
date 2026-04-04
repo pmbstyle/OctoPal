@@ -12,6 +12,54 @@ from octopal.runtime.workers.runtime import WorkerRuntime
 from octopal.tools.registry import ToolSpec
 
 
+def test_runtime_blocks_user_communication_tools_for_workers(tmp_path: Path) -> None:
+    template = WorkerTemplateRecord(
+        id="worker",
+        name="Worker",
+        description="Test worker",
+        system_prompt="Do work",
+        available_tools=["fs_read", "send_file_to_user"],
+        required_permissions=["filesystem_read", "self_control"],
+        model=None,
+        max_thinking_steps=3,
+        default_timeout_seconds=30,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    class _Store:
+        def get_worker_template(self, worker_id: str):
+            return template
+
+    class _Policy:
+        def grant_capabilities(self, capabilities):
+            return capabilities
+
+    runtime = WorkerRuntime(
+        store=_Store(),
+        policy=_Policy(),
+        workspace_dir=tmp_path,
+        launcher=object(),
+        mcp_manager=None,
+        settings=Settings(),
+    )
+
+    captured: dict[str, object] = {}
+
+    async def _fake_run(spec, approval_requester=None):
+        captured["spec"] = spec
+        return WorkerResult(summary="ok")
+
+    runtime.run = _fake_run  # type: ignore[method-assign]
+
+    request = TaskRequest(worker_id="worker", task="hello")
+    asyncio.run(runtime.run_task(request))
+
+    spec = captured["spec"]
+    assert "fs_read" in spec.available_tools
+    assert "send_file_to_user" not in spec.available_tools
+
+
 def test_runtime_does_not_auto_inject_global_mcp_tools(tmp_path: Path) -> None:
     template = WorkerTemplateRecord(
         id="worker",

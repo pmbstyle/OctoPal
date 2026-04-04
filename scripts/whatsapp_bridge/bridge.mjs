@@ -294,6 +294,31 @@ const server = http.createServer(async (req, res) => {
     rememberOutboundMessageId(result?.key?.id);
     return await jsonResponse(res, 200, { ok: true, to, length: text.length });
   }
+  if (req.method === "POST" && url.pathname === "/send-file") {
+    const payload = await readJson(req);
+    const to = normalizeDirectJid(payload.to || "");
+    const filePath = String(payload.path || "").trim();
+    const caption = String(payload.caption || "").trim();
+    if (!sock || !to || !filePath) {
+      return await jsonResponse(res, 400, { ok: false, error: "missing_to_or_path" });
+    }
+    const absolutePath = path.resolve(filePath);
+    try {
+      const stat = await fs.stat(absolutePath);
+      if (!stat.isFile()) {
+        return await jsonResponse(res, 400, { ok: false, error: "path_is_not_file" });
+      }
+    } catch {
+      return await jsonResponse(res, 400, { ok: false, error: "file_not_found" });
+    }
+    const result = await sock.sendMessage(to, {
+      document: { url: absolutePath },
+      fileName: path.basename(absolutePath),
+      caption,
+    });
+    rememberOutboundMessageId(result?.key?.id);
+    return await jsonResponse(res, 200, { ok: true, to, path: absolutePath });
+  }
   if (req.method === "POST" && url.pathname === "/react") {
     const payload = await readJson(req);
     const to = normalizeDirectJid(payload.to || payload.remoteJid || "");

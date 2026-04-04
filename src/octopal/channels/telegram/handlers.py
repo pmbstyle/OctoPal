@@ -15,7 +15,7 @@ import telegramify_markdown
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, Message, ReactionTypeEmoji
+from aiogram.types import CallbackQuery, FSInputFile, Message, ReactionTypeEmoji
 
 from octopal.channels.telegram.access import is_allowed_chat, parse_allowed_chat_ids
 from octopal.channels.telegram.approvals import ApprovalManager
@@ -156,6 +156,9 @@ def register_handlers(
             return
         await _enqueue_send(bot, chat_id, decision.text)
 
+    async def _internal_send_file(chat_id: int, file_path: str, caption: str | None = None) -> None:
+        await _send_file_safe(bot, chat_id, file_path, caption=caption)
+
     async def _internal_progress_send(
         chat_id: int,
         state: str,
@@ -188,11 +191,13 @@ def register_handlers(
         _publish_runtime_metrics()
 
     octo.internal_send = _internal_send
+    octo.internal_send_file = _internal_send_file
     octo.internal_progress_send = _internal_progress_send
     octo.internal_typing_control = _internal_typing_control
 
     # Re-initialize the Octo's default (Telegram) output hooks if needed
     octo._tg_send = _internal_send
+    octo._tg_send_file = _internal_send_file
     octo._tg_progress = _internal_progress_send
     octo._tg_typing = _internal_typing_control
 
@@ -458,6 +463,15 @@ async def _send_message_safe(bot: Bot, chat_id: int, text: str, reply_to_message
                 html_exc,
             )
             await bot.send_message(chat_id, sanitized, reply_to_message_id=reply_to_message_id)
+
+
+async def _send_file_safe(bot: Bot, chat_id: int, file_path: str, caption: str | None = None) -> None:
+    clean_caption = sanitize_user_facing_text(strip_reaction_tags(caption or "")) or None
+    await bot.send_document(
+        chat_id,
+        document=FSInputFile(file_path),
+        caption=clean_caption,
+    )
 
 
 async def _enqueue_send(bot: Bot, chat_id: int, text: str, reply_to_message_id: int | None = None) -> None:

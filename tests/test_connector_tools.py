@@ -17,6 +17,7 @@ def test_catalog_includes_read_only_connector_status_tool() -> None:
     names = {tool.name for tool in tools}
 
     assert "connector_status" in names
+    assert "send_file_to_user" in names
 
 
 def test_connector_status_tool_reads_status_from_octo_context() -> None:

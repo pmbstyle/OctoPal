@@ -35,6 +35,7 @@ from octopal.runtime.workers.launcher import WorkerLauncher
 from octopal.utils import utc_now
 
 logger = structlog.get_logger(__name__)
+_WORKER_BLOCKED_TOOL_NAMES = {"send_file_to_user"}
 
 # Constants
 _MAX_RECOVERY_ATTEMPTS = 1
@@ -98,7 +99,11 @@ class WorkerRuntime:
         if not granted:
             return WorkerResult(summary="Permission denied for worker task")
 
-        requested_tool_names = list(task_request.tools or template.available_tools)
+        requested_tool_names = [
+            str(tool_name)
+            for tool_name in (task_request.tools or template.available_tools)
+            if str(tool_name) not in _WORKER_BLOCKED_TOOL_NAMES
+        ]
         has_requested_mcp_tools = any(str(tool_name).startswith("mcp_") for tool_name in requested_tool_names)
         if self.mcp_manager:
             try:

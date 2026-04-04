@@ -85,6 +85,7 @@ _ALWAYS_INCLUDE_TOOL_NAMES = {
     "get_worker_result",
     "get_worker_output_path",
     "stop_worker",
+    "send_file_to_user",
     # Octo must always be able to inspect and mutate its workspace.
     "fs_list",
     "fs_read",

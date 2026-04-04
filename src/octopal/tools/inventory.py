@@ -6,6 +6,12 @@ from octopal.tools.metadata import ToolMetadata
 from octopal.tools.registry import ToolSpec
 
 _TOOL_METADATA_BY_NAME: dict[str, ToolMetadata] = {
+    "send_file_to_user": ToolMetadata(
+        category="communication",
+        risk="guarded",
+        profile_tags=("communication", "research", "coding", "ops"),
+        capabilities=("user_delivery", "artifact_delivery"),
+    ),
     "fs_list": ToolMetadata(
         category="filesystem",
         profile_tags=("coding", "ops"),

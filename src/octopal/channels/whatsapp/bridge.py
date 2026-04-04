@@ -148,6 +148,13 @@ class WhatsAppBridgeController:
     def send_message(self, to: str, text: str) -> dict[str, Any]:
         return self._request("POST", "/send", json={"to": to, "text": text})
 
+    def send_file(self, to: str, file_path: str, *, caption: str | None = None) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/send-file",
+            json={"to": to, "path": file_path, "caption": caption or ""},
+        )
+
     def send_reaction(
         self,
         to: str,

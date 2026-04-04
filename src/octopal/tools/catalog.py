@@ -9,6 +9,7 @@ import structlog
 
 from octopal.channels import normalize_user_channel, user_channel_label
 from octopal.infrastructure.config.settings import load_settings
+from octopal.tools.communication.send_file import send_file_to_user
 from octopal.runtime.memory.memchain import (
     memchain_init,
     memchain_record,
@@ -54,6 +55,35 @@ logger = structlog.get_logger(__name__)
 
 def get_tools(mcp_manager=None) -> list[ToolSpec]:
     tools = [
+        ToolSpec(
+            name="send_file_to_user",
+            description="Send a local workspace file or a downloaded URL attachment to the active user channel. Only the Octo can use this.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Workspace-relative or workspace-absolute file path to send.",
+                    },
+                    "url": {
+                        "type": "string",
+                        "description": "HTTP(S) URL to download into workspace/tmp before sending.",
+                    },
+                    "filename": {
+                        "type": "string",
+                        "description": "Optional filename override when downloading from URL.",
+                    },
+                    "caption": {
+                        "type": "string",
+                        "description": "Optional message caption to attach to the file.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=send_file_to_user,
+            is_async=True,
+        ),
         ToolSpec(
             name="manage_canon",
             description="Manage canonical memory files (facts.md, decisions.md, failures.md). Only the Octo can use this.",

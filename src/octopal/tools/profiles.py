@@ -42,6 +42,7 @@ DEFAULT_TOOL_PROFILES: dict[str, ToolProfile] = {
                 "start_worker",
                 "start_workers_parallel",
                 "get_worker_result",
+                "send_file_to_user",
             ]
         ),
     ),
@@ -67,6 +68,7 @@ DEFAULT_TOOL_PROFILES: dict[str, ToolProfile] = {
                 "start_workers_parallel",
                 "get_worker_result",
                 "synthesize_worker_results",
+                "send_file_to_user",
             ]
         ),
     ),
@@ -96,6 +98,7 @@ DEFAULT_TOOL_PROFILES: dict[str, ToolProfile] = {
                 "artifact_collect",
                 "test_run",
                 "coverage_report",
+                "send_file_to_user",
             ]
         ),
     ),
@@ -114,6 +117,7 @@ DEFAULT_TOOL_PROFILES: dict[str, ToolProfile] = {
                 "get_worker_result",
                 "synthesize_worker_results",
                 "propose_knowledge",
+                "send_file_to_user",
             ]
         ),
     ),

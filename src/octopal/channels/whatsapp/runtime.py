@@ -74,6 +74,14 @@ class WhatsAppRuntime:
             for chunk in _chunk_text(clean_text, limit=4000):
                 self.bridge.send_message(to, chunk)
 
+        async def _internal_send_file(chat_id: int, file_path: str, caption: str | None = None) -> None:
+            to = self._number_by_chat_id.get(chat_id)
+            if not to:
+                logger.warning("Missing WhatsApp recipient mapping for file delivery", chat_id=chat_id)
+                return
+            clean_caption = sanitize_user_facing_text(caption or "") or None
+            self.bridge.send_file(to, file_path, caption=clean_caption)
+
         async def _internal_progress_send(
             chat_id: int,
             state: str,
@@ -88,9 +96,11 @@ class WhatsAppRuntime:
             logger.debug("WhatsApp typing indicator not implemented", chat_id=chat_id, active=active)
 
         self.octo.internal_send = _internal_send
+        self.octo.internal_send_file = _internal_send_file
         self.octo.internal_progress_send = _internal_progress_send
         self.octo.internal_typing_control = _internal_typing_control
         self.octo._tg_send = _internal_send
+        self.octo._tg_send_file = _internal_send_file
         self.octo._tg_progress = _internal_progress_send
         self.octo._tg_typing = _internal_typing_control
 

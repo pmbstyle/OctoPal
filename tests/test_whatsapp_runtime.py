@@ -12,10 +12,15 @@ class _FakeBridgeController:
     def __init__(self, settings) -> None:
         self.settings = settings
         self.sent: list[tuple[str, str]] = []
+        self.sent_files: list[dict] = []
         self.reactions: list[dict] = []
 
     def send_message(self, to: str, text: str) -> dict:
         self.sent.append((to, text))
+        return {"ok": True}
+
+    def send_file(self, to: str, file_path: str, *, caption: str | None = None) -> dict:
+        self.sent_files.append({"to": to, "file_path": file_path, "caption": caption})
         return {"ok": True}
 
     def send_reaction(
@@ -303,3 +308,29 @@ def test_whatsapp_runtime_applies_reaction_and_strips_tag(monkeypatch) -> None:
         assert runtime.bridge.sent == [("+15551234567", "All done.")]
 
     asyncio.run(scenario())
+
+
+def test_whatsapp_runtime_internal_send_file_uses_bridge(monkeypatch, tmp_path: Path) -> None:
+    fake_octo = _FakeOcto()
+    monkeypatch.setattr(whatsapp_runtime_module, "build_octo", lambda settings: fake_octo)
+    monkeypatch.setattr(whatsapp_runtime_module, "WhatsAppBridgeController", _FakeBridgeController)
+    monkeypatch.setattr(whatsapp_runtime_module, "update_component_gauges", lambda *args, **kwargs: None)
+    monkeypatch.setattr(whatsapp_runtime_module, "update_last_message", lambda *args, **kwargs: None)
+
+    runtime = WhatsAppRuntime(_make_settings(mode="personal", allowed_numbers="+15551234567"))
+    runtime.attach_octo_output()
+    chat_id = whatsapp_runtime_module.whatsapp_chat_id("+15551234567")
+    runtime._number_by_chat_id[chat_id] = "+15551234567"
+
+    file_path = tmp_path / "artifact.txt"
+    file_path.write_text("artifact", encoding="utf-8")
+
+    async def scenario() -> None:
+        assert fake_octo.internal_send_file is not None
+        await fake_octo.internal_send_file(chat_id, str(file_path), caption="Take this")
+
+    asyncio.run(scenario())
+
+    assert runtime.bridge.sent_files == [
+        {"to": "+15551234567", "file_path": str(file_path), "caption": "Take this"}
+    ]

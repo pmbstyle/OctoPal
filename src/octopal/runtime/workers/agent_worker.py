@@ -186,6 +186,10 @@ async def execute_agent_task(worker: Worker, workspace_root: Path, worker_dir: P
         available_tools,
         [
             ToolPolicyPipelineStep(
+                label="worker.user_communication_denylist",
+                policy=ToolPolicy(deny=["send_file_to_user"]),
+            ),
+            ToolPolicyPipelineStep(
                 label="worker.available_tools",
                 policy=ToolPolicy(allow=list(spec.available_tools or [])),
             )
