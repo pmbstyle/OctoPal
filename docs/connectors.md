@@ -28,6 +28,9 @@ the connector-backed MCP servers that are actually authorized and supported.
   themselves new access
 - The current Google flow uses user-provided OAuth credentials for self-hosted
   setups
+- Once a connector is authorized, Octo only sees the tools that connector
+  currently exposes, including write-capable tools when the integration
+  supports them
 
 ## Supported connectors
 

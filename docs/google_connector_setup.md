@@ -124,6 +124,14 @@ uv run octopal restart
 - Current services: Gmail, Google Calendar, and Google Drive
 - Current model: user-provided OAuth credentials
 - A shared verified Octopal Google app is not required for this self-hosted flow
-- Gmail is read-focused today
+- Gmail currently supports:
+  - reading messages and threads
+  - searching mail and checking unread counts
+  - sending new messages
+  - replying in-thread
+  - archiving, trashing, and deleting messages
+  - marking messages read or unread
+  - moving messages via labels, including label-by-name helpers and Inbox aliases
+  - downloading attachment contents
 - Calendar currently supports listing calendars, listing/searching events, reading events, and creating events
 - Drive currently supports listing/searching files, listing folder children, reading metadata, downloading files, exporting Google Docs-native files, uploading new files, updating existing files, creating folders, trashing files, moving files between Drive and workspace, returning Drive view links after upload, and reading/writing text files without manual base64 handling

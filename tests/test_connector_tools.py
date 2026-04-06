@@ -9,8 +9,8 @@ from octopal.runtime.octo.router import _budget_tool_specs
 from octopal.tools.catalog import get_tools
 from octopal.tools.connectors.calendar import get_calendar_connector_tools
 from octopal.tools.connectors.drive import get_drive_connector_tools
-from octopal.tools.connectors.gmail import get_gmail_connector_tools
 from octopal.tools.connectors.github import get_github_connector_tools
+from octopal.tools.connectors.gmail import get_gmail_connector_tools
 from octopal.tools.connectors.status import connector_status_read
 from octopal.tools.registry import ToolSpec
 
@@ -68,6 +68,18 @@ def test_catalog_includes_first_class_gmail_tools_when_mcp_manager_is_present() 
     assert "gmail_list_messages" in names
     assert "gmail_search_messages" in names
     assert "gmail_get_message" in names
+    assert "gmail_send_message" in names
+    assert "gmail_reply_to_message" in names
+    assert "gmail_archive_message" in names
+    assert "gmail_delete_message" in names
+    assert "gmail_mark_message_read" in names
+    assert "gmail_mark_message_unread" in names
+    assert "gmail_modify_message_labels" in names
+    assert "gmail_get_attachment" in names
+    assert "gmail_add_label_by_name" in names
+    assert "gmail_remove_label_by_name" in names
+    assert "gmail_move_message_to_inbox" in names
+    assert "gmail_move_message_out_of_inbox" in names
 
 
 def test_octo_budget_keeps_system_baseline_tools() -> None:
@@ -183,6 +195,28 @@ def test_gmail_connector_tool_proxies_and_parses_json_payload() -> None:
 
     assert payload["messages"][0]["id"] == "msg-1"
     assert payload["result_size_estimate"] == 1
+
+
+def test_gmail_write_connector_tools_use_gmail_write_capability() -> None:
+    class _Manager:
+        async def call_tool(self, server_id, tool_name, args, allow_name_fallback=False):
+            return type("_Result", (), {"content": [type("_Text", (), {"text": '{"id":"msg-2"}'})()]})()
+
+    tools = {tool.name: tool for tool in get_gmail_connector_tools(_Manager())}
+
+    assert tools["gmail_send_message"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_reply_to_message"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_archive_message"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_trash_message"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_delete_message"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_mark_message_read"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_mark_message_unread"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_modify_message_labels"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_get_attachment"].metadata.capabilities == ("gmail_read", "connector_use")
+    assert tools["gmail_add_label_by_name"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_remove_label_by_name"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_move_message_to_inbox"].metadata.capabilities == ("gmail_write", "connector_use")
+    assert tools["gmail_move_message_out_of_inbox"].metadata.capabilities == ("gmail_write", "connector_use")
 
 
 def test_calendar_connector_tool_proxies_and_parses_json_payload() -> None:

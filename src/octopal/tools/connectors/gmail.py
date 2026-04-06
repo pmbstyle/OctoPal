@@ -90,6 +90,7 @@ def _gmail_tool(
     description: str,
     parameters: dict[str, Any],
     fallback_manager: Any,
+    capabilities: tuple[str, ...],
 ) -> ToolSpec:
     return ToolSpec(
         name=name,
@@ -109,7 +110,7 @@ def _gmail_tool(
             category="connectors",
             risk="safe",
             profile_tags=("research", "communication"),
-            capabilities=("gmail_read", "connector_use"),
+            capabilities=capabilities,
         ),
     )
 
@@ -125,6 +126,7 @@ def get_gmail_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
             description="Get the connected Gmail account profile. Use this to confirm which mailbox is active.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             fallback_manager=mcp_manager,
+            capabilities=("gmail_read", "connector_use"),
         ),
         _gmail_tool(
             name="gmail_list_labels",
@@ -132,6 +134,7 @@ def get_gmail_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
             description="List Gmail labels available in the connected mailbox.",
             parameters={"type": "object", "properties": {}, "additionalProperties": False},
             fallback_manager=mcp_manager,
+            capabilities=("gmail_read", "connector_use"),
         ),
         _gmail_tool(
             name="gmail_list_messages",
@@ -152,6 +155,7 @@ def get_gmail_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             fallback_manager=mcp_manager,
+            capabilities=("gmail_read", "connector_use"),
         ),
         _gmail_tool(
             name="gmail_search_messages",
@@ -172,6 +176,7 @@ def get_gmail_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             fallback_manager=mcp_manager,
+            capabilities=("gmail_read", "connector_use"),
         ),
         _gmail_tool(
             name="gmail_get_message",
@@ -187,6 +192,7 @@ def get_gmail_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             fallback_manager=mcp_manager,
+            capabilities=("gmail_read", "connector_use"),
         ),
         _gmail_tool(
             name="gmail_batch_get_messages",
@@ -202,6 +208,7 @@ def get_gmail_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             fallback_manager=mcp_manager,
+            capabilities=("gmail_read", "connector_use"),
         ),
         _gmail_tool(
             name="gmail_get_thread",
@@ -217,6 +224,7 @@ def get_gmail_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             fallback_manager=mcp_manager,
+            capabilities=("gmail_read", "connector_use"),
         ),
         _gmail_tool(
             name="gmail_get_unread_count",
@@ -230,5 +238,221 @@ def get_gmail_connector_tools(mcp_manager: Any = None) -> list[ToolSpec]:
                 "additionalProperties": False,
             },
             fallback_manager=mcp_manager,
+            capabilities=("gmail_read", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_send_message",
+            remote_tool_name="send_message",
+            description="Send a Gmail message to one or more recipients, optionally attaching it to an existing thread.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "to": {"type": "array", "items": {"type": "string"}},
+                    "subject": {"type": "string"},
+                    "body_text": {"type": "string"},
+                    "body_html": {"type": "string"},
+                    "cc": {"type": "array", "items": {"type": "string"}},
+                    "bcc": {"type": "array", "items": {"type": "string"}},
+                    "thread_id": {"type": "string"},
+                },
+                "required": ["to", "subject"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_reply_to_message",
+            remote_tool_name="reply_to_message",
+            description=(
+                "Reply to a Gmail message by ID. Use reply_all when the response should include the full original "
+                "conversation recipients."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                    "body_text": {"type": "string"},
+                    "body_html": {"type": "string"},
+                    "cc": {"type": "array", "items": {"type": "string"}},
+                    "bcc": {"type": "array", "items": {"type": "string"}},
+                    "reply_all": {"type": "boolean"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_archive_message",
+            remote_tool_name="archive_message",
+            description="Archive a Gmail message by removing it from Inbox.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_trash_message",
+            remote_tool_name="trash_message",
+            description="Move a Gmail message to trash.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_delete_message",
+            remote_tool_name="delete_message",
+            description="Permanently delete a Gmail message.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_mark_message_read",
+            remote_tool_name="mark_message_read",
+            description="Mark a Gmail message as read.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_mark_message_unread",
+            remote_tool_name="mark_message_unread",
+            description="Mark a Gmail message as unread.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_modify_message_labels",
+            remote_tool_name="modify_message_labels",
+            description="Add and/or remove Gmail labels on a message to move it between folders or categories.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                    "add_label_ids": {"type": "array", "items": {"type": "string"}},
+                    "remove_label_ids": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_get_attachment",
+            remote_tool_name="get_attachment",
+            description="Download a Gmail attachment by message ID and attachment ID.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                    "attachment_id": {"type": "string"},
+                    "filename": {"type": "string"},
+                },
+                "required": ["message_id", "attachment_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_read", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_add_label_by_name",
+            remote_tool_name="add_label_by_name",
+            description="Add a Gmail label to a message using a label name or label ID.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                    "label_name": {"type": "string"},
+                },
+                "required": ["message_id", "label_name"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_remove_label_by_name",
+            remote_tool_name="remove_label_by_name",
+            description="Remove a Gmail label from a message using a label name or label ID.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                    "label_name": {"type": "string"},
+                },
+                "required": ["message_id", "label_name"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_move_message_to_inbox",
+            remote_tool_name="move_message_to_inbox",
+            description="Move a Gmail message back into Inbox.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
+        ),
+        _gmail_tool(
+            name="gmail_move_message_out_of_inbox",
+            remote_tool_name="move_message_out_of_inbox",
+            description="Archive a Gmail message by moving it out of Inbox.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "message_id": {"type": "string"},
+                },
+                "required": ["message_id"],
+                "additionalProperties": False,
+            },
+            fallback_manager=mcp_manager,
+            capabilities=("gmail_write", "connector_use"),
         ),
     ]

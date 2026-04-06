@@ -17,6 +17,15 @@ What it can do today:
 - count unread emails
 - inspect labels
 - inspect the connected mailbox profile
+- send email
+- reply to an email by message ID
+- archive email
+- move email to trash or permanently delete it
+- mark messages read or unread
+- move messages between labels/folders
+- download attachment contents
+- add or remove labels by human-readable name
+- move messages back to Inbox with a dedicated alias
 - list calendars
 - list events
 - search events
@@ -40,11 +49,6 @@ What it can do today:
 - read and write text files without manual base64 handling
 
 What it does not do yet:
-- send email
-- archive or delete email
-- mark messages read or unread
-- move messages between labels/folders
-- download attachment contents
 - attendee response management
 
 Setup guide:
