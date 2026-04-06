@@ -376,6 +376,10 @@ Connectors are the integration layer between Octopal and external services. Octo
 
    Gmail | Google Calendar | Google Drive
 
+- **GitHub Connector**
+  
+  <img src="https://octopal.ca/github.png" height="60">
+
 See [docs/connectors.md](docs/connectors.md) for more info.
 
 ## Troubleshooting
