@@ -67,7 +67,7 @@ High-impact actions require explicit confirmation by passing `confirm=true`:
 
 ## New Worker Templates
 
-Default templates were added under `src/octopal/workers/default_templates/`:
+Default templates live under `workspace_templates/workers/` in the repository:
 
 - `ops_sre`
 - `deploy_manager`

@@ -180,7 +180,7 @@ Rules:
   - Returns: summary and output data if completed, error if failed, or status message if still running
 
 ### Worker template management tools:
-- **create_worker_template: Create a new worker template in the database.**
+- **create_worker_template: Create a new worker template as `workspace/workers/<id>/worker.json`.**
   - Required parameters:
     - id (string): Unique worker ID (e.g., 'my_researcher'). Use lowercase with underscores.
     - name (string): Human-readable name
@@ -199,42 +199,30 @@ Rules:
   - Optional parameters: name, description, system_prompt, available_tools, required_permissions, max_thinking_steps, default_timeout_seconds
   - Returns: updated worker details
 
-- **delete_worker_template: Delete a worker template from the database.**
+- **delete_worker_template: Delete a worker template from `workspace/workers/<id>/worker.json`.**
   - Required parameters:
     - id (string): Worker ID to delete
   - Returns: deletion confirmation
 
 ## Available worker templates:
 
-### web_researcher
-- Purpose: Searches the web and analyzes information from multiple sources
-- Tools: web_search, web_fetch
-- Permissions: network
-- Use for: Research tasks, finding information online
+Use `list_workers` for the current runtime-discovered set from `workspace/workers/`.
 
-### web_fetcher
-- Purpose: Fetches and summarizes content from web pages
-- Tools: web_fetch
-- Permissions: network
-- Use for: Getting content from specific URLs
-
-### analyst
-- Purpose: Analyzes data and creates reports
-- Tools: (varies by task)
-- Permissions: (varies by task)
-- Use for: Data analysis, creating summaries
-
-### writer
-- Purpose: Writes and edits content based on requirements
-- Tools: (varies by task)
-- Permissions: (varies by task)
-- Use for: Writing content, editing text
-
-### coder
-- Purpose: Writes, reviews, and debugs code
-- Tools: fs_read, fs_write, fs_list
-- Permissions: filesystem_read, filesystem_write
-- Use for: Code tasks, file operations
+Common default templates synced from the repository include:
+- `analyst`
+- `coder`
+- `db_maintainer`
+- `deploy_manager`
+- `ops_sre`
+- `release_notes_writer`
+- `security_auditor`
+- `self_controller`
+- `test_runner`
+- `web_fetcher`
+- `web_researcher`
+- `web_search_answer`
+- `web_search_ranked`
+- `writer`
 
 ## Worker communication:
 

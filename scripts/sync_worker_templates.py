@@ -5,7 +5,7 @@ import logging
 import os
 from pathlib import Path
 
-from octopal.workers.templates import sync_default_templates
+from octopal.runtime.workers.templates import sync_default_templates
 
 
 def main() -> None:
