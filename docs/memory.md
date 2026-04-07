@@ -1,70 +1,167 @@
-# Octopal Hybrid Memory System
+# Octopal Memory
 
-Octopal uses a sophisticated three-tier hybrid memory architecture designed to balance immediate conversational context, semantic retrieval of past events, and stable long-term knowledge ("Crystallization").
+Octopal remembers things in a few different ways, because not all memory is the same.
 
-## 1. Architecture Overview
+Some things are only useful for the current conversation. Some are useful later if they become relevant again. Some should become durable knowledge that survives across sessions. And some things change over time, so the system needs to distinguish between "this was true before" and "this is true now".
 
-Memory is divided into three distinct layers:
+The goal of the memory system is simple:
 
-| Layer | Storage | Retrieval Strategy | Purpose |
-| :--- | :--- | :--- | :--- |
-| **Temporal** | SQLite | Last N messages | Immediate conversational flow. |
-| **Semantic** | SQLite + Vectors | Top-K Cosine Similarity | Recalling relevant past events/conversations. |
-| **Canonical** | Filesystem (`.md`) | Hybrid (Inject + Search) | Crystallized knowledge, decisions, and lessons. |
+- keep Octo grounded in the current conversation
+- help Octo recall relevant past work
+- preserve important long-term knowledge
+- reduce prompt noise instead of endlessly stuffing more text into context
 
----
+## The Short Version
 
-## 2. The Canonical Layer (`memory/canon/`)
+Octopal memory has five high-level parts:
 
-This is the "Stable" memory of the agent. Unlike the SQLite event store, the Canonical layer is curated by the Octo and is not subject to automatic expiration.
+1. recent conversation memory
+2. searchable past memory
+3. durable canon files
+4. current facts derived from durable knowledge and observed history
+5. reset and continuity notes that help Octo resume work after context resets
 
-### Core Files
-- `facts.md`: Verified truths about the user, project, or world.
-- `decisions.md`: Architectural choices, policy rulings, and persistent preferences.
-- `failures.md`: Lessons learned from errors to prevent repetition.
+These parts work together. Not everything is loaded all the time.
 
-### Context Tiers
-1. **Tier 1 (Automatic Injection):** `decisions.md` and `failures.md` are always injected into the Octo's system prompt (summarized if they exceed size limits).
-2. **Tier 2 (Semantic Search):** The Octo uses the `search_canon` tool to query `facts.md` and other canon files when she needs specific details.
+## 1. Recent Conversation Memory
 
----
+This is the short-term memory for active chats.
 
-## 3. Decoupled Vector Storage
+It keeps track of recent user messages, assistant replies, worker outcomes, and other nearby context that matters for the current flow. This is what helps Octo stay coherent inside an ongoing conversation without having to rediscover everything from scratch.
 
-To ensure scalability and model independence, Octopal decouples text storage from the vector index.
+This layer is useful for:
 
-- **Table `memory_entries`**: Stores the raw text, role, and metadata.
-- **Table `memory_embeddings`**: Stores vectors mapped to entries by UUID, including the model name used for embedding.
-- **Table `canon_embeddings`**: Stores semantic chunks of the canonical files for Tier 2 retrieval.
+- following the current thread
+- avoiding repeating the same reply
+- keeping track of what was just said or done
 
-This allows for:
-- **Re-embedding:** Switching embedding models without losing the original text.
-- **Multi-model support:** Using different models for different types of retrieval.
+This memory is not meant to become permanent truth by itself.
 
----
+## 2. Searchable Past Memory
 
-## 4. The Memory Contract
+Octopal also keeps a broader searchable memory of past messages and events.
 
-Octopal enforces a strict hierarchy for writing to memory:
+When the current conversation is not enough, the system can pull in relevant past material. It does not just blindly replay old chat logs. It tries to retrieve the pieces that are most useful for the current question.
 
-1. **Workers (Propose):** Workers cannot modify the Canon. They use the `propose_knowledge` tool to flag facts or lessons.
-2. **Octo (Curate):** The Octo reviews worker proposals and her own experiences. She uses `manage_canon` to "crystallize" information into the `.md` files.
-3. **Automatic (Log):** All raw interactions are automatically logged to the SQLite temporal/semantic store.
+This layer is useful for:
 
----
+- recalling old discussions
+- finding earlier solutions
+- remembering past attempts, problems, and trade-offs
 
-## 5. Maintenance & Guardrails
+To make this cleaner, memory entries are also tagged at a high level when possible, for example as:
 
-- **Compaction:** If a canonical file exceeds 4,000 characters, the `CanonService` issues a warning to the Octo, who is then responsible for summarizing and refactoring the file.
-- **Cleanup:** Ephemeral SQLite memory is pruned according to settings (default: entries older than 30 days or exceeding 1,000 records). Canonical memory is **never** automatically deleted.
+- decisions
+- preferences
+- problems
+- milestones
+- emotional or human-context moments
 
-## 6. Quality Controls (Recent Improvements)
+That helps Octo search more intelligently instead of treating every memory as the same kind of thing.
 
-Octopal now applies additional quality controls in the transient/semantic memory pipeline:
+## 3. Canon Files
 
-- **Deduplication on Write:** Exact normalized duplicates in recent same-chat history are skipped to reduce noise.
-- **Contradiction Tagging:** Simple assertion conflicts (for example, `X is Y` vs `X is not Y`) are flagged in metadata (`contradiction_detected`, `contradiction_with`) instead of silently treated as equal truth.
-- **Confidence Scoring:** Entries carry a confidence value in metadata (role-defaulted and adjustable), which influences retrieval rank.
-- **Recency Weighting:** Semantic retrieval applies a recency decay factor so newer relevant memories are favored while still retaining long-term recall.
+The canon is the durable memory of the system.
 
-These controls improve retrieval precision while preserving auditability of conflicting observations.
+These are the files under `workspace/memory/canon/`, especially:
+
+- `facts.md`
+- `decisions.md`
+- `failures.md`
+
+Think of canon as crystallized knowledge. It is not just "whatever happened in chat". It is the part that should keep mattering later.
+
+In practice:
+
+- `facts.md` holds durable truths worth remembering
+- `decisions.md` holds important choices and policies
+- `failures.md` holds lessons learned and mistakes not worth repeating
+
+Canon is intentionally more stable and curated than normal chat memory.
+
+## 4. Current Facts
+
+Some knowledge changes over time.
+
+For example:
+
+- which tool is currently preferred
+- which provider is active now
+- whether something is working or broken
+- what the current next step is
+
+For this, Octopal now keeps a separate facts layer. This layer is meant to answer questions like:
+
+- what seems true right now?
+- what used to be true, but no longer is?
+- what current fact is worth surfacing without dragging in a lot of old raw conversation?
+
+This keeps Octo from having to infer the present state from a pile of old messages every time.
+
+## 5. Reset and Continuity Memory
+
+Long-running agent work sometimes needs context resets.
+
+When that happens, Octopal stores structured handoff and continuity notes so Octo can wake up with a useful summary instead of just losing the thread.
+
+This includes things like:
+
+- current goal
+- open threads
+- constraints
+- next step
+- a short reflection on what mattered before the reset
+
+This layer is not the same as canon. It is there to preserve momentum and continuity.
+
+## How Memory Gets Used
+
+Octo does not load all memory all the time.
+
+Very roughly, the system works like this:
+
+- durable canon is always important
+- recent history is used for current conversation flow
+- searchable memory is pulled in when needed
+- current facts are used when the question is about active state
+- reset continuity notes are mainly used after a context reset
+
+This keeps the system practical. The point is not to remember everything equally. The point is to remember the right things at the right time.
+
+## What Gets Saved Automatically
+
+A lot of memory is created automatically:
+
+- conversation entries
+- assistant and worker outcomes
+- semantic/searchable memory
+- fact candidates inferred from memory
+- continuity notes created during context reset
+
+This means the system can improve recall without requiring constant manual upkeep.
+
+## What Still Needs Curation
+
+Not every remembered thing should become durable knowledge.
+
+The canon is still the place for carefully chosen long-term knowledge. That means:
+
+- raw chat history is not automatically the same as truth
+- temporary observations are not automatically permanent facts
+- reflection notes are not automatically canon
+
+This separation matters. It helps Octo remember more without turning memory into a junk drawer.
+
+## Why This Design Helps
+
+The memory system is designed to make Octo better in a practical way:
+
+- less likely to forget important project decisions
+- less likely to drag irrelevant old context into the prompt
+- better at recalling current state versus historical state
+- better at resuming work after long tasks or resets
+- better at preserving useful lessons without bloating every conversation
+
+In short:
+
+Octopal tries to remember broadly, use memory selectively, and keep durable knowledge clean.
