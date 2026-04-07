@@ -17,7 +17,7 @@ _ASSERTION_RE = re.compile(
     re.IGNORECASE,
 )
 _DECISION_PATTERNS = (
-    re.compile(r"\b(decided|choose|chose|picked|settled on|went with|switch(?:ed)? to|migrat(?:e|ed) to)\b", re.IGNORECASE),
+    re.compile(r"\b(decide|decided|choose|chose|picked|settled on|went with|switch(?:ed)? to|migrat(?:e|ed) to)\b", re.IGNORECASE),
     re.compile(r"\b(instead of|rather than|trade-?off|the reason is|the reason was|because)\b", re.IGNORECASE),
 )
 _PREFERENCE_PATTERNS = (
@@ -103,6 +103,19 @@ class MemoryService:
         await asyncio.to_thread(self.store.add_memory_entry, entry)
 
     async def get_context(self, query: str, exclude_chat_id: int | None = None) -> list[str]:
+        return await self.get_context_by_facets(
+            query,
+            exclude_chat_id=exclude_chat_id,
+            memory_facets=None,
+        )
+
+    async def get_context_by_facets(
+        self,
+        query: str,
+        *,
+        exclude_chat_id: int | None = None,
+        memory_facets: list[str] | None = None,
+    ) -> list[str]:
         if self.embeddings is None:
             return []
         trimmed = query.strip()
@@ -128,6 +141,9 @@ class MemoryService:
                 self.owner_id,
                 max(self.prefilter_k, 200),
             )
+        facet_filtered = _filter_entries_by_facets(candidates, memory_facets)
+        if facet_filtered:
+            candidates = facet_filtered
         scored: list[tuple[float, MemoryEntry]] = []
         for entry in candidates:
             if not entry.embedding:
@@ -233,7 +249,7 @@ def _default_confidence(role: str) -> float:
 
 def _merge_enrichment_metadata(metadata: dict[str, Any], content: str) -> None:
     facets = set(_coerce_str_list(metadata.get("memory_facets")))
-    facets.update(_infer_memory_facets(content))
+    facets.update(infer_memory_facets(content))
     if metadata.get("fact_candidate") is False:
         facets.discard("fact_candidate")
     if facets:
@@ -249,7 +265,7 @@ def _merge_enrichment_metadata(metadata: dict[str, Any], content: str) -> None:
     metadata.setdefault("fact_negated", assertion.negated)
 
 
-def _infer_memory_facets(content: str) -> set[str]:
+def infer_memory_facets(content: str) -> set[str]:
     facets: set[str] = set()
     for facet, patterns in (
         ("decision", _DECISION_PATTERNS),
@@ -263,6 +279,22 @@ def _infer_memory_facets(content: str) -> set[str]:
     if _extract_assertion(content) is not None:
         facets.add("fact_candidate")
     return facets
+
+
+def _filter_entries_by_facets(
+    entries: list[MemoryEntry],
+    memory_facets: list[str] | None,
+) -> list[MemoryEntry]:
+    requested = set(_coerce_str_list(memory_facets))
+    if not requested:
+        return []
+
+    matches: list[MemoryEntry] = []
+    for entry in entries:
+        entry_facets = set(_coerce_str_list((entry.metadata or {}).get("memory_facets")))
+        if entry_facets & requested:
+            matches.append(entry)
+    return matches
 
 
 def _coerce_str_list(value: Any) -> list[str]:

@@ -159,3 +159,39 @@ def test_memory_preserves_explicit_enrichment_overrides() -> None:
     assert "custom_marker" in facets
     assert "fact_candidate" not in facets
     assert metadata.get("fact_candidate") is False
+
+
+def test_memory_context_prefers_matching_facets_when_available() -> None:
+    store = _StoreStub()
+    store.entries.extend(
+        [
+            MemoryEntry(
+                id=str(uuid.uuid4()),
+                role="assistant",
+                content="We decided to use uv for installs.",
+                embedding=[1.0, 0.0],
+                created_at=utc_now(),
+                metadata={"owner_id": "default", "chat_id": 21, "memory_facets": ["decision"]},
+            ),
+            MemoryEntry(
+                id=str(uuid.uuid4()),
+                role="assistant",
+                content="The deploy is broken right now.",
+                embedding=[1.0, 0.0],
+                created_at=utc_now(),
+                metadata={"owner_id": "default", "chat_id": 22, "memory_facets": ["problem"]},
+            ),
+        ]
+    )
+    service = MemoryService(store=store, embeddings=_EmbedStub(), owner_id="default", top_k=1, min_score=0.05)
+
+    async def scenario() -> list[str]:
+        return await service.get_context_by_facets(
+            "why did we decide to use uv?",
+            exclude_chat_id=None,
+            memory_facets=["decision"],
+        )
+
+    context = asyncio.run(scenario())
+    assert len(context) == 1
+    assert "decided to use uv" in context[0]

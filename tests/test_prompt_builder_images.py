@@ -102,3 +102,47 @@ def test_build_octo_prompt_includes_tool_policy_summary() -> None:
         assert "do not repeat the same call" in merged
 
     asyncio.run(scenario())
+
+
+def test_build_octo_prompt_uses_facets_aware_memory_getter_when_available() -> None:
+    class DummyMemory:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, list[str] | None]] = []
+
+        async def get_context(self, user_text: str, exclude_chat_id: int | None = None):
+            raise AssertionError("facets-aware getter should be preferred when available")
+
+        async def get_context_by_facets(
+            self,
+            user_text: str,
+            *,
+            exclude_chat_id: int | None = None,
+            memory_facets: list[str] | None = None,
+        ):
+            self.calls.append((user_text, memory_facets))
+            return ["assistant: We decided to use uv."]
+
+        async def get_recent_history(self, chat_id: int, limit: int = 20):
+            return []
+
+    class DummyCanon:
+        def get_tier1_context(self):
+            return ""
+
+    memory = DummyMemory()
+
+    async def scenario() -> None:
+        messages = await build_octo_prompt(
+            store=object(),
+            memory=memory,
+            canon=DummyCanon(),
+            user_text="why did we decide to use uv?",
+            chat_id=123,
+            bootstrap_context="",
+        )
+        contents = [str(msg.content) for msg in messages if isinstance(msg.content, str)]
+        merged = "\n".join(contents)
+        assert "We decided to use uv." in merged
+
+    asyncio.run(scenario())
+    assert memory.calls == [("why did we decide to use uv?", ["decision"])]

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from octopal.runtime.memory.memchain import memchain_verify
+from octopal.runtime.memory.service import infer_memory_facets
 
 if TYPE_CHECKING:
     from octopal.infrastructure.providers.base import Message
@@ -27,6 +28,15 @@ class BootstrapContext:
     hash: str
 
     files: list[tuple[str, int]]
+
+
+@dataclass
+class MemoryContextBundle:
+    canon_context: str
+    memory_context: list[str]
+    recent_history: list[tuple[str, str]]
+    prune_stats: dict[str, int]
+    selected_facets: list[str]
 
 
 async def _load_system_prompt_file() -> str:
@@ -264,6 +274,48 @@ def _prune_recent_history_window(
     }
 
 
+async def _build_memory_context_bundle(
+    memory: MemoryService,
+    canon: CanonService,
+    user_text: str,
+    chat_id: int,
+) -> MemoryContextBundle:
+    canon_context = await asyncio.to_thread(canon.get_tier1_context)
+
+    selected_facets = sorted(
+        facet for facet in infer_memory_facets(user_text) if facet != "fact_candidate"
+    )
+    memory_getter = getattr(memory, "get_context_by_facets", None)
+    if callable(memory_getter):
+        memory_context = await memory_getter(
+            user_text,
+            exclude_chat_id=chat_id,
+            memory_facets=selected_facets or None,
+        )
+    else:
+        memory_context = await memory.get_context(user_text, exclude_chat_id=chat_id)
+
+    recent_history = await memory.get_recent_history(chat_id, limit=20)
+    if recent_history and recent_history[-1][0] == "user" and recent_history[-1][1] == user_text:
+        recent_history = recent_history[:-1]
+    max_history_chars = _env_int("OCTOPAL_CONTEXT_PRUNE_MAX_HISTORY_CHARS", 100_000, minimum=2_000)
+    keep_recent = _env_int("OCTOPAL_CONTEXT_PRUNE_KEEP_RECENT", 12, minimum=1)
+    per_message_chars = _env_int("OCTOPAL_CONTEXT_PRUNE_MESSAGE_CHARS", 32_000, minimum=500)
+    recent_history, prune_stats = _prune_recent_history_window(
+        recent_history,
+        max_history_chars=max_history_chars,
+        keep_recent=keep_recent,
+        per_message_chars=per_message_chars,
+    )
+    return MemoryContextBundle(
+        canon_context=canon_context,
+        memory_context=memory_context,
+        recent_history=recent_history,
+        prune_stats=prune_stats,
+        selected_facets=selected_facets,
+    )
+
+
 async def build_octo_prompt(
     store: Store,
     memory: MemoryService,
@@ -299,22 +351,7 @@ async def build_octo_prompt(
 
     datetime_prompt = _current_datetime_prompt()
 
-    canon_context = await asyncio.to_thread(canon.get_tier1_context)
-
-    memory_context = await memory.get_context(user_text, exclude_chat_id=chat_id)
-
-    recent_history = await memory.get_recent_history(chat_id, limit=20)
-    if recent_history and recent_history[-1][0] == "user" and recent_history[-1][1] == user_text:
-        recent_history = recent_history[:-1]
-    max_history_chars = _env_int("OCTOPAL_CONTEXT_PRUNE_MAX_HISTORY_CHARS", 100_000, minimum=2_000)
-    keep_recent = _env_int("OCTOPAL_CONTEXT_PRUNE_KEEP_RECENT", 12, minimum=1)
-    per_message_chars = _env_int("OCTOPAL_CONTEXT_PRUNE_MESSAGE_CHARS", 32_000, minimum=500)
-    recent_history, prune_stats = _prune_recent_history_window(
-        recent_history,
-        max_history_chars=max_history_chars,
-        keep_recent=keep_recent,
-        per_message_chars=per_message_chars,
-    )
+    memory_bundle = await _build_memory_context_bundle(memory, canon, user_text, chat_id)
 
     messages: list[Message] = [Message(role="system", content=system_prompt)]
     if persona_prompt_lines:
@@ -341,29 +378,30 @@ async def build_octo_prompt(
             )
         )
 
-    if canon_context:
-        messages.append(Message(role="system", content=canon_context))
+    if memory_bundle.canon_context:
+        messages.append(Message(role="system", content=memory_bundle.canon_context))
 
-    if memory_context:
+    if memory_bundle.memory_context:
         messages.append(
             Message(
-                role="system", content="<context>\n" + "\n".join(memory_context) + "\n</context>"
+                role="system",
+                content="<context>\n" + "\n".join(memory_bundle.memory_context) + "\n</context>",
             )
         )
-    if prune_stats["trimmed"] > 0 or prune_stats["dropped"] > 0:
+    if memory_bundle.prune_stats["trimmed"] > 0 or memory_bundle.prune_stats["dropped"] > 0:
         messages.append(
             Message(
                 role="system",
                 content=(
                     "Context pruning applied before inference:\n"
-                    f"- trimmed_messages={prune_stats['trimmed']}\n"
-                    f"- dropped_old_messages={prune_stats['dropped']}\n"
-                    f"- history_chars_after_prune={prune_stats['total_chars']}"
+                    f"- trimmed_messages={memory_bundle.prune_stats['trimmed']}\n"
+                    f"- dropped_old_messages={memory_bundle.prune_stats['dropped']}\n"
+                    f"- history_chars_after_prune={memory_bundle.prune_stats['total_chars']}"
                 ),
             )
         )
-    if recent_history:
-        for role, content in recent_history:
+    if memory_bundle.recent_history:
+        for role, content in memory_bundle.recent_history:
             messages.append(Message(role=role, content=content))
 
     if images:
