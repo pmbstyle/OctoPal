@@ -628,7 +628,7 @@ export function ControlCenterPage() {
             </div>
           ) : (
             <div className="max-h-[42rem] overflow-auto rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)]">
-              <div className="min-w-max">
+              <div>
                 <Table className="min-w-[1120px] table-fixed">
                   <colgroup>
                     <col className="w-[112px]" />
