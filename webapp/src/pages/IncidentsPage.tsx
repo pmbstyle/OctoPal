@@ -5,6 +5,8 @@ import { fetchIncidents } from "../api/dashboardClient";
 import type { components } from "../api/types";
 import type { AppShellOutletContext } from "../ui/AppShell";
 import { formatLocalDateTime } from "../utils/dateTime";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 
 type IncidentsPayload = components["schemas"]["DashboardIncidentsV2"];
 type IncidentItem = {
@@ -29,8 +31,22 @@ function severityTone(value?: string): string {
   return "border-emerald-400/30 bg-emerald-500/10 text-emerald-300";
 }
 
+function EmptyState({ title, message, tone = "neutral" }: { title: string; message: string; tone?: "neutral" | "error" }) {
+  const className =
+    tone === "error"
+      ? "rounded-[30px] border border-rose-400/30 bg-rose-950/20 p-8 text-rose-100"
+      : "rounded-[30px] border border-white/6 bg-[var(--surface-panel)] p-8 text-[var(--text-strong)]";
+
+  return (
+    <section className={className}>
+      <h2 className="text-2xl font-semibold text-white">{title}</h2>
+      <p className="mt-2 text-sm text-[var(--text-muted)]">{message}</p>
+    </section>
+  );
+}
+
 export function IncidentsPage() {
-  const { filters, setFilters } = useOutletContext<AppShellOutletContext>();
+  const { filters } = useOutletContext<AppShellOutletContext>();
   const [data, setData] = useState<IncidentsPayload | null>(null);
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
@@ -69,21 +85,11 @@ export function IncidentsPage() {
   }, [filters.environment, filters.service, filters.token, filters.windowMinutes]);
 
   if (loading) {
-    return (
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">
-        <h2 className="text-2xl font-semibold text-slate-100">Incidents</h2>
-        <p className="mt-2">Loading incident stream...</p>
-      </section>
-    );
+    return <EmptyState title="Incidents" message="Loading incident stream..." />;
   }
 
   if (error) {
-    return (
-      <section className="rounded-2xl border border-rose-500/40 bg-rose-950/30 p-8 text-rose-200">
-        <h2 className="text-2xl font-semibold text-rose-100">Incidents</h2>
-        <p className="mt-2">Failed to load incidents: {error}</p>
-      </section>
-    );
+    return <EmptyState title="Incidents" message={`Failed to load incidents: ${error}`} tone="error" />;
   }
 
   const incidentsNode = (data?.incidents ?? {}) as {
@@ -95,71 +101,89 @@ export function IncidentsPage() {
   const items = incidentsNode.items ?? [];
 
   return (
-    <section className="grid gap-5">
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-slate-950/60">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Incidents</p>
-            <h2 className="mt-2 text-2xl font-semibold text-slate-100">Incident Groups</h2>
-            <p className="mt-2 text-sm text-slate-400">
-              Deduped warnings and critical signals for the current filter set.
+    <section className="grid gap-6">
+      <section className="grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_320px]">
+        <Card className="rounded-[32px] border-white/6 bg-[var(--surface-panel)] py-0 shadow-[0_24px_80px_rgba(0,0,0,0.26)]">
+          <CardContent className="px-6 py-6">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-[var(--text-dim)]">Incident groups</p>
+            <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">Open warning and critical signals</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--text-muted)]">
+              Deduped operational issues grouped by title and service so the page stays readable under pressure.
             </p>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-sm">
-            <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-center">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Open</div>
-              <div className="mt-1 text-xl font-semibold text-slate-100">{summary.open ?? 0}</div>
+            <div className="mt-6 grid gap-4 md:grid-cols-3">
+              <div className="rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)] p-4">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Open</p>
+                <p className="mt-3 text-4xl font-semibold tracking-[-0.04em] text-white">{summary.open ?? 0}</p>
+              </div>
+              <div className="rounded-[24px] border border-rose-300/20 bg-rose-500/5 p-4">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-rose-100/70">Critical</p>
+                <p className="mt-3 text-4xl font-semibold tracking-[-0.04em] text-rose-200">{summary.critical ?? 0}</p>
+              </div>
+              <div className="rounded-[24px] border border-amber-300/20 bg-amber-500/5 p-4">
+                <p className="text-[11px] uppercase tracking-[0.18em] text-amber-100/70">Warning</p>
+                <p className="mt-3 text-4xl font-semibold tracking-[-0.04em] text-amber-200">{summary.warning ?? 0}</p>
+              </div>
             </div>
-            <div className="rounded-xl border border-rose-300/20 bg-rose-500/5 px-3 py-2 text-center">
-              <div className="text-xs uppercase tracking-wide text-rose-300/80">Critical</div>
-              <div className="mt-1 text-xl font-semibold text-rose-300">{summary.critical ?? 0}</div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-[32px] border-white/6 bg-[var(--surface-panel)] py-0">
+          <CardContent className="space-y-4 px-6 py-6">
+            <div className="rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)] p-4">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Operator read</p>
+              <p className="mt-3 text-sm leading-6 text-[var(--text-muted)]">
+                This view is intentionally quiet. It highlights active pressure without turning into another dense event log.
+              </p>
             </div>
-            <div className="rounded-xl border border-amber-300/20 bg-amber-500/5 px-3 py-2 text-center">
-              <div className="text-xs uppercase tracking-wide text-amber-300/80">Warning</div>
-              <div className="mt-1 text-xl font-semibold text-amber-300">{summary.warning ?? 0}</div>
+            <div className="rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)] p-4">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Current scope</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">
+                  1 hour window
+                </Badge>
+                <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">
+                  all services
+                </Badge>
+              </div>
             </div>
-          </div>
-        </div>
+          </CardContent>
+        </Card>
       </section>
 
       {items.length === 0 ? (
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-slate-950/60">
-          <p className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-slate-400">
-            No incident groups for current filters.
-          </p>
-        </section>
+        <Card className="rounded-[30px] border-white/6 bg-[var(--surface-panel)] py-0">
+          <CardContent className="p-6">
+            <p className="rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)] p-4 text-[var(--text-muted)]">
+              No incident groups in the current window.
+            </p>
+          </CardContent>
+        </Card>
       ) : (
         <section className="grid gap-4 xl:grid-cols-2">
           {items.map((item) => (
             <article
               key={item.id ?? item.title}
-              className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60"
+              className="rounded-[28px] border border-white/6 bg-[var(--surface-panel)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.2)]"
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className={`rounded-full border px-2.5 py-1 text-xs uppercase tracking-wide ${severityTone(item.severity)}`}>
+                <Badge variant="outline" className={`rounded-full ${severityTone(item.severity)}`}>
                   {String(item.severity ?? "unknown")}
-                </div>
-                <div className="text-xs text-slate-500">Impact {item.impact ?? 0}</div>
+                </Badge>
+                <div className="text-xs text-[var(--text-dim)]">Impact {item.impact ?? 0}</div>
               </div>
-              <h3 className="mt-4 text-lg font-semibold text-slate-100">{item.title ?? "Incident"}</h3>
-              <p className="mt-2 text-sm text-slate-400">{item.summary ?? "No summary"}</p>
-              <div className="mt-4 flex flex-wrap gap-3 text-xs text-slate-500">
-                <span>Service: {item.service ?? "unknown"}</span>
-                <span>Count: {item.count ?? 0}</span>
-                <span>Latest: {formatLocalDateTime(item.latest_at)}</span>
+              <h3 className="mt-4 text-xl font-semibold text-white">{item.title ?? "Incident"}</h3>
+              <p className="mt-3 text-sm leading-6 text-[var(--text-muted)]">{item.summary ?? "No summary"}</p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">
+                  Service {item.service ?? "unknown"}
+                </Badge>
+                <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">
+                  Count {item.count ?? 0}
+                </Badge>
+                <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">
+                  {formatLocalDateTime(item.latest_at)}
+                </Badge>
               </div>
-              <button
-                type="button"
-                className="mt-4 rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-200 transition hover:border-cyan-300/60 hover:bg-cyan-400/15"
-                onClick={() =>
-                  setFilters({
-                    ...filters,
-                    service: (item.service as AppShellOutletContext["filters"]["service"]) || "all",
-                  })
-                }
-              >
-                Drill by service
-              </button>
             </article>
           ))}
         </section>

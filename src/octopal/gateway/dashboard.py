@@ -17,7 +17,19 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from octopal.channels import normalize_user_channel, user_channel_label
-from octopal.infrastructure.config.settings import Settings
+from octopal.infrastructure.config.models import (
+    GatewayConfig,
+    LLMConfig,
+    LiteLLMRuntimeConfig,
+    MemoryConfig,
+    OctopalConfig,
+    SearchConfig,
+    StorageConfig,
+    TelegramConfig,
+    WhatsAppConfig,
+    WorkerRuntimeConfig,
+)
+from octopal.infrastructure.config.settings import Settings, _sync_settings_from_config, load_config, save_config
 from octopal.infrastructure.store.models import AuditEvent, WorkerRecord, WorkerTemplateRecord
 from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.runtime.metrics import read_metrics_snapshot
@@ -98,6 +110,26 @@ class WorkerTemplatePayload(BaseModel):
     allowed_child_templates: list[str] = Field(default_factory=list)
 
 
+class DashboardConfigPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    user_channel: str
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    llm: LLMConfig = Field(default_factory=LLMConfig)
+    worker_llm_default: LLMConfig = Field(default_factory=LLMConfig)
+    litellm: LiteLLMRuntimeConfig = Field(default_factory=LiteLLMRuntimeConfig)
+    storage: StorageConfig = Field(default_factory=StorageConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    gateway: GatewayConfig = Field(default_factory=GatewayConfig)
+    workers: WorkerRuntimeConfig = Field(default_factory=WorkerRuntimeConfig)
+    whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
+    search: SearchConfig = Field(default_factory=SearchConfig)
+    log_level: str = "INFO"
+    debug_prompts: bool = False
+    heartbeat_interval_seconds: int = 900
+    user_message_grace_seconds: float = 5.0
+
+
 def register_dashboard_routes(app: FastAPI) -> None:
     @app.get("/dashboard", response_class=HTMLResponse)
     async def dashboard_page():
@@ -174,6 +206,69 @@ def register_dashboard_routes(app: FastAPI) -> None:
             "log_level": settings.log_level,
             "tailscale_ips_configured": bool(settings.tailscale_ips.strip()),
             "dashboard_token_configured": bool(settings.dashboard_token.strip()),
+            "worker_launcher": {
+                "configured": launcher_status.configured_launcher,
+                "effective": launcher_status.effective_launcher,
+                "available": launcher_status.available,
+                "reason": launcher_status.reason,
+                "docker_image": settings.worker_docker_image,
+            },
+        }
+
+    @app.get("/api/dashboard/config")
+    async def dashboard_config(request: Request) -> dict[str, Any]:
+        settings = _get_settings(app)
+        _verify_dashboard_token(request, settings)
+        config = _sanitize_dashboard_config_payload(_dashboard_editable_config_payload(settings))
+        launcher_status = get_worker_launcher_status(settings)
+        return {
+            "config": config.model_dump(mode="json"),
+            "worker_launcher": {
+                "configured": launcher_status.configured_launcher,
+                "effective": launcher_status.effective_launcher,
+                "available": launcher_status.available,
+                "reason": launcher_status.reason,
+                "docker_image": settings.worker_docker_image,
+            },
+            "notes": [
+                "Changes are written to config.json.",
+                "Some runtime services may need restart to fully apply updated settings.",
+            ],
+        }
+
+    @app.put("/api/dashboard/config")
+    async def dashboard_update_config(
+        request: Request,
+        payload: DashboardConfigPayload,
+    ) -> dict[str, Any]:
+        settings = _get_settings(app)
+        _verify_dashboard_token(request, settings)
+        config = _settings_to_octopal_config(settings)
+        payload = _merge_dashboard_secret_fields(payload, config)
+        config.user_channel = normalize_user_channel(payload.user_channel)
+        config.telegram = payload.telegram
+        config.llm = payload.llm
+        config.worker_llm_default = payload.worker_llm_default
+        config.litellm = payload.litellm
+        config.storage = payload.storage
+        config.memory = payload.memory
+        config.gateway = payload.gateway
+        config.workers = payload.workers
+        config.whatsapp = payload.whatsapp
+        config.search = payload.search
+        config.log_level = payload.log_level
+        config.debug_prompts = payload.debug_prompts
+        config.heartbeat_interval_seconds = payload.heartbeat_interval_seconds
+        config.user_message_grace_seconds = payload.user_message_grace_seconds
+
+        save_config(config)
+        settings.config_obj = config
+        _sync_settings_from_config(settings, config)
+
+        launcher_status = get_worker_launcher_status(settings)
+        return {
+            "status": "saved",
+            "config": _sanitize_dashboard_config_payload(_dashboard_editable_config_payload(settings)).model_dump(mode="json"),
             "worker_launcher": {
                 "configured": launcher_status.configured_launcher,
                 "effective": launcher_status.effective_launcher,
@@ -2149,6 +2244,154 @@ def _uptime_human(started_at: str | None) -> str:
     minutes = (total % 3600) // 60
     seconds = total % 60
     return f"{hours:02}:{minutes:02}:{seconds:02}"
+
+
+def _settings_to_octopal_config(settings: Settings) -> OctopalConfig:
+    if settings.config_obj is not None:
+        return settings.config_obj.model_copy(deep=True)
+    try:
+        return load_config()
+    except Exception:
+        pass
+
+    config = OctopalConfig()
+    config.user_channel = normalize_user_channel(settings.user_channel)
+    config.telegram = TelegramConfig(
+        bot_token=settings.telegram_bot_token,
+        allowed_chat_ids=[
+            item.strip() for item in str(settings.allowed_telegram_chat_ids or "").split(",") if item.strip()
+        ],
+        parse_mode=settings.telegram_parse_mode,
+    )
+    config.llm = LLMConfig(
+        provider_id=settings.litellm_provider_id,
+        model=settings.litellm_model,
+        api_key=settings.litellm_api_key,
+        api_base=settings.litellm_api_base,
+        model_prefix=settings.litellm_model_prefix,
+    )
+    config.worker_llm_default = LLMConfig(
+        provider_id=settings.litellm_provider_id,
+        model=settings.litellm_model,
+        api_key=settings.litellm_api_key,
+        api_base=settings.litellm_api_base,
+        model_prefix=settings.litellm_model_prefix,
+    )
+    config.litellm = LiteLLMRuntimeConfig(
+        num_retries=settings.litellm_num_retries,
+        timeout=settings.litellm_timeout,
+        fallbacks=settings.litellm_fallbacks,
+        drop_params=settings.litellm_drop_params,
+        caching=settings.litellm_caching,
+        max_concurrency=settings.litellm_max_concurrency,
+        rate_limit_max_retries=settings.litellm_rate_limit_max_retries,
+        rate_limit_base_delay_seconds=settings.litellm_rate_limit_base_delay_seconds,
+        rate_limit_max_delay_seconds=settings.litellm_rate_limit_max_delay_seconds,
+    )
+    config.storage = StorageConfig(
+        state_dir=settings.state_dir,
+        workspace_dir=settings.workspace_dir,
+    )
+    config.memory = MemoryConfig(
+        top_k=settings.memory_top_k,
+        prefilter_k=settings.memory_prefilter_k,
+        min_score=settings.memory_min_score,
+        max_chars=settings.memory_max_chars,
+        owner_id=settings.memory_owner_id,
+    )
+    config.gateway = GatewayConfig(
+        host=settings.gateway_host,
+        port=settings.gateway_port,
+        tailscale_ips=settings.tailscale_ips,
+        dashboard_token=settings.dashboard_token,
+        tailscale_auto_serve=settings.tailscale_auto_serve,
+        webapp_enabled=settings.webapp_enabled,
+        webapp_dist_dir=settings.webapp_dist_dir,
+    )
+    config.workers = WorkerRuntimeConfig(
+        launcher=settings.worker_launcher,
+        docker_image=settings.worker_docker_image,
+        docker_workspace=settings.worker_docker_workspace,
+        docker_host_workspace=settings.worker_docker_host_workspace,
+        max_spawn_depth=settings.worker_max_spawn_depth,
+        max_children_total=settings.worker_max_children_total,
+        max_children_concurrent=settings.worker_max_children_concurrent,
+    )
+    config.whatsapp = WhatsAppConfig(
+        mode=settings.whatsapp_mode,
+        allowed_numbers=[
+            item.strip() for item in str(settings.allowed_whatsapp_numbers or "").split(",") if item.strip()
+        ],
+        auth_dir=settings.whatsapp_auth_dir,
+        bridge_host=settings.whatsapp_bridge_host,
+        bridge_port=settings.whatsapp_bridge_port,
+        callback_token=settings.whatsapp_callback_token,
+        node_command=settings.whatsapp_node_command,
+    )
+    config.search = SearchConfig(
+        brave_api_key=settings.brave_api_key,
+        firecrawl_api_key=settings.firecrawl_api_key,
+    )
+    config.log_level = settings.log_level
+    config.debug_prompts = settings.debug_prompts
+    config.heartbeat_interval_seconds = settings.heartbeat_interval_seconds
+    config.user_message_grace_seconds = settings.user_message_grace_seconds
+    return config
+
+
+def _dashboard_editable_config_payload(settings: Settings) -> DashboardConfigPayload:
+    config = _settings_to_octopal_config(settings)
+    return DashboardConfigPayload(
+        user_channel=config.user_channel,
+        telegram=config.telegram,
+        llm=config.llm,
+        worker_llm_default=config.worker_llm_default,
+        litellm=config.litellm,
+        storage=config.storage,
+        memory=config.memory,
+        gateway=config.gateway,
+        workers=config.workers,
+        whatsapp=config.whatsapp,
+        search=config.search,
+        log_level=config.log_level,
+        debug_prompts=config.debug_prompts,
+        heartbeat_interval_seconds=config.heartbeat_interval_seconds,
+        user_message_grace_seconds=config.user_message_grace_seconds,
+    )
+
+
+def _sanitize_dashboard_config_payload(payload: DashboardConfigPayload) -> DashboardConfigPayload:
+    sanitized = payload.model_copy(deep=True)
+    sanitized.telegram.bot_token = ""
+    sanitized.llm.api_key = None
+    sanitized.worker_llm_default.api_key = None
+    sanitized.gateway.dashboard_token = ""
+    sanitized.whatsapp.callback_token = ""
+    sanitized.search.brave_api_key = None
+    sanitized.search.firecrawl_api_key = None
+    return sanitized
+
+
+def _merge_dashboard_secret_fields(
+    payload: DashboardConfigPayload,
+    existing: OctopalConfig,
+) -> DashboardConfigPayload:
+    merged = payload.model_copy(deep=True)
+    if not merged.telegram.bot_token.strip():
+        merged.telegram.bot_token = existing.telegram.bot_token
+    if not (merged.llm.api_key or "").strip():
+        merged.llm.api_key = existing.llm.api_key
+    if not (merged.worker_llm_default.api_key or "").strip():
+        merged.worker_llm_default.api_key = existing.worker_llm_default.api_key
+    if not merged.gateway.dashboard_token.strip():
+        merged.gateway.dashboard_token = existing.gateway.dashboard_token
+    if not merged.whatsapp.callback_token.strip():
+        merged.whatsapp.callback_token = existing.whatsapp.callback_token
+    if not (merged.search.brave_api_key or "").strip():
+        merged.search.brave_api_key = existing.search.brave_api_key
+    if not (merged.search.firecrawl_api_key or "").strip():
+        merged.search.firecrawl_api_key = existing.search.firecrawl_api_key
+    return merged
 
 
 

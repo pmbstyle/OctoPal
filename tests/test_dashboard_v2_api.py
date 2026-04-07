@@ -6,6 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from octopal.gateway.app import build_app
+from octopal.infrastructure.config.models import OctopalConfig
 from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.store.models import WorkerRecord
 from octopal.infrastructure.store.sqlite import SQLiteStore
@@ -220,3 +221,106 @@ def test_dashboard_system_and_settings_include_worker_launcher_health(tmp_path, 
     settings_payload = settings_resp.json()
     assert settings_payload["worker_launcher"]["configured"] == "docker"
     assert settings_payload["worker_launcher"]["effective"] == "same_env"
+
+
+def test_dashboard_config_can_be_read_and_updated(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="123:abc",
+        OCTOPAL_STATE_DIR=tmp_path / "state",
+        OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
+        OCTOPAL_DASHBOARD_TOKEN="",
+    )
+    settings.config_obj = OctopalConfig()
+    app = build_app(settings)
+    client = TestClient(app)
+    headers = {"x-octopal-token": settings.dashboard_token} if settings.dashboard_token else {}
+
+    response = client.get("/api/dashboard/config", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["config"]["gateway"]["port"] == 8000
+    assert payload["config"]["workers"]["launcher"] == "docker"
+
+    updated = payload["config"]
+    updated["user_channel"] = "whatsapp"
+    updated["log_level"] = "DEBUG"
+    updated["gateway"]["port"] = 9010
+    updated["gateway"]["webapp_enabled"] = True
+    updated["workers"]["docker_image"] = "octopal-worker:test"
+    updated["memory"]["top_k"] = 9
+    updated["search"]["brave_api_key"] = "brave-test"
+    updated["telegram"]["allowed_chat_ids"] = ["12345"]
+    updated["whatsapp"]["allowed_numbers"] = ["+15551234567"]
+
+    save_response = client.put("/api/dashboard/config", json=updated, headers=headers)
+    assert save_response.status_code == 200
+    saved_payload = save_response.json()
+    assert saved_payload["status"] == "saved"
+    assert saved_payload["config"]["gateway"]["port"] == 9010
+    assert saved_payload["config"]["workers"]["docker_image"] == "octopal-worker:test"
+
+    assert settings.gateway_port == 9010
+    assert settings.webapp_enabled is True
+    assert settings.worker_docker_image == "octopal-worker:test"
+    assert settings.memory_top_k == 9
+    assert settings.user_channel == "whatsapp"
+
+    config_file = tmp_path / "config.json"
+    assert config_file.exists()
+    persisted = json.loads(config_file.read_text(encoding="utf-8"))
+    assert persisted["gateway"]["port"] == 9010
+    assert persisted["workers"]["docker_image"] == "octopal-worker:test"
+    assert persisted["search"]["brave_api_key"] == "brave-test"
+
+
+def test_dashboard_config_redacts_and_preserves_secrets(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "telegram": {"bot_token": "telegram-secret", "allowed_chat_ids": [], "parse_mode": "MarkdownV2"},
+                "llm": {"provider_id": "openrouter", "model": "x", "api_key": "llm-secret", "api_base": None, "model_prefix": None},
+                "worker_llm_default": {"provider_id": "openrouter", "model": "y", "api_key": "worker-secret", "api_base": None, "model_prefix": None},
+                "gateway": {"host": "0.0.0.0", "port": 8000, "tailscale_ips": "", "dashboard_token": "dash-secret", "tailscale_auto_serve": True, "webapp_enabled": False, "webapp_dist_dir": None},
+                "whatsapp": {"mode": "separate", "allowed_numbers": [], "auth_dir": None, "bridge_host": "127.0.0.1", "bridge_port": 8765, "callback_token": "wa-secret", "node_command": "node"},
+                "search": {"brave_api_key": "brave-secret", "firecrawl_api_key": "fire-secret"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="123:abc",
+        OCTOPAL_STATE_DIR=tmp_path / "state",
+        OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
+        OCTOPAL_DASHBOARD_TOKEN="",
+    )
+    app = build_app(settings)
+    client = TestClient(app)
+
+    response = client.get("/api/dashboard/config")
+    assert response.status_code == 200
+    payload = response.json()["config"]
+    assert payload["telegram"]["bot_token"] == ""
+    assert payload["llm"]["api_key"] is None
+    assert payload["worker_llm_default"]["api_key"] is None
+    assert payload["gateway"]["dashboard_token"] == ""
+    assert payload["whatsapp"]["callback_token"] == ""
+    assert payload["search"]["brave_api_key"] is None
+    assert payload["search"]["firecrawl_api_key"] is None
+
+    payload["gateway"]["port"] = 9001
+    save_response = client.put("/api/dashboard/config", json=payload)
+    assert save_response.status_code == 200
+
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["telegram"]["bot_token"] == "telegram-secret"
+    assert persisted["llm"]["api_key"] == "llm-secret"
+    assert persisted["worker_llm_default"]["api_key"] == "worker-secret"
+    assert persisted["gateway"]["dashboard_token"] == "dash-secret"
+    assert persisted["whatsapp"]["callback_token"] == "wa-secret"
+    assert persisted["search"]["brave_api_key"] == "brave-secret"
+    assert persisted["search"]["firecrawl_api_key"] == "fire-secret"
+    assert persisted["gateway"]["port"] == 9001

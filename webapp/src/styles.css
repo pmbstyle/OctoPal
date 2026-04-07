@@ -1,4 +1,7 @@
-@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap");
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
 
 @tailwind base;
 @tailwind components;
@@ -7,23 +10,132 @@
 @layer base {
   :root {
     color-scheme: dark;
+    --app-bg: #0b1017;
+    --sidebar-bg: #0f141c;
+    --surface-top: #111821;
+    --surface-panel: rgba(18, 25, 35, 0.88);
+    --surface-panel-strong: rgba(15, 21, 31, 0.94);
+    --surface-border: rgba(121, 130, 142, 0.18);
+    --surface-border-strong: rgba(121, 130, 142, 0.24);
+    --surface-border-focus: rgba(121, 130, 142, 0.3);
+    --field-bg: rgba(255, 255, 255, 0.04);
+    --nav-active: rgba(255, 255, 255, 0.06);
+    --border-soft: rgba(121, 130, 142, 0.18);
+    --text-strong: #edf2f7;
+    --text-muted: #9aa5b5;
+    --text-dim: #647184;
+    --background: #0b1017;
+    --foreground: #edf2f7;
+    --card: rgba(18, 25, 35, 0.88);
+    --card-foreground: #edf2f7;
+    --popover: #121923;
+    --popover-foreground: #edf2f7;
+    --primary: #edf2f7;
+    --primary-foreground: #101722;
+    --secondary: rgba(255, 255, 255, 0.06);
+    --secondary-foreground: #edf2f7;
+    --muted: rgba(255, 255, 255, 0.05);
+    --muted-foreground: #9aa5b5;
+    --accent: rgba(255, 255, 255, 0.08);
+    --accent-foreground: #edf2f7;
+    --destructive: #f87171;
+    --destructive-foreground: #fff1f2;
+    --border: rgba(121, 130, 142, 0.24);
+    --input: rgba(121, 130, 142, 0.18);
+    --ring: rgba(121, 130, 142, 0.28);
+    --chart-1: #cbd5e1;
+    --chart-2: #94a3b8;
+    --chart-3: #64748b;
+    --chart-4: #475569;
+    --chart-5: #334155;
+    --radius: 0.625rem;
+    --sidebar: #0f141c;
+    --sidebar-foreground: #edf2f7;
+    --sidebar-primary: #edf2f7;
+    --sidebar-primary-foreground: #101722;
+    --sidebar-accent: rgba(255, 255, 255, 0.06);
+    --sidebar-accent-foreground: #edf2f7;
+    --sidebar-border: rgba(121, 130, 142, 0.2);
+    --sidebar-ring: rgba(121, 130, 142, 0.28);
   }
 
   * {
-    @apply border-slate-800;
+    @apply border-border;
+    box-sizing: border-box;
+    outline-color: color-mix(in srgb, var(--ring) 50%, transparent);
+  }
+
+  html {
+    background: var(--app-bg);
+    @apply font-sans;
+    min-height: 100%;
   }
 
   body {
-    @apply m-0 bg-slate-950 text-slate-100;
-    font-family: "Space Grotesk", "Segoe UI", Tahoma, sans-serif;
-    background-image:
-      radial-gradient(circle at 8% 12%, rgba(34, 211, 238, 0.08), transparent 36%),
-      radial-gradient(circle at 88% 8%, rgba(56, 189, 248, 0.07), transparent 34%),
-      linear-gradient(160deg, #020617 0%, #0b1120 45%, #020617 100%);
+    @apply m-0 antialiased bg-background text-foreground;
+    font-family: "Manrope", "Segoe UI", sans-serif;
+    background:
+      radial-gradient(circle at top left, rgba(120, 142, 168, 0.14), transparent 28%),
+      radial-gradient(circle at 80% 10%, rgba(84, 102, 126, 0.12), transparent 22%),
+      linear-gradient(180deg, #0f141c 0%, #0b1017 48%, #0a0f16 100%);
     min-height: 100vh;
+    min-width: 100%;
   }
 
   #app {
     min-height: 100vh;
+    min-width: 100%;
+  }
+
+  code,
+  pre,
+  kbd,
+  samp {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+  }
+
+  ::selection {
+    background: rgba(148, 163, 184, 0.28);
+    color: white;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.22);
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.34);
+  }
+  .theme {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', sans-serif;
+  }
+  .dark {}
+}
+
+@layer utilities {
+  .border-white\/6 {
+    border-color: var(--surface-border) !important;
+  }
+
+  .border-white\/8,
+  .border-white\/10 {
+    border-color: var(--surface-border-strong) !important;
+  }
+
+  .focus\:border-white\/18:focus,
+  .focus\:border-white\/20:focus,
+  .hover\:border-white\/14:hover {
+    border-color: var(--surface-border-focus) !important;
   }
 }

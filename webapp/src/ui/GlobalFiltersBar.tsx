@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
-import type { ChangeEvent } from "react";
+
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 
 export type DashboardFilters = {
   windowMinutes: 15 | 60 | 240 | 1440;
@@ -20,64 +31,113 @@ export function GlobalFiltersBar({ filters, onChange }: GlobalFiltersBarProps) {
     setDraftToken(filters.token);
   }, [filters.token]);
 
-  const onSelectWindow = (event: ChangeEvent<HTMLSelectElement>) => {
-    onChange({ ...filters, windowMinutes: Number(event.target.value) as DashboardFilters["windowMinutes"] });
-  };
-
-  const onTokenChange = (event: ChangeEvent<HTMLInputElement>) => {
-    setDraftToken(event.target.value);
-  };
-
   return (
-    <section
-      className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60"
-      aria-label="Global filters"
-    >
-      <div className="grid gap-3 md:grid-cols-[minmax(220px,320px)_1fr]">
-        <label className="grid gap-1 text-xs uppercase tracking-[0.14em] text-slate-400">
-          Window
-          <select
-            value={filters.windowMinutes}
-            onChange={onSelectWindow}
-            className="rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none"
-          >
-          <option value={15}>15m</option>
-          <option value={60}>1h</option>
-          <option value={240}>4h</option>
-          <option value={1440}>24h</option>
-          </select>
-        </label>
+    <Card className="border-white/6 bg-[var(--surface-panel)] py-0 shadow-[0_24px_80px_rgba(0,0,0,0.28)]">
+      <CardContent className="p-4">
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          <Badge variant="secondary" className="rounded-full bg-white/[0.06] text-[var(--text-strong)]">
+            Active filters
+          </Badge>
+          <span className="text-xs text-[var(--text-dim)]">Scope the dashboard without leaving the working surface.</span>
+        </div>
 
-        <label className="grid gap-1 text-xs uppercase tracking-[0.14em] text-slate-400">
-          Dashboard token
-          <div className="flex gap-2">
-            <input
+        <div className="grid gap-3 xl:grid-cols-[140px_180px_180px_minmax(260px,1fr)_auto]">
+          <label className="grid gap-1.5">
+            <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Window</span>
+            <Select
+              value={String(filters.windowMinutes)}
+              onValueChange={(value) =>
+                onChange({ ...filters, windowMinutes: Number(value) as DashboardFilters["windowMinutes"] })
+              }
+            >
+              <SelectTrigger className="rounded-2xl border-white/8 bg-[var(--field-bg)]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="15">15m</SelectItem>
+                <SelectItem value="60">1h</SelectItem>
+                <SelectItem value="240">4h</SelectItem>
+                <SelectItem value="1440">24h</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+
+          <label className="grid gap-1.5">
+            <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Service</span>
+            <Select
+              value={filters.service}
+              onValueChange={(value) => onChange({ ...filters, service: value as DashboardFilters["service"] })}
+            >
+              <SelectTrigger className="rounded-2xl border-white/8 bg-[var(--field-bg)]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All services</SelectItem>
+                <SelectItem value="gateway">Gateway</SelectItem>
+                <SelectItem value="octo">Octo</SelectItem>
+                <SelectItem value="telegram">Telegram</SelectItem>
+                <SelectItem value="exec_run">Exec run</SelectItem>
+                <SelectItem value="mcp">MCP</SelectItem>
+                <SelectItem value="workers">Workers</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+
+          <label className="grid gap-1.5">
+            <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Environment</span>
+            <Select
+              value={filters.environment}
+              onValueChange={(value) =>
+                onChange({ ...filters, environment: value as DashboardFilters["environment"] })
+              }
+            >
+              <SelectTrigger className="rounded-2xl border-white/8 bg-[var(--field-bg)]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All environments</SelectItem>
+                <SelectItem value="local">Local</SelectItem>
+                <SelectItem value="dev">Dev</SelectItem>
+                <SelectItem value="staging">Staging</SelectItem>
+                <SelectItem value="prod">Prod</SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+
+          <label className="grid gap-1.5">
+            <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Dashboard token</span>
+            <Input
               value={draftToken}
-              onChange={onTokenChange}
+              onChange={(event) => setDraftToken(event.target.value)}
               type="password"
-              placeholder="optional"
-              className="min-w-0 flex-1 rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none"
+              placeholder="Optional access token"
+              className="rounded-2xl border-white/8 bg-[var(--field-bg)]"
             />
-            <button
+          </label>
+
+          <div className="flex items-end gap-2">
+            <Button
               type="button"
-              className="rounded-lg border border-cyan-500/40 bg-cyan-500/15 px-3 py-2 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/25"
+              variant="secondary"
+              className="rounded-2xl bg-white/[0.08] text-[var(--text-strong)] hover:bg-white/[0.12]"
               onClick={() => onChange({ ...filters, token: draftToken.trim() })}
             >
               Apply
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
-              className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-700"
+              variant="ghost"
+              className="rounded-2xl text-[var(--text-muted)] hover:bg-white/[0.05] hover:text-[var(--text-strong)]"
               onClick={() => {
                 setDraftToken("");
                 onChange({ ...filters, token: "" });
               }}
             >
               Clear
-            </button>
+            </Button>
           </div>
-        </label>
-      </div>
-    </section>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

@@ -5,6 +5,7 @@ import json
 import logging
 import shutil
 import subprocess
+import threading
 import time
 from collections import deque
 from datetime import UTC, datetime
@@ -289,24 +290,34 @@ def _has_webapp_build_toolchain(webapp_dir: Path) -> bool:
     return all((node_modules_dir / package / "package.json").is_file() for package in required_packages)
 
 
-def _ensure_webapp_built(settings: Settings) -> None:
+def _build_webapp_assets(settings: Settings, *, fail_hard: bool = True) -> bool:
     if not settings.webapp_enabled:
-        return
+        return False
 
     webapp_dir, dist_dir = _resolve_webapp_paths(settings)
     if not webapp_dir.exists():
-        console.print("[bold red]Webapp directory not found:[/bold red] " + str(webapp_dir))
-        raise typer.Exit(code=1)
+        message = "Webapp directory not found: " + str(webapp_dir)
+        if fail_hard:
+            console.print("[bold red]" + message + "[/bold red]")
+            raise typer.Exit(code=1)
+        logger.warning(message)
+        console.print(f"[yellow]Skipping dashboard build:[/yellow] {message}")
+        return False
 
     npm_path = shutil.which("npm")
     if not npm_path:
-        console.print("[bold red]npm is required to build dashboard assets but was not found.[/bold red]")
-        raise typer.Exit(code=1)
+        message = "npm is required to build dashboard assets but was not found."
+        if fail_hard:
+            console.print(f"[bold red]{message}[/bold red]")
+            raise typer.Exit(code=1)
+        logger.warning(message)
+        console.print(f"[yellow]Skipping dashboard build:[/yellow] {message}")
+        return False
 
     build_needed = _is_webapp_build_stale(webapp_dir, dist_dir)
     if not build_needed:
         console.print("[dim]Web dashboard assets are up to date.[/dim]")
-        return
+        return False
 
     console.print("[bold cyan]Preparing web dashboard assets...[/bold cyan]")
     node_modules_dir = webapp_dir / "node_modules"
@@ -340,13 +351,50 @@ def _ensure_webapp_built(settings: Settings) -> None:
                 raise install_error
         _run_webapp_command([npm_path, "run", "build"], cwd=webapp_dir)
     except RuntimeError as exc:
-        console.print(f"[bold red]Failed to build web dashboard:[/bold red]\n{exc}")
-        raise typer.Exit(code=1) from None
+        if fail_hard:
+            console.print(f"[bold red]Failed to build web dashboard:[/bold red]\n{exc}")
+            raise typer.Exit(code=1) from None
+        logger.warning("Failed to build web dashboard in background: %s", exc)
+        console.print(f"[yellow]Web dashboard build failed in background:[/yellow]\n{exc}")
+        return False
 
     if not (dist_dir / "index.html").exists():
-        console.print("[bold red]Web dashboard build completed but dist/index.html is missing.[/bold red]")
-        raise typer.Exit(code=1)
+        message = "Web dashboard build completed but dist/index.html is missing."
+        if fail_hard:
+            console.print(f"[bold red]{message}[/bold red]")
+            raise typer.Exit(code=1)
+        logger.warning(message)
+        console.print(f"[yellow]{message}[/yellow]")
+        return False
     console.print("[bold green][V] Web dashboard assets built.[/bold green]")
+    return True
+
+
+def _schedule_webapp_build(settings: Settings) -> None:
+    if not settings.webapp_enabled:
+        return
+
+    webapp_dir, dist_dir = _resolve_webapp_paths(settings)
+    if not webapp_dir.exists():
+        console.print(f"[yellow]Skipping dashboard build:[/yellow] webapp directory not found at {webapp_dir}")
+        return
+
+    if not shutil.which("npm"):
+        console.print("[yellow]Skipping dashboard build:[/yellow] npm not found.")
+        return
+
+    if not _is_webapp_build_stale(webapp_dir, dist_dir):
+        console.print("[dim]Web dashboard assets are up to date.[/dim]")
+        return
+
+    console.print("[bold cyan]Web dashboard assets are stale. Building in background...[/bold cyan]")
+    build_thread = threading.Thread(
+        target=_build_webapp_assets,
+        kwargs={"settings": settings, "fail_hard": False},
+        name="octopal-webapp-build",
+        daemon=True,
+    )
+    build_thread.start()
 
 
 @app.command()
@@ -380,7 +428,7 @@ def start(
         return
 
     _init_logging(settings)
-    _ensure_webapp_built(settings)
+    _schedule_webapp_build(settings)
     _maybe_enable_tailscale_serve(settings)
     launcher_status = ensure_worker_launcher_status(settings)
     if launcher_status.configured_launcher == "docker" and launcher_status.effective_launcher != "docker":
