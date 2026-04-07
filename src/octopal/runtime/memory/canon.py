@@ -14,6 +14,7 @@ from octopal.utils import utc_now
 if TYPE_CHECKING:
     from octopal.infrastructure.providers.embeddings import EmbeddingsProvider
     from octopal.infrastructure.store.base import Store
+    from octopal.runtime.memory.facts import FactsService
 
 
 logger = structlog.get_logger(__name__)
@@ -24,6 +25,7 @@ class CanonService:
     store: Store
     embeddings: EmbeddingsProvider | None = None
     max_file_chars: int = 4000  # Guardrail for canon bloat
+    facts: FactsService | None = None
 
     def __post_init__(self) -> None:
         self.canon_dir = self.workspace_dir / "memory" / "canon"
@@ -35,6 +37,12 @@ class CanonService:
             if not path.exists():
                 path.write_text(f"# {filename.replace('.md', '').title()}\n\n", encoding="utf-8")
         self._ensure_event_log_bootstrap()
+        if self.facts is not None:
+            for filename in self.list_files():
+                try:
+                    self.facts.sync_verified_facts_from_canon(filename, self.read_canon(filename))
+                except Exception:
+                    logger.exception("Failed to sync canon facts on startup", filename=filename)
 
     def _normalize_filename(self, filename: str) -> str:
         candidate = filename.strip()
@@ -60,6 +68,12 @@ class CanonService:
         await asyncio.to_thread(self._append_event, filename, content, mode)
         rebuilt = await asyncio.to_thread(self._compact_from_events)
         new_content = rebuilt.get(filename, "")
+
+        if self.facts is not None:
+            try:
+                await asyncio.to_thread(self.facts.sync_verified_facts_from_canon, filename, new_content)
+            except Exception:
+                logger.exception("Failed to sync canon facts", filename=filename)
 
         # Trigger async re-indexing
         if self.embeddings:

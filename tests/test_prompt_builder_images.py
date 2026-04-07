@@ -146,3 +146,45 @@ def test_build_octo_prompt_uses_facets_aware_memory_getter_when_available() -> N
 
     asyncio.run(scenario())
     assert memory.calls == [("why did we decide to use uv?", ["decision"])]
+
+
+def test_build_octo_prompt_includes_compact_facts_context_when_available() -> None:
+    class DummyMemory:
+        async def get_context(self, user_text: str, exclude_chat_id: int | None = None):
+            return []
+
+        async def get_context_by_facets(
+            self,
+            user_text: str,
+            *,
+            exclude_chat_id: int | None = None,
+            memory_facets: list[str] | None = None,
+        ):
+            return []
+
+        async def get_recent_history(self, chat_id: int, limit: int = 20):
+            return []
+
+    class DummyCanon:
+        def get_tier1_context(self):
+            return ""
+
+    class DummyFacts:
+        def get_relevant_facts(self, query: str, *, memory_facets: list[str] | None = None, limit: int = 3):
+            return ["primary installer is uv (decisions.md)"]
+
+    async def scenario() -> None:
+        messages = await build_octo_prompt(
+            store=object(),
+            memory=DummyMemory(),
+            canon=DummyCanon(),
+            user_text="what did we decide about installer?",
+            chat_id=123,
+            bootstrap_context="",
+            facts=DummyFacts(),
+        )
+        merged = "\n".join(str(message.content) for message in messages if isinstance(message.content, str))
+        assert "<facts>" in merged
+        assert "primary installer is uv" in merged
+
+    asyncio.run(scenario())

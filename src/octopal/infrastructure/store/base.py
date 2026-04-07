@@ -7,6 +7,9 @@ from octopal.infrastructure.store.models import (
     AuditEvent,
     IntentRecord,
     MemoryEntry,
+    MemoryFactRecord,
+    MemoryFactSourceRecord,
+    OctoDiaryEntryRecord,
     PermitRecord,
     WorkerRecord,
     WorkerTemplateRecord,
@@ -77,6 +80,36 @@ class Store(Protocol):
 
     def cleanup_old_memory(self, keep_days: int = 30, keep_count: int = 1000) -> int: ...
     def delete_memory_entries_by_chat(self, chat_id: int, keep_recent: int = 0) -> int: ...
+
+    def upsert_memory_fact(self, record: MemoryFactRecord) -> None: ...
+
+    def list_memory_facts(
+        self,
+        owner_id: str,
+        *,
+        limit: int = 100,
+        status: str | None = None,
+        subject: str | None = None,
+        key: str | None = None,
+        source_kind: str | None = None,
+        source_ref: str | None = None,
+    ) -> list[MemoryFactRecord]: ...
+
+    def invalidate_memory_fact(self, fact_id: str, valid_to: datetime, status: str = "invalidated") -> None: ...
+
+    def add_memory_fact_source(self, record: MemoryFactSourceRecord) -> None: ...
+
+    def list_memory_fact_sources(self, fact_id: str) -> list[MemoryFactSourceRecord]: ...
+
+    def add_octo_diary_entry(self, record: OctoDiaryEntryRecord) -> None: ...
+
+    def list_octo_diary_entries(
+        self,
+        owner_id: str,
+        *,
+        chat_id: int | None = None,
+        limit: int = 20,
+    ) -> list[OctoDiaryEntryRecord]: ...
 
     def is_chat_bootstrapped(self, chat_id: int) -> bool: ...
 

@@ -4,13 +4,17 @@ import asyncio
 import math
 import re
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from octopal.infrastructure.providers.embeddings import EmbeddingsProvider
 from octopal.infrastructure.store.base import Store
 from octopal.infrastructure.store.models import MemoryEntry
 from octopal.utils import utc_now
+
+if TYPE_CHECKING:
+    from octopal.runtime.memory.facts import FactsService
 
 _ASSERTION_RE = re.compile(
     r"^\s*(?P<subject>.+?)\s+is\s+(?P<neg>not\s+)?(?P<predicate>.+?)\s*[.!?]?\s*$",
@@ -48,6 +52,7 @@ class MemoryService:
     prefilter_k: int = 80
     min_score: float = 0.25
     max_chars: int = 32000
+    facts: FactsService | None = None
 
     async def add_message(
         self,
@@ -101,6 +106,9 @@ class MemoryService:
             metadata=merged_metadata,
         )
         await asyncio.to_thread(self.store.add_memory_entry, entry)
+        if self.facts is not None:
+            with suppress(Exception):
+                await asyncio.to_thread(self.facts.record_candidate_from_memory, entry)
 
     async def get_context(self, query: str, exclude_chat_id: int | None = None) -> list[str]:
         return await self.get_context_by_facets(

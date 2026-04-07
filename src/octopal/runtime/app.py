@@ -9,6 +9,8 @@ from octopal.infrastructure.providers.litellm_provider import LiteLLMProvider
 from octopal.infrastructure.providers.openai_embeddings import OpenAIEmbeddingsProvider
 from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.runtime.memory.canon import CanonService
+from octopal.runtime.memory.facts import FactsService
+from octopal.runtime.memory.reflection import ReflectionService
 from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.octo.core import Octo
 from octopal.runtime.policy.engine import PolicyEngine
@@ -43,6 +45,14 @@ def build_octo(settings: Settings) -> Octo:
     )
     approvals = ApprovalManager(bot=None)
     embeddings = OpenAIEmbeddingsProvider(settings) if settings.openai_api_key else None
+    facts = FactsService(
+        store=store,
+        owner_id=settings.memory_owner_id,
+    )
+    reflection = ReflectionService(
+        store=store,
+        owner_id=settings.memory_owner_id,
+    )
     memory = MemoryService(
         store=store,
         embeddings=embeddings,
@@ -51,11 +61,13 @@ def build_octo(settings: Settings) -> Octo:
         prefilter_k=settings.memory_prefilter_k,
         min_score=settings.memory_min_score,
         max_chars=settings.memory_max_chars,
+        facts=facts,
     )
     canon = CanonService(
         workspace_dir=settings.workspace_dir,
         store=store,
         embeddings=embeddings,
+        facts=facts,
     )
     scheduler = SchedulerService(store=store, workspace_dir=settings.workspace_dir)
 
@@ -75,6 +87,8 @@ def build_octo(settings: Settings) -> Octo:
         approvals=approvals,
         memory=memory,
         canon=canon,
+        facts=facts,
+        reflection=reflection,
         scheduler=scheduler,
         mcp_manager=mcp_manager,
         connector_manager=connector_manager,

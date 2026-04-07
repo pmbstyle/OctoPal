@@ -29,7 +29,9 @@ from octopal.runtime.housekeeping import (
 )
 from octopal.runtime.intents.types import ActionIntent
 from octopal.runtime.memory.canon import CanonService
+from octopal.runtime.memory.facts import FactsService
 from octopal.runtime.memory.memchain import memchain_record
+from octopal.runtime.memory.reflection import ReflectionService
 from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.metrics import update_component_gauges
 from octopal.runtime.octo.delivery import (
@@ -709,6 +711,8 @@ class Octo:
     approvals: ApprovalManager
     memory: MemoryService
     canon: CanonService
+    facts: FactsService | None = None
+    reflection: ReflectionService | None = None
     scheduler: SchedulerService | None = None
     mcp_manager: MCPManager | None = None
     connector_manager: ConnectorManager | None = None
@@ -1664,6 +1668,21 @@ class Octo:
 
         workspace_dir = Path(os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")).resolve()
         file_info = await asyncio.to_thread(_persist_context_reset_files, workspace_dir, handoff)
+        reflection_entry: dict[str, Any] | None = None
+        if self.reflection is not None:
+            try:
+                record = await asyncio.to_thread(
+                    self.reflection.record_context_reset,
+                    chat_id,
+                    handoff,
+                )
+                reflection_entry = {
+                    "id": record.id,
+                    "kind": record.kind,
+                    "summary": record.summary,
+                }
+            except Exception:
+                logger.warning("Reflection record failed during context reset", chat_id=chat_id, exc_info=True)
         memchain_info: dict[str, Any] | None = None
         try:
             memchain_info = await asyncio.to_thread(
@@ -1705,6 +1724,7 @@ class Octo:
                     "requires_confirmation_for": requires_confirm_reasons,
                     "health_snapshot": health,
                     "files": file_info,
+                    "reflection": reflection_entry or {},
                     "memchain": memchain_info or {},
                 },
             ),
@@ -1716,6 +1736,7 @@ class Octo:
             "deleted_entries": deleted_entries,
             "handoff": handoff,
             "files": file_info,
+            "reflection": reflection_entry or {},
             "memchain": memchain_info or {},
             "health_before": health,
             "requires_confirmation_for": requires_confirm_reasons,

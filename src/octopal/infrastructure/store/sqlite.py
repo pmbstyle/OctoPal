@@ -14,6 +14,9 @@ from octopal.infrastructure.store.models import (
     AuditEvent,
     IntentRecord,
     MemoryEntry,
+    MemoryFactRecord,
+    MemoryFactSourceRecord,
+    OctoDiaryEntryRecord,
     PermitRecord,
     WorkerRecord,
     WorkerTemplateRecord,
@@ -181,6 +184,57 @@ class SQLiteStore(Store):
 
             CREATE INDEX IF NOT EXISTS ix_canon_embeddings_filename ON canon_embeddings (filename);
 
+            CREATE TABLE IF NOT EXISTS memory_facts (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                key TEXT NOT NULL,
+                value_text TEXT NOT NULL,
+                value_json TEXT,
+                fact_type TEXT NOT NULL,
+                confidence REAL NOT NULL,
+                status TEXT NOT NULL,
+                valid_from TEXT,
+                valid_to TEXT,
+                facets_json TEXT NOT NULL,
+                source_kind TEXT,
+                source_ref TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_memory_facts_owner_subject_key_status
+                ON memory_facts (owner_id, subject, key, status);
+            CREATE INDEX IF NOT EXISTS ix_memory_facts_owner_status_valid_to
+                ON memory_facts (owner_id, status, valid_to);
+            CREATE INDEX IF NOT EXISTS ix_memory_facts_source
+                ON memory_facts (source_kind, source_ref, status);
+
+            CREATE TABLE IF NOT EXISTS memory_fact_sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fact_id TEXT NOT NULL,
+                memory_entry_uuid TEXT,
+                canon_filename TEXT,
+                source_note TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(fact_id) REFERENCES memory_facts(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_memory_fact_sources_fact_id ON memory_fact_sources (fact_id);
+
+            CREATE TABLE IF NOT EXISTS octo_diary_entries (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                chat_id INTEGER,
+                kind TEXT NOT NULL,
+                summary TEXT NOT NULL,
+                details_json TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS ix_octo_diary_entries_owner_chat_created
+                ON octo_diary_entries (owner_id, chat_id, created_at DESC);
+
             CREATE TABLE IF NOT EXISTS chat_state (
                 chat_id INTEGER PRIMARY KEY,
                 bootstrapped_at TEXT,
@@ -234,6 +288,67 @@ class SQLiteStore(Store):
                 """
             )
             self._conn.execute("CREATE INDEX IF NOT EXISTS ix_canon_embeddings_filename ON canon_embeddings (filename)")
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_facts (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    key TEXT NOT NULL,
+                    value_text TEXT NOT NULL,
+                    value_json TEXT,
+                    fact_type TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    valid_from TEXT,
+                    valid_to TEXT,
+                    facets_json TEXT NOT NULL,
+                    source_kind TEXT,
+                    source_ref TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_memory_facts_owner_subject_key_status ON memory_facts (owner_id, subject, key, status)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_memory_facts_owner_status_valid_to ON memory_facts (owner_id, status, valid_to)"
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_memory_facts_source ON memory_facts (source_kind, source_ref, status)"
+            )
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_fact_sources (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    fact_id TEXT NOT NULL,
+                    memory_entry_uuid TEXT,
+                    canon_filename TEXT,
+                    source_note TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(fact_id) REFERENCES memory_facts(id) ON DELETE CASCADE
+                )
+                """
+            )
+            self._conn.execute("CREATE INDEX IF NOT EXISTS ix_memory_fact_sources_fact_id ON memory_fact_sources (fact_id)")
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS octo_diary_entries (
+                    id TEXT PRIMARY KEY,
+                    owner_id TEXT NOT NULL,
+                    chat_id INTEGER,
+                    kind TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    details_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            self._conn.execute(
+                "CREATE INDEX IF NOT EXISTS ix_octo_diary_entries_owner_chat_created ON octo_diary_entries (owner_id, chat_id, created_at DESC)"
+            )
             self._conn.commit()
         except sqlite3.OperationalError:
             pass
@@ -806,6 +921,149 @@ class SQLiteStore(Store):
             for row in rows
         ]
 
+    def upsert_memory_fact(self, record: MemoryFactRecord) -> None:
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO memory_facts (
+                id, owner_id, subject, key, value_text, value_json, fact_type, confidence,
+                status, valid_from, valid_to, facets_json, source_kind, source_ref,
+                created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.id,
+                record.owner_id,
+                record.subject,
+                record.key,
+                record.value_text,
+                json.dumps(record.value_json) if record.value_json is not None else None,
+                record.fact_type,
+                float(record.confidence),
+                record.status,
+                record.valid_from.isoformat() if record.valid_from else None,
+                record.valid_to.isoformat() if record.valid_to else None,
+                json.dumps(record.facets),
+                record.source_kind,
+                record.source_ref,
+                record.created_at.isoformat(),
+                record.updated_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def list_memory_facts(
+        self,
+        owner_id: str,
+        *,
+        limit: int = 100,
+        status: str | None = None,
+        subject: str | None = None,
+        key: str | None = None,
+        source_kind: str | None = None,
+        source_ref: str | None = None,
+    ) -> list[MemoryFactRecord]:
+        query = ["SELECT * FROM memory_facts WHERE owner_id = ?"]
+        params: list[Any] = [owner_id]
+        if status is not None:
+            query.append("AND status = ?")
+            params.append(status)
+        if subject is not None:
+            query.append("AND subject = ?")
+            params.append(subject)
+        if key is not None:
+            query.append("AND key = ?")
+            params.append(key)
+        if source_kind is not None:
+            query.append("AND source_kind = ?")
+            params.append(source_kind)
+        if source_ref is not None:
+            query.append("AND source_ref = ?")
+            params.append(source_ref)
+        query.append("ORDER BY updated_at DESC LIMIT ?")
+        params.append(limit)
+        cursor = self._conn.execute(" ".join(query), tuple(params))
+        return [self._row_to_memory_fact(row) for row in cursor.fetchall()]
+
+    def invalidate_memory_fact(self, fact_id: str, valid_to: datetime, status: str = "invalidated") -> None:
+        self._conn.execute(
+            """
+            UPDATE memory_facts
+            SET status = ?, valid_to = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, valid_to.isoformat(), utc_now().isoformat(), fact_id),
+        )
+        self._conn.commit()
+
+    def add_memory_fact_source(self, record: MemoryFactSourceRecord) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO memory_fact_sources (fact_id, memory_entry_uuid, canon_filename, source_note, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                record.fact_id,
+                record.memory_entry_uuid,
+                record.canon_filename,
+                record.source_note,
+                record.created_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def list_memory_fact_sources(self, fact_id: str) -> list[MemoryFactSourceRecord]:
+        cursor = self._conn.execute(
+            "SELECT * FROM memory_fact_sources WHERE fact_id = ? ORDER BY id ASC",
+            (fact_id,),
+        )
+        return [self._row_to_memory_fact_source(row) for row in cursor.fetchall()]
+
+    def add_octo_diary_entry(self, record: OctoDiaryEntryRecord) -> None:
+        self._conn.execute(
+            """
+            INSERT OR REPLACE INTO octo_diary_entries (id, owner_id, chat_id, kind, summary, details_json, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                record.id,
+                record.owner_id,
+                record.chat_id,
+                record.kind,
+                record.summary,
+                json.dumps(record.details),
+                record.created_at.isoformat(),
+            ),
+        )
+        self._conn.commit()
+
+    def list_octo_diary_entries(
+        self,
+        owner_id: str,
+        *,
+        chat_id: int | None = None,
+        limit: int = 20,
+    ) -> list[OctoDiaryEntryRecord]:
+        if chat_id is None:
+            cursor = self._conn.execute(
+                """
+                SELECT * FROM octo_diary_entries
+                WHERE owner_id = ?
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (owner_id, limit),
+            )
+        else:
+            cursor = self._conn.execute(
+                """
+                SELECT * FROM octo_diary_entries
+                WHERE owner_id = ? AND (chat_id = ? OR chat_id IS NULL)
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (owner_id, chat_id, limit),
+            )
+        return [self._row_to_octo_diary_entry(row) for row in cursor.fetchall()]
+
     def cleanup_old_memory(self, keep_days: int = 30, keep_count: int = 1000) -> int:
         """
         Cleanup old memory entries to prevent database bloat.
@@ -1026,6 +1284,46 @@ class SQLiteStore(Store):
             embedding=embedding,
             created_at=_parse_dt(row["created_at"]),
             metadata=_loads_json(row["metadata_json"]),
+        )
+
+    def _row_to_memory_fact(self, row: sqlite3.Row) -> MemoryFactRecord:
+        return MemoryFactRecord(
+            id=row["id"],
+            owner_id=row["owner_id"],
+            subject=row["subject"],
+            key=row["key"],
+            value_text=row["value_text"],
+            value_json=_loads_json(row["value_json"]),
+            fact_type=row["fact_type"],
+            confidence=float(row["confidence"]),
+            status=row["status"],
+            valid_from=_parse_dt(row["valid_from"]) if row["valid_from"] else None,
+            valid_to=_parse_dt(row["valid_to"]) if row["valid_to"] else None,
+            facets=_loads_json(row["facets_json"], []),
+            source_kind=_row_get(row, "source_kind"),
+            source_ref=_row_get(row, "source_ref"),
+            created_at=_parse_dt(row["created_at"]),
+            updated_at=_parse_dt(row["updated_at"]),
+        )
+
+    def _row_to_memory_fact_source(self, row: sqlite3.Row) -> MemoryFactSourceRecord:
+        return MemoryFactSourceRecord(
+            fact_id=row["fact_id"],
+            memory_entry_uuid=_row_get(row, "memory_entry_uuid"),
+            canon_filename=_row_get(row, "canon_filename"),
+            source_note=_row_get(row, "source_note"),
+            created_at=_parse_dt(row["created_at"]),
+        )
+
+    def _row_to_octo_diary_entry(self, row: sqlite3.Row) -> OctoDiaryEntryRecord:
+        return OctoDiaryEntryRecord(
+            id=row["id"],
+            owner_id=row["owner_id"],
+            chat_id=_row_get(row, "chat_id"),
+            kind=row["kind"],
+            summary=row["summary"],
+            details=_loads_json(row["details_json"], {}),
+            created_at=_parse_dt(row["created_at"]),
         )
 
     def _backfill_memory_scope_columns(self) -> None:

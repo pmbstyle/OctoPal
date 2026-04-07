@@ -94,3 +94,46 @@ class MemoryEntry(BaseModel):
     embedding: list[float] | None = None
     created_at: datetime
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class MemoryFactRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    owner_id: str
+    subject: str
+    key: str
+    value_text: str
+    value_json: dict[str, Any] | None = None
+    fact_type: str
+    confidence: float
+    status: str
+    valid_from: datetime | None = None
+    valid_to: datetime | None = None
+    facets: list[str] = Field(default_factory=list)
+    source_kind: str | None = None
+    source_ref: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class MemoryFactSourceRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    fact_id: str
+    memory_entry_uuid: str | None = None
+    canon_filename: str | None = None
+    source_note: str | None = None
+    created_at: datetime
+
+
+class OctoDiaryEntryRecord(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    owner_id: str
+    chat_id: int | None = None
+    kind: str
+    summary: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime

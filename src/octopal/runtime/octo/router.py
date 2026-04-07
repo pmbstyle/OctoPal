@@ -196,6 +196,8 @@ async def route_or_reply(
             saved_file_paths=saved_file_paths,
             wake_notice=wake_notice,
             tool_policy_summary=tool_policy_summary,
+            facts=getattr(octo, "facts", None),
+            reflection=getattr(octo, "reflection", None),
         )
         if not internal_followup:
             messages.append(

@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from octopal.infrastructure.providers.base import Message
     from octopal.infrastructure.store.base import Store
     from octopal.runtime.memory.canon import CanonService
+    from octopal.runtime.memory.facts import FactsService
+    from octopal.runtime.memory.reflection import ReflectionService
     from octopal.runtime.memory.service import MemoryService
 
 
@@ -33,6 +35,7 @@ class BootstrapContext:
 @dataclass
 class MemoryContextBundle:
     canon_context: str
+    facts_context: list[str]
     memory_context: list[str]
     recent_history: list[tuple[str, str]]
     prune_stats: dict[str, int]
@@ -279,12 +282,23 @@ async def _build_memory_context_bundle(
     canon: CanonService,
     user_text: str,
     chat_id: int,
+    facts: FactsService | None = None,
 ) -> MemoryContextBundle:
     canon_context = await asyncio.to_thread(canon.get_tier1_context)
 
     selected_facets = sorted(
         facet for facet in infer_memory_facets(user_text) if facet != "fact_candidate"
     )
+    facts_context: list[str] = []
+    if facts is not None:
+        try:
+            facts_context = await asyncio.to_thread(
+                facts.get_relevant_facts,
+                user_text,
+                memory_facets=selected_facets or None,
+            )
+        except Exception:
+            facts_context = []
     memory_getter = getattr(memory, "get_context_by_facets", None)
     if callable(memory_getter):
         memory_context = await memory_getter(
@@ -309,6 +323,7 @@ async def _build_memory_context_bundle(
     )
     return MemoryContextBundle(
         canon_context=canon_context,
+        facts_context=facts_context,
         memory_context=memory_context,
         recent_history=recent_history,
         prune_stats=prune_stats,
@@ -328,6 +343,8 @@ async def build_octo_prompt(
     saved_file_paths: list[str] | None = None,
     wake_notice: str = "",
     tool_policy_summary: str = "",
+    facts: FactsService | None = None,
+    reflection: ReflectionService | None = None,
 ) -> list[Message]:
     """Assembles all the pieces into the final message list for the LLM."""
 
@@ -351,7 +368,7 @@ async def build_octo_prompt(
 
     datetime_prompt = _current_datetime_prompt()
 
-    memory_bundle = await _build_memory_context_bundle(memory, canon, user_text, chat_id)
+    memory_bundle = await _build_memory_context_bundle(memory, canon, user_text, chat_id, facts)
 
     messages: list[Message] = [Message(role="system", content=system_prompt)]
     if persona_prompt_lines:
@@ -369,6 +386,16 @@ async def build_octo_prompt(
                 ),
             )
         )
+        if reflection is not None:
+            try:
+                reflection_context = await asyncio.to_thread(
+                    reflection.build_wakeup_context,
+                    chat_id,
+                )
+            except Exception:
+                reflection_context = ""
+            if reflection_context:
+                messages.append(Message(role="system", content=reflection_context))
     messages.append(Message(role="system", content=datetime_prompt))
     if tool_policy_summary.strip():
         messages.append(
@@ -380,6 +407,14 @@ async def build_octo_prompt(
 
     if memory_bundle.canon_context:
         messages.append(Message(role="system", content=memory_bundle.canon_context))
+
+    if memory_bundle.facts_context:
+        messages.append(
+            Message(
+                role="system",
+                content="<facts>\n" + "\n".join(memory_bundle.facts_context) + "\n</facts>",
+            )
+        )
 
     if memory_bundle.memory_context:
         messages.append(
