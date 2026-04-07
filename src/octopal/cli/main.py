@@ -843,6 +843,14 @@ def memory_stats() -> None:
 
     with console.status("[bold green]Analyzing memory...[/bold green]"):
         entries = store.list_memory_entries(limit=1000000)  # Get all for stats
+        facts = store.list_memory_facts(
+            settings.memory_owner_id,
+            limit=1000000,
+        )
+        diary_entries = store.list_octo_diary_entries(
+            settings.memory_owner_id,
+            limit=1000000,
+        )
 
     total = len(entries)
 
@@ -861,8 +869,18 @@ def memory_stats() -> None:
         if chat_id:
             by_chat[chat_id] = by_chat.get(chat_id, 0) + 1
 
+    facts_by_status: dict[str, int] = {}
+    for fact in facts:
+        facts_by_status[fact.status] = facts_by_status.get(fact.status, 0) + 1
+
     console.print("\n")
     console.print(Align.center(f"[bold white]Total Memory Entries:[/bold white] [bright_cyan]{total}[/bright_cyan] [dim]|[/dim] [bold white]Unique Chats:[/bold white] [bright_cyan]{len(by_chat)}[/bright_cyan]"))
+    console.print(
+        Align.center(
+            f"[bold white]Memory Facts:[/bold white] [bright_cyan]{len(facts)}[/bright_cyan] [dim]|[/dim] "
+            f"[bold white]Diary Entries:[/bold white] [bright_cyan]{len(diary_entries)}[/bright_cyan]"
+        )
+    )
 
     role_table = Table(title="Entries by Role", border_style="bright_blue", show_header=True, expand=False)
     role_table.add_column("Role", style="magenta", width=20)
@@ -873,6 +891,15 @@ def memory_stats() -> None:
 
     console.print("\n")
     console.print(Align.center(role_table))
+
+    if facts_by_status:
+        facts_table = Table(title="Facts by Status", border_style="bright_blue", show_header=True, expand=False)
+        facts_table.add_column("Status", style="magenta", width=20)
+        facts_table.add_column("Count", style="bright_green", justify="right", width=10)
+        for status, count in sorted(facts_by_status.items()):
+            facts_table.add_row(status, str(count))
+        console.print("\n")
+        console.print(Align.center(facts_table))
     console.print("\n")
 
 
