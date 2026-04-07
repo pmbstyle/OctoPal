@@ -2,6 +2,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { RouterProvider } from "react-router-dom";
 
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { appRouter } from "./routes";
 import "./styles.css";
 
@@ -13,7 +14,8 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <RouterProvider router={appRouter} />
+    <TooltipProvider>
+      <RouterProvider router={appRouter} />
+    </TooltipProvider>
   </StrictMode>,
 );
-

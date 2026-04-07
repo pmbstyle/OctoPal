@@ -13,6 +13,110 @@ type SystemResponse =
 type ActionsResponse =
   paths["/api/dashboard/v2/actions"]["get"]["responses"]["200"]["content"]["application/json"];
 
+export type DashboardEditableConfig = {
+  user_channel: string;
+  telegram: {
+    bot_token: string;
+    allowed_chat_ids: string[];
+    parse_mode: string;
+  };
+  llm: {
+    provider_id: string | null;
+    model: string | null;
+    api_key: string | null;
+    api_base: string | null;
+    model_prefix: string | null;
+  };
+  worker_llm_default: {
+    provider_id: string | null;
+    model: string | null;
+    api_key: string | null;
+    api_base: string | null;
+    model_prefix: string | null;
+  };
+  litellm: {
+    num_retries: number;
+    timeout: number;
+    fallbacks: string | null;
+    drop_params: boolean;
+    caching: boolean;
+    max_concurrency: number;
+    rate_limit_max_retries: number;
+    rate_limit_base_delay_seconds: number;
+    rate_limit_max_delay_seconds: number;
+  };
+  storage: {
+    state_dir: string;
+    workspace_dir: string;
+  };
+  memory: {
+    top_k: number;
+    prefilter_k: number;
+    min_score: number;
+    max_chars: number;
+    owner_id: string;
+  };
+  gateway: {
+    host: string;
+    port: number;
+    tailscale_ips: string;
+    dashboard_token: string;
+    tailscale_auto_serve: boolean;
+    webapp_enabled: boolean;
+    webapp_dist_dir: string | null;
+  };
+  workers: {
+    launcher: string;
+    docker_image: string;
+    docker_workspace: string;
+    docker_host_workspace: string | null;
+    max_spawn_depth: number;
+    max_children_total: number;
+    max_children_concurrent: number;
+  };
+  whatsapp: {
+    mode: string;
+    allowed_numbers: string[];
+    auth_dir: string | null;
+    bridge_host: string;
+    bridge_port: number;
+    callback_token: string;
+    node_command: string;
+  };
+  search: {
+    brave_api_key: string | null;
+    firecrawl_api_key: string | null;
+  };
+  log_level: string;
+  debug_prompts: boolean;
+  heartbeat_interval_seconds: number;
+  user_message_grace_seconds: number;
+};
+
+export type DashboardConfigResponse = {
+  config: DashboardEditableConfig;
+  worker_launcher: {
+    configured: string;
+    effective: string;
+    available: boolean;
+    reason: string;
+    docker_image: string;
+  };
+  notes: string[];
+};
+
+export type DashboardConfigSaveResponse = {
+  status: string;
+  config: DashboardEditableConfig;
+  worker_launcher: {
+    configured: string;
+    effective: string;
+    available: boolean;
+    reason: string;
+    docker_image: string;
+  };
+};
+
 export type WorkerTemplate = {
   id: string;
   name: string;
@@ -102,6 +206,17 @@ export async function fetchSystem(params: DashboardQueryParams): Promise<SystemR
 
 export async function fetchActions(params: DashboardQueryParams): Promise<ActionsResponse> {
   return fetchJson<ActionsResponse>(withQuery("/api/dashboard/v2/actions", params), params.token);
+}
+
+export async function fetchDashboardConfig(token?: string): Promise<DashboardConfigResponse> {
+  return fetchJson<DashboardConfigResponse>("/api/dashboard/config", token);
+}
+
+export async function updateDashboardConfig(
+  payload: DashboardEditableConfig,
+  token?: string,
+): Promise<DashboardConfigSaveResponse> {
+  return mutateJson<DashboardConfigSaveResponse>("/api/dashboard/config", "PUT", token, payload);
 }
 
 export async function runDashboardAction(payload: ActionRequest, token?: string): Promise<Record<string, unknown>> {

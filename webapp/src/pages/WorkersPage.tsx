@@ -10,6 +10,9 @@ import {
 } from "../api/dashboardClient";
 import type { AppShellOutletContext } from "../ui/AppShell";
 import { formatLocalDateTime } from "../utils/dateTime";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 type WorkerTemplateForm = {
   id: string;
@@ -83,6 +86,26 @@ function toPayload(form: WorkerTemplateForm): WorkerTemplate {
 
 function sortTemplates(templates: WorkerTemplate[]): WorkerTemplate[] {
   return [...templates].sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
+const inputClass = "rounded-[18px] border-white/8 bg-[var(--surface-panel-strong)] px-3 text-white";
+const textareaClass = "rounded-[18px] border-white/8 bg-[var(--surface-panel-strong)] px-3 py-2 text-white";
+
+function L({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) {
+  return (
+    <label className={`grid gap-2 text-sm text-[var(--text-strong)] ${className}`.trim()}>
+      <span className="text-xs uppercase tracking-[0.16em] text-white/92">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function FormInput(props: React.ComponentProps<typeof Input>) {
+  return <Input {...props} className={[inputClass, props.className].filter(Boolean).join(" ")} />;
+}
+
+function FormTextarea(props: React.ComponentProps<typeof Textarea>) {
+  return <Textarea {...props} className={[textareaClass, props.className].filter(Boolean).join(" ")} />;
 }
 
 export function WorkersPage() {
@@ -223,57 +246,58 @@ export function WorkersPage() {
 
   if (loading) {
     return (
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">
-        <h2 className="text-2xl font-semibold text-slate-100">Workers</h2>
-        <p className="mt-2">Loading saved worker templates...</p>
+      <section className="rounded-[30px] border border-white/6 bg-[var(--surface-panel)] p-8 text-[var(--text-strong)]">
+        <h2 className="text-2xl font-semibold text-white">Workers</h2>
+        <p className="mt-2 text-sm text-[var(--text-muted)]">Loading saved worker templates...</p>
       </section>
     );
   }
 
   return (
     <section className="grid gap-5">
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-slate-950/60">
+      <section className="rounded-[32px] border border-white/6 bg-[var(--surface-panel)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Worker templates</p>
-            <h2 className="mt-2 text-2xl font-semibold text-slate-100">Saved workers</h2>
-            <p className="mt-2 max-w-3xl text-sm text-slate-400">
+            <p className="text-[11px] uppercase tracking-[0.24em] text-[var(--text-dim)]">Worker templates</p>
+            <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">Saved workers</h2>
+            <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--text-muted)]">
               Manage the worker templates stored in <code>workspace/workers</code>. Changes apply to future launches.
             </p>
           </div>
-          <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-4 py-3 text-right">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Templates</div>
-            <div className="mt-1 text-2xl font-semibold text-slate-100">{templates.length}</div>
+          <div className="rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)] px-4 py-3 text-right">
+            <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Templates</div>
+            <div className="mt-1 text-2xl font-semibold text-white">{templates.length}</div>
           </div>
         </div>
       </section>
 
       {error ? (
-        <section className="rounded-2xl border border-rose-500/40 bg-rose-950/30 p-4 text-sm text-rose-200">
+        <section className="rounded-[24px] border border-rose-500/30 bg-rose-950/20 p-4 text-sm text-rose-200">
           {error}
         </section>
       ) : null}
       {notice ? (
-        <section className="rounded-2xl border border-emerald-500/30 bg-emerald-950/20 p-4 text-sm text-emerald-200">
+        <section className="rounded-[24px] border border-emerald-500/30 bg-emerald-950/20 p-4 text-sm text-emerald-200">
           {notice}
         </section>
       ) : null}
 
       <div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
-        <aside className="flex min-h-0 flex-col rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60 xl:sticky xl:top-5 xl:max-h-[calc(100vh-10rem)]">
+        <aside className="flex min-h-0 flex-col rounded-[28px] border border-white/6 bg-[var(--surface-panel)] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.2)] xl:sticky xl:top-5 xl:max-h-[calc(100vh-10rem)]">
           <div className="flex items-center justify-between gap-3">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Worker list</h3>
-            <button
+            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-strong)]">Worker list</h3>
+            <Button
               type="button"
+              variant="secondary"
               onClick={startCreate}
-              className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-200 transition hover:border-cyan-300 hover:bg-cyan-400/20"
+              className="rounded-full bg-white/[0.06] text-white hover:bg-white/[0.1]"
             >
               New
-            </button>
+            </Button>
           </div>
           <div className="mt-4 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
             {templates.length === 0 ? (
-              <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-sm text-slate-400">
+              <div className="rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)] p-4 text-sm text-[var(--text-muted)]">
                 No saved workers yet. Create the first template here.
               </div>
             ) : (
@@ -285,23 +309,23 @@ export function WorkersPage() {
                     type="button"
                     onClick={() => selectTemplate(template)}
                     className={[
-                      "w-full rounded-xl border px-4 py-3 text-left transition",
+                      "w-full rounded-[22px] border px-4 py-3 text-left transition",
                       selected
-                        ? "border-cyan-400/40 bg-cyan-400/10"
-                        : "border-slate-800 bg-slate-950/70 hover:border-slate-700 hover:bg-slate-900",
+                        ? "border-white/10 bg-white/[0.07]"
+                        : "border-white/6 bg-[var(--surface-panel-strong)] hover:bg-white/[0.04]",
                     ].join(" ")}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="text-sm font-semibold text-slate-100">{template.name}</div>
+                        <div className="text-sm font-semibold text-white">{template.name}</div>
                         <div className="mt-1 font-mono text-xs text-cyan-300">{template.id}</div>
                       </div>
-                      <div className="text-[11px] uppercase tracking-[0.16em] text-slate-500">
+                      <div className="text-[11px] uppercase tracking-[0.16em] text-[var(--text-dim)]">
                         {template.can_spawn_children ? "Parent" : "Leaf"}
                       </div>
                     </div>
-                    <p className="mt-2 line-clamp-2 text-sm text-slate-400">{template.description}</p>
-                    <div className="mt-3 text-xs text-slate-500">
+                    <p className="mt-2 line-clamp-2 text-sm text-[var(--text-muted)]">{template.description}</p>
+                    <div className="mt-3 text-xs text-[var(--text-dim)]">
                       Updated {formatLocalDateTime(template.updated_at)}
                     </div>
                   </button>
@@ -311,16 +335,16 @@ export function WorkersPage() {
           </div>
         </aside>
 
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-slate-950/60">
+        <section className="rounded-[28px] border border-white/6 bg-[var(--surface-panel)] p-6 shadow-[0_24px_80px_rgba(0,0,0,0.2)]">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-[var(--text-dim)]">
                 {isCreating ? "Create worker" : "Edit worker"}
               </p>
-              <h3 className="mt-2 text-2xl font-semibold text-slate-100">
+              <h3 className="mt-2 text-2xl font-semibold text-white">
                 {isCreating ? "New template" : selectedTemplate?.name ?? "Worker template"}
               </h3>
-              <p className="mt-2 text-sm text-slate-400">
+              <p className="mt-2 text-sm text-[var(--text-muted)]">
                 {isCreating
                   ? "Define a new worker template and save it into the workspace."
                   : "Update tools, prompt and runtime defaults for future worker launches."}
@@ -328,146 +352,129 @@ export function WorkersPage() {
             </div>
             <div className="flex gap-2">
               {!isCreating ? (
-                <button
+                <Button
                   type="button"
+                  variant="destructive"
                   onClick={handleDelete}
                   disabled={saving || !selectedTemplate}
-                  className="rounded-full border border-rose-400/40 bg-rose-400/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-rose-200 transition hover:border-rose-300 hover:bg-rose-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-full"
                 >
                   Delete
-                </button>
+                </Button>
               ) : null}
-              <button
+              <Button
                 type="button"
+                variant="outline"
                 onClick={() => setForm(toForm(selectedTemplate))}
                 disabled={saving}
-                className="rounded-full border border-slate-700 bg-slate-950/70 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-300 transition hover:border-slate-600 hover:text-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)] hover:bg-white/[0.08] hover:text-white"
               >
                 Reset
-              </button>
-              <button
+              </Button>
+              <Button
                 type="button"
+                variant="secondary"
                 onClick={() => void handleSave()}
                 disabled={saving}
-                className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-4 py-2 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-200 transition hover:border-cyan-300 hover:bg-cyan-400/20 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-full bg-white/[0.08] text-white hover:bg-white/[0.12]"
               >
                 {saving ? "Saving..." : isCreating ? "Create" : "Save"}
-              </button>
+              </Button>
             </div>
           </div>
 
           <div className="mt-6 grid gap-5 lg:grid-cols-2">
-            <label className="grid gap-2 text-sm text-slate-300">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">ID</span>
-              <input
+            <L label="ID">
+              <FormInput
                 value={form.id}
                 onChange={(event) => handleChange("id", event.target.value)}
                 disabled={!isCreating || saving}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
-            <label className="grid gap-2 text-sm text-slate-300">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">Name</span>
-              <input
+            </L>
+            <L label="Name">
+              <FormInput
                 value={form.name}
                 onChange={(event) => handleChange("name", event.target.value)}
                 disabled={saving}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
-            <label className="grid gap-2 text-sm text-slate-300 lg:col-span-2">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">Description</span>
-              <input
+            </L>
+            <L label="Description" className="lg:col-span-2">
+              <FormInput
                 value={form.description}
                 onChange={(event) => handleChange("description", event.target.value)}
                 disabled={saving}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
-            <label className="grid gap-2 text-sm text-slate-300 lg:col-span-2">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">System prompt</span>
-              <textarea
+            </L>
+            <L label="System prompt" className="lg:col-span-2">
+              <FormTextarea
                 value={form.system_prompt}
                 onChange={(event) => handleChange("system_prompt", event.target.value)}
                 disabled={saving}
                 rows={10}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
-            <label className="grid gap-2 text-sm text-slate-300">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">Available tools</span>
-              <textarea
+            </L>
+            <L label="Available tools">
+              <FormTextarea
                 value={form.available_tools}
                 onChange={(event) => handleChange("available_tools", event.target.value)}
                 disabled={saving}
                 rows={4}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
-            <label className="grid gap-2 text-sm text-slate-300">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">Permissions</span>
-              <textarea
+            </L>
+            <L label="Permissions">
+              <FormTextarea
                 value={form.required_permissions}
                 onChange={(event) => handleChange("required_permissions", event.target.value)}
                 disabled={saving}
                 rows={4}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
-            <label className="grid gap-2 text-sm text-slate-300">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">Model override</span>
-              <input
+            </L>
+            <L label="Model override">
+              <FormInput
                 value={form.model}
                 onChange={(event) => handleChange("model", event.target.value)}
                 disabled={saving}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
-            <label className="grid gap-2 text-sm text-slate-300">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">Max thinking steps</span>
-              <input
+            </L>
+            <L label="Max thinking steps">
+              <FormInput
                 type="number"
                 min={1}
                 value={form.max_thinking_steps}
                 onChange={(event) => handleChange("max_thinking_steps", event.target.value)}
                 disabled={saving}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
-            <label className="grid gap-2 text-sm text-slate-300">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">Default timeout (sec)</span>
-              <input
+            </L>
+            <L label="Default timeout (sec)">
+              <FormInput
                 type="number"
                 min={1}
                 value={form.default_timeout_seconds}
                 onChange={(event) => handleChange("default_timeout_seconds", event.target.value)}
                 disabled={saving}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
-            <label className="flex items-center gap-3 rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3 text-sm text-slate-300">
+            </L>
+            <label className="flex items-center gap-3 rounded-[18px] border border-white/8 bg-[var(--surface-panel-strong)] px-3 py-3 text-sm text-[var(--text-strong)]">
               <input
                 type="checkbox"
                 checked={form.can_spawn_children}
                 onChange={(event) => handleChange("can_spawn_children", event.target.checked)}
                 disabled={saving}
-                className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-cyan-400 focus:ring-cyan-400"
+                className="h-4 w-4 rounded border-white/10 bg-[var(--surface-panel)] text-cyan-400 focus:ring-[var(--ring)]"
               />
               Allow this worker to spawn child workers
             </label>
-            <label className="grid gap-2 text-sm text-slate-300 lg:col-span-2">
-              <span className="text-xs uppercase tracking-[0.16em] text-slate-500">Allowed child templates</span>
-              <input
+            <L label="Allowed child templates" className="lg:col-span-2">
+              <FormInput
                 value={form.allowed_child_templates}
                 onChange={(event) => handleChange("allowed_child_templates", event.target.value)}
                 disabled={saving}
-                className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-2 text-slate-100 outline-none transition focus:border-cyan-400/40"
               />
-            </label>
+            </L>
           </div>
 
           {!isCreating && selectedTemplate ? (
-            <div className="mt-6 flex flex-wrap gap-4 text-xs text-slate-500">
+            <div className="mt-6 flex flex-wrap gap-4 text-xs text-[var(--text-dim)]">
               <span>Created {formatLocalDateTime(selectedTemplate.created_at)}</span>
               <span>Updated {formatLocalDateTime(selectedTemplate.updated_at)}</span>
             </div>

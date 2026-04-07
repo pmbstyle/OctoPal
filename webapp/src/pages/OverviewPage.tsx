@@ -223,12 +223,8 @@ export function OverviewPage() {
             </div>
             <div className="border-b border-white/6 pb-4">
               <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Scope</div>
-              <div className="mt-2 text-sm text-[var(--text-strong)]">
-                {filters.service === "all" ? "All services" : filters.service}
-              </div>
-              <div className="mt-1 text-sm text-[var(--text-muted)]">
-                {filters.environment === "all" ? "All environments" : filters.environment}
-              </div>
+              <div className="mt-2 text-sm text-[var(--text-strong)]">Dashboard-wide live view</div>
+              <div className="mt-1 text-sm text-[var(--text-muted)]">1 hour window across all services and environments.</div>
             </div>
             <div>
               <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Why this matters</div>
@@ -291,7 +287,7 @@ export function OverviewPage() {
             </div>
           </div>
           <div className="mt-6 rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)] px-4 py-4 text-sm text-[var(--text-muted)]">
-            This block stays intentionally quiet: it shows pressure distribution without competing with your main KPIs.
+            This block stays intentionally quiet: it shows pressure distribution without fighting the primary health summary.
           </div>
         </article>
 

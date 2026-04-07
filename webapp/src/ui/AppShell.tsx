@@ -1,11 +1,14 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { Activity, Bell, Bot, Layers3, Settings2, Siren, Wrench } from "lucide-react";
 
 import octopalLogo from "../assets/octopal-logo.png";
-import { GlobalFiltersBar } from "./GlobalFiltersBar";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
 import type { DashboardFilters } from "./GlobalFiltersBar";
 
-const filtersStorageKey = "octopal.webapp.filters";
 const tokenStorageKey = "octopal.webapp.token";
 
 const defaultFilters: DashboardFilters = {
@@ -24,24 +27,25 @@ type NavItem = {
   to: string;
   label: string;
   description: string;
+  icon: typeof Activity;
 };
 
 const navGroups: { title: string; items: NavItem[] }[] = [
   {
     title: "Operations",
     items: [
-      { to: "/", label: "Control", description: "Live operating surface" },
-      { to: "/overview", label: "Overview", description: "Health, KPIs, incidents" },
-      { to: "/octo", label: "Octo", description: "Runtime state and coordination" },
-      { to: "/incidents", label: "Incidents", description: "Open signals and pressure" },
+      { to: "/", label: "Control", description: "Live operating surface", icon: Activity },
+      { to: "/overview", label: "Overview", description: "Health, KPIs, incidents", icon: Layers3 },
+      { to: "/octo", label: "Octo", description: "Runtime state and coordination", icon: Bot },
+      { to: "/incidents", label: "Incidents", description: "Open signals and pressure", icon: Siren },
     ],
   },
   {
     title: "Workspace",
     items: [
-      { to: "/workers", label: "Workers", description: "Templates and worker setup" },
-      { to: "/system", label: "System", description: "Host, queues, and stability" },
-      { to: "/actions", label: "Actions", description: "Operator actions and controls" },
+      { to: "/workers", label: "Workers", description: "Templates and worker setup", icon: Wrench },
+      { to: "/system", label: "System", description: "Host, queues, and stability", icon: Settings2 },
+      { to: "/actions", label: "Actions", description: "Operator actions and controls", icon: Bell },
     ],
   },
 ];
@@ -61,136 +65,141 @@ function getPageMeta(pathname: string): { title: string; description: string } {
 
 export function AppShell() {
   const location = useLocation();
-  const [filters, setFilters] = useState<DashboardFilters>(() => {
-    const raw = localStorage.getItem(filtersStorageKey);
-    const token = sessionStorage.getItem(tokenStorageKey) ?? "";
-    if (!raw) {
-      return { ...defaultFilters, token };
-    }
-    try {
-      const parsed = JSON.parse(raw) as Partial<DashboardFilters>;
-      return {
-        windowMinutes:
-          parsed.windowMinutes === 15 ||
-          parsed.windowMinutes === 60 ||
-          parsed.windowMinutes === 240 ||
-          parsed.windowMinutes === 1440
-            ? parsed.windowMinutes
-            : 60,
-        service: parsed.service ?? "all",
-        environment: parsed.environment ?? "all",
-        token,
-      };
-    } catch (_error) {
-      return { ...defaultFilters, token };
-    }
-  });
+  const [filters, setFilters] = useState<DashboardFilters>(() => ({
+    ...defaultFilters,
+    token: sessionStorage.getItem(tokenStorageKey) ?? "",
+  }));
+  const [draftToken, setDraftToken] = useState<string>(filters.token);
 
   useEffect(() => {
-    localStorage.setItem(
-      filtersStorageKey,
-      JSON.stringify({
-        windowMinutes: filters.windowMinutes,
-        service: filters.service,
-        environment: filters.environment,
-      }),
-    );
     if (filters.token) {
       sessionStorage.setItem(tokenStorageKey, filters.token);
     } else {
       sessionStorage.removeItem(tokenStorageKey);
     }
-  }, [filters]);
+  }, [filters.token]);
+
+  useEffect(() => {
+    setDraftToken(filters.token);
+  }, [filters.token]);
 
   const currentPage = getPageMeta(location.pathname);
 
   return (
-    <div className="min-h-screen bg-[var(--app-bg)] text-[var(--text-strong)]">
-      <div className="grid min-h-screen lg:grid-cols-[280px_minmax(0,1fr)]">
-        <aside className="border-b border-[var(--border-soft)] bg-[var(--sidebar-bg)] lg:border-b-0 lg:border-r">
-          <div className="flex h-full flex-col px-4 py-4 lg:px-5 lg:py-6">
-            <div className="flex items-center gap-3 border-b border-[var(--border-soft)] pb-4">
-              <div className="flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-white/5">
-                <img src={octopalLogo} alt="Octopal" className="h-8 w-8 object-contain" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-[11px] uppercase tracking-[0.24em] text-[var(--text-muted)]">Octopal</p>
-                <h1 className="truncate text-lg font-semibold text-white">Agent Control</h1>
-              </div>
+      <div className="min-h-screen bg-[var(--app-bg)] text-[var(--text-strong)] md:grid md:grid-cols-[288px_minmax(0,1fr)]">
+        <aside className="hidden h-screen flex-col border-r border-white/6 bg-[var(--sidebar-bg)] md:sticky md:top-0 md:flex">
+          <div className="gap-4 px-3 py-4">
+            <div className="flex items-center gap-3 px-3 py-3">
+              <img src={octopalLogo} alt="Octopal" className="object-contain" />
             </div>
+          </div>
 
-            <div className="mt-6 space-y-6">
-              {navGroups.map((group) => (
-                <section key={group.title}>
-                  <p className="mb-2 px-2 text-[11px] uppercase tracking-[0.22em] text-[var(--text-dim)]">
-                    {group.title}
-                  </p>
-                  <nav className="space-y-1.5">
-                    {group.items.map((item) => (
-                      <NavLink
-                        key={item.to}
-                        to={item.to}
-                        end={item.to === "/"}
-                        className={({ isActive }) =>
-                          [
-                            "group block rounded-2xl px-3 py-3 transition",
-                            isActive
-                              ? "bg-[var(--nav-active)] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.06)]"
-                              : "text-[var(--text-muted)] hover:bg-white/[0.03] hover:text-[var(--text-strong)]",
-                          ].join(" ")
-                        }
-                      >
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="text-sm font-medium">{item.label}</span>
-                          <span className="h-2 w-2 rounded-full bg-current opacity-25 transition group-hover:opacity-40" />
-                        </div>
-                        <p className="mt-1 text-xs text-[var(--text-dim)]">{item.description}</p>
-                      </NavLink>
-                    ))}
-                  </nav>
-                </section>
-              ))}
-            </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-2">
+            {navGroups.map((group) => (
+              <section key={group.title} className="px-2 py-2">
+                <p className="px-2 pb-3 text-xs font-medium text-sidebar-foreground/70">{group.title}</p>
+                <nav className="flex flex-col gap-1">
+                    {group.items.map((item) => {
+                      const Icon = item.icon;
+                      const isActive = item.to === "/" ? location.pathname === "/" : location.pathname.startsWith(item.to);
+                      return (
+                        <NavLink
+                          key={item.to}
+                          to={item.to}
+                          end={item.to === "/"}
+                          className={cn(
+                            "flex items-start gap-3 rounded-2xl px-3 py-3 transition-colors hover:bg-white/[0.04]",
+                            isActive && "bg-white/[0.06] text-white",
+                          )}
+                        >
+                          <Icon className="mt-0.5 size-4 shrink-0" />
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium">{item.label}</div>
+                            <div className="mt-0.5 text-xs text-[var(--text-dim)]">{item.description}</div>
+                          </div>
+                        </NavLink>
+                      );
+                    })}
+                </nav>
+              </section>
+            ))}
+          </div>
 
-            <div className="mt-6 rounded-3xl border border-white/6 bg-white/[0.03] p-4">
-              <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--text-dim)]">Live mode</p>
-              <p className="mt-2 text-sm text-[var(--text-strong)]">Data refreshes continuously across the dashboard.</p>
-              <div className="mt-3 flex items-center gap-2 text-xs text-[var(--text-muted)]">
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                Poll every 15s plus stream updates when available
-              </div>
-            </div>
-
-            <div className="mt-auto hidden border-t border-[var(--border-soft)] pt-4 text-xs text-[var(--text-dim)] lg:block">
-              Built for operator-first monitoring.
-            </div>
+          <div className="px-3 pb-4">
+            <div className="mx-0 h-px bg-white/6" />
+            <Card className="border-white/6 bg-white/[0.03] py-0 shadow-none group-data-[collapsible=icon]:hidden">
+              <CardContent className="p-4">
+                <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--text-dim)]">Live mode</p>
+                <p className="mt-2 text-sm text-[var(--text-strong)]">Data refreshes continuously across the dashboard.</p>
+                <div className="mt-3 flex items-center gap-2 text-xs text-[var(--text-muted)]">
+                  <span className="size-2 rounded-full bg-emerald-400" />
+                  Poll every 15s plus stream updates when available
+                </div>
+              </CardContent>
+            </Card>
           </div>
         </aside>
 
-        <div className="min-w-0">
-          <header className="border-b border-[var(--border-soft)] bg-[var(--surface-top)]/92 backdrop-blur">
-            <div className="px-4 py-5 md:px-6 lg:px-8">
-              <div className="flex flex-wrap items-start justify-between gap-4">
-                <div>
-                  <p className="text-[11px] uppercase tracking-[0.24em] text-[var(--text-dim)]">Operations Dashboard</p>
-                  <h2 className="mt-2 text-3xl font-semibold tracking-[-0.03em] text-white">{currentPage.title}</h2>
-                  <p className="mt-2 max-w-3xl text-sm text-[var(--text-muted)]">{currentPage.description}</p>
-                </div>
-                <div className="rounded-full border border-white/8 bg-white/[0.04] px-4 py-2 text-sm text-[var(--text-muted)]">
-                  {filters.environment === "all" ? "All environments" : filters.environment}
+        <div className="min-w-0 bg-transparent">
+          <header className="sticky top-0 z-20 border-b border-white/6 bg-[var(--surface-top)]/88 backdrop-blur-xl">
+            <div className="flex min-w-0 items-center justify-between gap-4 px-4 py-4 md:px-6 lg:px-8">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] uppercase tracking-[0.24em] text-[var(--text-dim)]">Operations dashboard</p>
+                  <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                    <h2 className="truncate text-lg font-semibold tracking-[-0.03em] text-white">{currentPage.title}</h2>
+                    <p className="truncate text-sm text-[var(--text-muted)]">{currentPage.description}</p>
+                  </div>
                 </div>
               </div>
-              <div className="mt-5">
-                <GlobalFiltersBar filters={filters} onChange={setFilters} />
+
+              <div className="flex shrink-0 items-center gap-3">
+                <div className="hidden items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-2 py-1.5 lg:flex">
+                  <span className="pl-2 text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Dashboard token</span>
+                  <Input
+                    value={draftToken}
+                    onChange={(event) => setDraftToken(event.target.value)}
+                    type="password"
+                    placeholder="Optional access token"
+                    className="h-8 w-72 border-0 bg-transparent px-2 text-sm text-[var(--text-strong)] shadow-none focus-visible:ring-0"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    className="rounded-full bg-white/[0.08] text-[var(--text-strong)] hover:bg-white/[0.12]"
+                    onClick={() => setFilters((current) => ({ ...current, token: draftToken.trim() }))}
+                  >
+                    Apply
+                  </Button>
+                </div>
+              </div>
+            </div>
+            <div className="border-t border-white/6 px-4 py-3 lg:hidden md:px-6 lg:px-8">
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <Input
+                  value={draftToken}
+                  onChange={(event) => setDraftToken(event.target.value)}
+                  type="password"
+                  placeholder="Optional dashboard token"
+                  className="rounded-2xl border-white/8 bg-[var(--field-bg)]"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="rounded-2xl bg-white/[0.08] text-[var(--text-strong)] hover:bg-white/[0.12]"
+                  onClick={() => setFilters((current) => ({ ...current, token: draftToken.trim() }))}
+                >
+                  Apply token
+                </Button>
               </div>
             </div>
           </header>
 
-          <main className="px-4 py-5 md:px-6 lg:px-8 lg:py-8">
+          <main className={cn("min-w-0 px-4 py-5 md:px-6 lg:px-8 lg:py-8")}>
             <Outlet context={{ filters, setFilters }} />
           </main>
         </div>
       </div>
-    </div>
   );
 }

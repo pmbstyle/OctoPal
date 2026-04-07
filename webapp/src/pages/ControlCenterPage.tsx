@@ -5,6 +5,39 @@ import { fetchOverview, fetchOcto, fetchSystem, fetchWorkers } from "../api/dash
 import type { components } from "../api/types";
 import type { AppShellOutletContext } from "../ui/AppShell";
 import { formatLocalDateTime, formatLocalTime } from "../utils/dateTime";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  ChartContainer,
+  ChartLegend,
+  ChartLegendContent,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart";
+import {
+  CartesianGrid,
+  Line,
+  LineChart,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 type OverviewPayload = components["schemas"]["DashboardOverviewV2"];
 type WorkersPayload = components["schemas"]["DashboardWorkersV2"];
@@ -65,9 +98,6 @@ type OctoStep = {
   level: string;
   timestamp?: string;
 };
-
-const GRAPH_TOP_PAD = 28;
-const GRAPH_BOTTOM_PAD = 16;
 
 function asNumber(value: unknown): number {
   const n = Number(value);
@@ -142,25 +172,6 @@ function workerRowTone(status?: string): string {
     return "bg-amber-500/[0.06]";
   }
   return "bg-rose-500/[0.08]";
-}
-
-function buildLine(points: number[], width: number, height: number, max: number): string {
-  if (points.length === 0) {
-    return "";
-  }
-  const plotHeight = Math.max(1, height - GRAPH_TOP_PAD - GRAPH_BOTTOM_PAD);
-  if (points.length === 1) {
-    const y = GRAPH_TOP_PAD + plotHeight - (points[0] / max) * plotHeight;
-    return `M 0 ${y.toFixed(2)} L ${width} ${y.toFixed(2)}`;
-  }
-  const step = width / (points.length - 1);
-  return points
-    .map((value, index) => {
-      const x = index * step;
-      const y = GRAPH_TOP_PAD + plotHeight - (value / max) * plotHeight;
-      return `${index === 0 ? "M" : "L"} ${x.toFixed(2)} ${y.toFixed(2)}`;
-    })
-    .join(" ");
 }
 
 function formatEventTitle(event?: string): string {
@@ -239,97 +250,81 @@ function deriveOctoWaitingOn(args: {
 }
 
 function RealtimeGraph({ points }: { points: MetricPoint[] }) {
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const width = 760;
-  const height = 220;
-  const workers = points.map((point) => point.activeWorkers);
-  const queueDepth = points.map((point) => point.queueDepth);
-  const octoQueue = points.map((point) => point.octoQueue);
-  const rawMaxValue = Math.max(1, ...workers, ...queueDepth, ...octoQueue);
-  const yStep = Math.max(1, Math.ceil(rawMaxValue / 3));
-  const yAxisMax = yStep * 3;
-  const yTicks = [yStep, yStep * 2, yAxisMax];
-  const plotHeight = Math.max(1, height - GRAPH_TOP_PAD - GRAPH_BOTTOM_PAD);
-  const workerLine = buildLine(workers, width, height, yAxisMax);
-  const queueLine = buildLine(queueDepth, width, height, yAxisMax);
-  const octoLine = buildLine(octoQueue, width, height, yAxisMax);
-  const firstPoint = points[0];
-  const lastPoint = points[points.length - 1];
-  const startLabel = firstPoint ? formatLocalTime(firstPoint.at) : "--:--";
-  const endLabel = lastPoint ? formatLocalTime(lastPoint.at) : "--:--";
-  const tzLabel = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const activeIndex = hoverIndex !== null && hoverIndex >= 0 && hoverIndex < points.length ? hoverIndex : null;
-  const activePoint = activeIndex !== null ? points[activeIndex] : null;
-  const step = points.length > 1 ? width / (points.length - 1) : width;
-  const markerX = activeIndex !== null ? activeIndex * step : 0;
+  const chartData = points.map((point) => ({
+    label: formatLocalTime(point.at),
+    workers: point.activeWorkers,
+    systemQueue: point.queueDepth,
+    octoQueue: point.octoQueue,
+    timestamp: formatLocalDateTime(point.at),
+  }));
+
+  const chartConfig = {
+    workers: { label: "Workers", color: "#22d3ee" },
+    systemQueue: { label: "System queue", color: "#f59e0b" },
+    octoQueue: { label: "Octo queue", color: "#22c55e" },
+  } satisfies ChartConfig;
 
   return (
-    <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60 xl:flex xl:h-full xl:flex-col">
-      <div className="mb-3 flex items-center justify-between">
+    <Card className="border-white/6 bg-[var(--surface-panel)] py-0 shadow-[0_24px_80px_rgba(0,0,0,0.26)] xl:flex xl:flex-1 xl:flex-col">
+      <CardHeader className="flex flex-row items-start justify-between gap-3 border-b border-white/6 px-5 py-5 md:px-6">
         <div>
-          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Live Load</h3>
-          <p className="mt-1 text-xs text-slate-500">Workers, total system queue, and octo-only queue.</p>
+          <CardTitle className="text-sm uppercase tracking-[0.16em] text-[var(--text-strong)]">Live Load</CardTitle>
+          <CardDescription>Workers, total system queue, and octo-only queue.</CardDescription>
         </div>
-        <span className="text-xs text-slate-400">Last {points.length} samples</span>
-      </div>
-      <div className="relative mt-2">
-        <svg
-          viewBox={`0 0 ${width} ${height}`}
-          className="h-66 w-full rounded-lg bg-slate-950/80 xl:h-74"
-          onMouseMove={(event) => {
-            const rect = event.currentTarget.getBoundingClientRect();
-            if (rect.width <= 0 || points.length === 0) {
-              setHoverIndex(null);
-              return;
-            }
-            const ratio = (event.clientX - rect.left) / rect.width;
-            const clamped = Math.min(1, Math.max(0, ratio));
-            const nextIndex = Math.round(clamped * (points.length - 1));
-            setHoverIndex(nextIndex);
-          }}
-          onMouseLeave={() => setHoverIndex(null)}
-        >
-          {yTicks.map((tick) => {
-            const y = GRAPH_TOP_PAD + plotHeight - (tick / yAxisMax) * plotHeight;
-            return <line key={tick} x1={0} x2={width} y1={y} y2={y} stroke="#1e293b" strokeWidth={1} />;
-          })}
-          {yTicks.map((tick) => {
-            const y = GRAPH_TOP_PAD + plotHeight - (tick / yAxisMax) * plotHeight;
-            return (
-              <text key={`label-${tick}`} x={width - 8} y={y - 4} fill="#64748b" fontSize="10" textAnchor="end">
-                {tick}
-              </text>
-            );
-          })}
-          <text x={width - 8} y={height - 4} fill="#64748b" fontSize="10" textAnchor="end">
-            0
-          </text>
-          <path d={workerLine} fill="none" stroke="#06b6d4" strokeWidth={3} strokeLinecap="round" />
-          <path d={queueLine} fill="none" stroke="#f59e0b" strokeWidth={2.5} strokeLinecap="round" />
-          <path d={octoLine} fill="none" stroke="#22c55e" strokeWidth={2.5} strokeLinecap="round" />
-          {activePoint ? (
-            <line x1={markerX} x2={markerX} y1={0} y2={height} stroke="#64748b" strokeWidth={1} strokeDasharray="5 4" />
-          ) : null}
-        </svg>
-        {activePoint ? (
-          <div className="pointer-events-none absolute right-4 top-4 rounded-lg border border-slate-700 bg-slate-950/95 px-3 py-2 text-xs text-slate-200 shadow-xl">
-            <p className="mb-1 text-[11px] text-slate-400">{formatLocalDateTime(activePoint.at)} ({tzLabel})</p>
-            <p className="text-cyan-300">Workers: {activePoint.activeWorkers}</p>
-            <p className="text-amber-300">System queue: {activePoint.queueDepth}</p>
-            <p className="text-emerald-300">Octo queue: {activePoint.octoQueue}</p>
-          </div>
-        ) : null}
-      </div>
-      <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
-        <span>{startLabel}</span>
-        <span>{endLabel}</span>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-4 text-xs text-slate-300 xl:mt-auto">
-        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-cyan-400" />Workers</span>
-        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-amber-400" />System queue</span>
-        <span className="inline-flex items-center gap-2"><span className="h-2.5 w-2.5 rounded-full bg-emerald-400" />Octo queue</span>
-      </div>
-    </section>
+        <Badge variant="outline" className="rounded-full border-white/10 bg-white/[0.04] text-[var(--text-muted)]">
+          Last {points.length} samples
+        </Badge>
+      </CardHeader>
+      <CardContent className="px-5 pb-5 pt-4 md:px-6 md:pb-6">
+        <ChartContainer config={chartConfig} className="h-72 w-full rounded-[22px] border border-white/6 bg-black/20 p-3">
+          <LineChart data={chartData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
+            <CartesianGrid vertical={false} stroke="rgba(255,255,255,0.08)" />
+            <XAxis
+              dataKey="label"
+              tickLine={false}
+              axisLine={false}
+              tickMargin={8}
+              minTickGap={20}
+            />
+            <YAxis tickLine={false} axisLine={false} tickMargin={8} width={36} />
+            <ChartTooltip
+              content={
+                <ChartTooltipContent
+                  labelFormatter={(_, payload) => {
+                    const item = payload?.[0]?.payload as { timestamp?: string } | undefined;
+                    return item?.timestamp ?? "";
+                  }}
+                />
+              }
+            />
+            <ChartLegend content={<ChartLegendContent />} />
+            <Line type="monotone" dataKey="workers" stroke="var(--color-workers)" strokeWidth={3} dot={false} />
+            <Line type="monotone" dataKey="systemQueue" stroke="var(--color-systemQueue)" strokeWidth={2.5} dot={false} />
+            <Line type="monotone" dataKey="octoQueue" stroke="var(--color-octoQueue)" strokeWidth={2.5} dot={false} />
+          </LineChart>
+        </ChartContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+function SignalStat({
+  label,
+  value,
+  toneClass = "text-white",
+  helper,
+}: {
+  label: string;
+  value: string;
+  toneClass?: string;
+  helper?: string;
+}) {
+  return (
+    <div className="rounded-[22px] border border-white/6 bg-black/20 p-4">
+      <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">{label}</p>
+      <p className={`mt-3 text-2xl font-semibold tracking-[-0.03em] ${toneClass}`}>{value}</p>
+      {helper ? <p className="mt-1 text-xs text-[var(--text-muted)]">{helper}</p> : null}
+    </div>
   );
 }
 
@@ -443,113 +438,178 @@ export function ControlCenterPage() {
   const octoSubline =
     currentOctoStep?.detail ??
     ((octoHealth.reasons ?? []).join(" • ") || "No recent orchestration steps in the visible log window.");
+  const runningWorkers = asNumber((bundle?.workers.workers as Record<string, unknown>)?.running);
+  const queueDepth = asNumber((bundle?.overview.kpis as Record<string, { value?: unknown }>)?.queue_depth?.value);
+  const octoBacklog = followupTasks + internalTasks + controlPending + channelQueueDepth;
+  const degradedSignals = logs.filter((entry) => ["warning", "error", "critical"].includes(String(entry.level ?? "").toLowerCase())).length;
 
   if (loading) {
-    return <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-8 text-slate-300">Loading live operations view...</section>;
+    return <Card className="border-white/6 bg-[var(--surface-panel)] py-0"><CardContent className="p-8 text-[var(--text-muted)]">Loading live operations view...</CardContent></Card>;
   }
 
   if (error) {
     return (
-      <section className="rounded-2xl border border-rose-500/40 bg-rose-950/30 p-8 text-rose-200">
+      <section className="rounded-[30px] border border-rose-400/30 bg-rose-950/20 p-8 text-rose-200">
         Failed to load dashboard data: {error}
       </section>
     );
   }
 
   return (
-    <div className="grid gap-5">
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-slate-950/60">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">System pulse</p>
-            <h2 className="mt-2 text-2xl font-semibold text-slate-100">{health.summary ?? "Runtime status"}</h2>
-            <p className="mt-2 max-w-3xl text-sm text-slate-400">
-              {(health.reasons ?? []).join(" | ") || "No active degradation reasons."}
-            </p>
+    <div className="grid gap-6">
+      <section className="rounded-xl border border-white/6 bg-[var(--surface-panel)] px-5 py-5 shadow-[0_24px_80px_rgba(0,0,0,0.26)] md:px-6 md:py-6">
+        <div>
+          <p className="text-[11px] uppercase tracking-[0.22em] text-[var(--text-dim)]">Control deck</p>
+          <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">{health.summary ?? "Runtime status"}</h2>
+          <p className="mt-3 max-w-3xl text-sm leading-6 text-[var(--text-muted)]">
+            {(health.reasons ?? []).join(" | ") || "No active degradation reasons."}
+          </p>
+
+          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <SignalStat
+              label="Health"
+              value={String(health.status ?? "unknown").toUpperCase()}
+              toneClass={tone(health.status)}
+              helper="Overall gateway snapshot"
+            />
+            <SignalStat
+              label="Workers live"
+              value={String(runningWorkers)}
+              toneClass="text-cyan-300"
+              helper={`${workers.length} recent worker runs`}
+            />
+            <SignalStat
+              label="System queue"
+              value={String(queueDepth)}
+              toneClass="text-amber-300"
+              helper="Queued work across the runtime"
+            />
+            <SignalStat
+              label="Octo backlog"
+              value={String(octoBacklog)}
+              toneClass="text-emerald-300"
+              helper="Follow-ups, internal, control, and channel pressure"
+            />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-widest ${statusPill(health.status)}`}>
-              {String(health.status ?? "unknown")}
-            </span>
-            <span className="rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1 text-xs text-slate-300">
-              Updated {formatLocalDateTime(bundle?.overview.generated_at)}
-            </span>
+
+          <div className="mt-4 grid gap-3 xl:grid-cols-[minmax(0,1.35fr)_minmax(0,0.9fr)_minmax(0,0.75fr)]">
+            <div className="rounded-[22px] border border-white/6 bg-black/20 p-4">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Now</p>
+              <p className="mt-3 text-sm font-medium text-white">{octoHeadline}</p>
+              <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">{octoSubline}</p>
+            </div>
+            <div className="rounded-[22px] border border-white/6 bg-black/20 p-4">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">State</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge variant="outline" className={`rounded-full ${statusPill(health.status)}`}>
+                  {String(health.status ?? "unknown")}
+                </Badge>
+                <Badge variant="outline" className="rounded-full border-white/10 bg-white/[0.04] text-[var(--text-muted)]">
+                  Updated {formatLocalDateTime(bundle?.overview.generated_at)}
+                </Badge>
+              </div>
+            </div>
+            <div className="rounded-[22px] border border-white/6 bg-black/20 p-4">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Noise floor</p>
+              <p className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-rose-300">{degradedSignals}</p>
+              <p className="mt-1 text-xs text-[var(--text-muted)]">Warning and error log lines in the current visible window.</p>
+            </div>
           </div>
         </div>
       </section>
 
-      <RealtimeGraph points={history} />
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.35fr)_360px] xl:items-stretch">
+        <div className="flex flex-col">
+          <RealtimeGraph points={history} />
+          <section className="grid gap-4 mt-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+            <div className="rounded-xl border border-white/6 bg-[var(--surface-panel)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.2)]">
+              <p className="text-xs uppercase tracking-[0.16em] text-[var(--text-dim)]">Focus</p>
+              <p className="mt-2 text-sm text-[var(--text-strong)]">{waitingOn}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">
+                  {followupTasks} follow-up task(s)
+                </Badge>
+                <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">
+                  {internalTasks} internal task(s)
+                </Badge>
+              </div>
+            </div>
 
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60">
-        <section className="xl:flex xl:h-full xl:flex-col">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="rounded-xl border border-white/6 bg-[var(--surface-panel)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.2)]">
+                <p className="text-xs uppercase tracking-[0.16em] text-[var(--text-dim)]">Queue mix</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Badge variant="outline" className="rounded-full border-cyan-400/20 bg-cyan-500/10 text-cyan-200">
+                    Follow-up {followupQueues}
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full border-emerald-400/20 bg-emerald-500/10 text-emerald-200">
+                    Internal {internalQueues}
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full border-amber-300/20 bg-amber-500/10 text-amber-200">
+                    Control {controlPending}
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">
+                    {activeChannelLabel} {channelQueueDepth}
+                  </Badge>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-white/6 bg-[var(--surface-panel)] p-5 shadow-[0_24px_80px_rgba(0,0,0,0.2)]">
+                <p className="text-xs uppercase tracking-[0.16em] text-[var(--text-dim)]">State detail</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Badge variant="outline" className="rounded-full border-cyan-400/20 bg-cyan-500/10 text-cyan-200">
+                    State {octoState}
+                  </Badge>
+                  <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">
+                    {octoSteps.length} recent events
+                  </Badge>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <section className="h-full rounded-xl border border-white/6 bg-[var(--surface-panel)] p-4 shadow-[0_24px_80px_rgba(0,0,0,0.26)] xl:flex xl:min-h-0 xl:flex-col">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Octo</h3>
-              <p className="mt-1 text-xs text-slate-500">What she is doing now, and the last orchestration steps.</p>
+              <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-strong)]">Octo</h3>
+              <p className="mt-1 text-xs text-[var(--text-dim)]">What she is doing now, and the last orchestration steps.</p>
             </div>
             <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${statusPill(octoState)}`}>
               {octoState}
             </span>
           </div>
 
-          <div className="mt-4 rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Now</p>
-            <p className="mt-2 text-lg font-semibold text-slate-100">{octoHeadline}</p>
-            <p className="mt-2 text-sm text-slate-400">{octoSubline}</p>
+          <div className="mt-4 rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)] px-4 py-4">
+            <p className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Now</p>
+            <p className="mt-3 text-sm font-medium text-white">{octoHeadline}</p>
+            <p className="mt-2 text-xs leading-5 text-[var(--text-muted)]">{octoSubline}</p>
           </div>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-            <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Queue mix</p>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <span className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2.5 py-1 text-xs text-cyan-200">
-                  Follow-up {followupQueues}
-                </span>
-                <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-2.5 py-1 text-xs text-emerald-200">
-                  Internal {internalQueues}
-                </span>
-                <span className="rounded-full border border-amber-300/20 bg-amber-500/10 px-2.5 py-1 text-xs text-amber-200">
-                  Control {controlPending}
-                </span>
-                <span className="rounded-full border border-slate-700 bg-slate-900 px-2.5 py-1 text-xs text-slate-300">
-                  {activeChannelLabel} {channelQueueDepth}
-                </span>
-              </div>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Waiting on</p>
-              <p className="mt-3 text-sm text-slate-200">{waitingOn}</p>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-400">
-                <span>{followupTasks} follow-up task(s)</span>
-                <span>{internalTasks} internal task(s)</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 xl:flex-1">
+          <div className="mt-4 min-h-0 xl:flex xl:flex-1 xl:flex-col">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Recent steps</p>
-              <span className="text-xs text-slate-500">Last {octoSteps.length} visible events</span>
+              <p className="text-xs uppercase tracking-[0.16em] text-[var(--text-dim)]">Recent steps</p>
+              <span className="text-xs text-[var(--text-dim)]">Last {octoSteps.length} visible events</span>
             </div>
-            <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+            <div className="max-h-[26rem] space-y-2 overflow-y-auto pr-2 xl:min-h-0 xl:flex-1">
               {recentOctoSteps.length === 0 ? (
-                <div className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3 text-sm text-slate-400">
+                <div className="rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)] px-3 py-3 text-sm text-[var(--text-muted)]">
                   No recent octo steps in the current log window.
                 </div>
               ) : (
                 recentOctoSteps.map((step) => (
-                  <article key={step.id} className="rounded-xl border border-slate-800 bg-slate-950/70 px-3 py-3">
+                  <article key={step.id} className="rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)] px-3 py-3">
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-sm font-medium text-slate-100">{step.title}</p>
-                        <p className="mt-1 text-xs text-slate-400">{step.detail}</p>
+                        <p className="text-sm font-medium text-white">{step.title}</p>
+                        <p className="mt-1 text-xs text-[var(--text-muted)]">{step.detail}</p>
                       </div>
                       <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wide ${statusPill(step.level)}`}>
                         {step.level}
                       </span>
                     </div>
                     {step.timestamp ? (
-                      <p className="mt-2 text-[11px] text-slate-500">{formatLocalDateTime(step.timestamp)}</p>
+                      <p className="mt-2 text-[11px] text-[var(--text-dim)]">{formatLocalDateTime(step.timestamp)}</p>
                     ) : null}
                   </article>
                 ))
@@ -557,172 +617,173 @@ export function ControlCenterPage() {
             </div>
           </div>
         </section>
-      </section>
+      </div>
 
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+      <Card className="border-white/6 bg-[var(--surface-panel)] py-0 shadow-[0_24px_80px_rgba(0,0,0,0.26)]">
+        <CardHeader className="flex flex-row items-center justify-between gap-3 border-b border-white/6 px-5 py-5 md:px-6">
           <div>
-            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Workers</h3>
-            <p className="mt-1 text-xs text-slate-500">Click a worker row to inspect result, output, tools, and template config.</p>
+            <CardTitle className="text-sm uppercase tracking-[0.16em] text-[var(--text-strong)]">Workers</CardTitle>
+            <CardDescription>Click a worker row to inspect result, output, tools, and template config.</CardDescription>
           </div>
-          <Link
-            to="/workers"
-            className="rounded-full border border-cyan-400/40 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.16em] text-cyan-200 transition hover:border-cyan-300/60 hover:bg-cyan-400/15"
-          >
-            Open workers page
-          </Link>
-        </div>
+          <Button asChild variant="secondary" className="rounded-full bg-white/[0.08] text-[var(--text-strong)] hover:bg-white/[0.12]">
+            <Link to="/workers">Open workers page</Link>
+          </Button>
+        </CardHeader>
+        <CardContent className="px-5 pb-5 pt-4 md:px-6 md:pb-6">
 
-        {workers.length === 0 ? (
-          <div className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-slate-400">
-            No recent workers in the current filter window.
-          </div>
-        ) : (
-          <div className="max-h-[42rem] overflow-auto">
-            <table className="w-full min-w-[1080px] border-separate border-spacing-y-2 text-left text-sm">
-              <thead className="sticky top-0 z-10 bg-slate-900/95 text-xs uppercase tracking-wide text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">ID</th>
-                  <th className="px-3 py-2">Hierarchy</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Template</th>
-                  <th className="px-3 py-2">Task</th>
-                  <th className="px-3 py-2">Result</th>
-                  <th className="px-3 py-2">Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {workers.flatMap((worker, index) => {
-                  const workerKey = worker.id ?? worker.updated_at ?? `worker-${index}`;
-                  const workerId = worker.id ?? "";
-                  const isExpanded = expandedWorkerId === workerId;
-                  const hierarchy = hierarchyLabel(worker);
-                  const preview = worker.result_preview?.trim() || worker.summary?.trim() || worker.error?.trim() || "No result yet";
-                  const templateConfig = worker.template_config ?? null;
-                  const allowedTools = templateConfig?.available_tools ?? [];
-                  const usedTools = worker.tools_used ?? [];
+          {workers.length === 0 ? (
+            <div className="rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)] p-4 text-[var(--text-muted)]">
+              No recent workers in the current filter window.
+            </div>
+          ) : (
+            <ScrollArea className="max-h-[42rem]">
+              <div className="rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)]">
+                <Table className="min-w-[1080px]">
+                  <TableHeader>
+                    <TableRow className="border-white/6 hover:bg-transparent">
+                      <TableHead>ID</TableHead>
+                      <TableHead>Hierarchy</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Template</TableHead>
+                      <TableHead>Task</TableHead>
+                      <TableHead>Result</TableHead>
+                      <TableHead>Updated</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {workers.flatMap((worker, index) => {
+                      const workerKey = worker.id ?? worker.updated_at ?? `worker-${index}`;
+                      const workerId = worker.id ?? "";
+                      const isExpanded = expandedWorkerId === workerId;
+                      const hierarchy = hierarchyLabel(worker);
+                      const preview = worker.result_preview?.trim() || worker.summary?.trim() || worker.error?.trim() || "No result yet";
+                      const templateConfig = worker.template_config ?? null;
+                      const allowedTools = templateConfig?.available_tools ?? [];
+                      const usedTools = worker.tools_used ?? [];
 
-                  return [
-                    <tr
-                      key={`${workerKey}-row`}
-                      className={`cursor-pointer rounded-xl align-top transition hover:bg-slate-900 ${workerRowTone(worker.status)}`}
-                      onClick={() => {
-                        if (!workerId) {
-                          return;
-                        }
-                        setExpandedWorkerId((current) => (current === workerId ? "" : workerId));
-                      }}
-                    >
-                      <td className="rounded-l-xl px-3 py-3 font-mono text-xs text-cyan-300">{shortWorkerId(worker.id)}</td>
-                      <td className="px-3 py-3 text-xs text-slate-300">
-                        <div className="inline-flex items-center gap-1" style={{ paddingLeft: `${Math.min(28, hierarchy.depth * 8)}px` }}>
-                          {hierarchy.isChild ? <span className="text-cyan-400">↳</span> : <span className="text-slate-500">◇</span>}
-                          <span>{hierarchy.text}</span>
-                        </div>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${statusPill(worker.status)}`}>
-                          {String(worker.status ?? "unknown")}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 text-slate-200">{worker.template_name ?? worker.template_id ?? "n/a"}</td>
-                      <td className="max-w-[360px] px-3 py-3 text-slate-300" title={worker.task ?? ""}>
-                        <div className="line-clamp-2">{String(worker.task ?? "") || "n/a"}</div>
-                      </td>
-                      <td title={preview} className="max-w-[260px] px-3 py-3">
-                        <div className={`text-sm ${tone(worker.status)}`}>{shortText(preview, 96)}</div>
-                      </td>
-                      <td className="rounded-r-xl px-3 py-3 text-slate-400">{formatLocalDateTime(worker.updated_at)}</td>
-                    </tr>,
-                    isExpanded ? (
-                      <tr key={`${workerKey}-details`}>
-                        <td colSpan={7} className="px-3 pb-3">
-                          <div className="space-y-4 rounded-2xl border border-slate-800 bg-slate-950/95 p-4">
-                            <div className="flex flex-wrap gap-3 text-xs text-slate-400">
-                              <span>Updated: {formatLocalDateTime(worker.updated_at)}</span>
-                              <span>Lineage: {shortWorkerId(worker.lineage_id)}</span>
-                              <span>Parent: {worker.parent_worker_id ? shortWorkerId(worker.parent_worker_id) : "root"}</span>
-                              <span>Depth: {worker.spawn_depth ?? 0}</span>
+                      return [
+                        <tr
+                          key={`${workerKey}-row`}
+                          className={`cursor-pointer align-top transition hover:bg-white/[0.03] ${workerRowTone(worker.status)}`}
+                          onClick={() => {
+                            if (!workerId) {
+                              return;
+                            }
+                            setExpandedWorkerId((current) => (current === workerId ? "" : workerId));
+                          }}
+                        >
+                          <TableCell className="font-mono text-xs text-cyan-300">{shortWorkerId(worker.id)}</TableCell>
+                          <TableCell className="text-xs text-[var(--text-strong)]">
+                            <div className="inline-flex items-center gap-1" style={{ paddingLeft: `${Math.min(28, hierarchy.depth * 8)}px` }}>
+                              {hierarchy.isChild ? <span className="text-cyan-400">↳</span> : <span className="text-[var(--text-dim)]">◇</span>}
+                              <span>{hierarchy.text}</span>
                             </div>
-
-                            {worker.summary ? (
-                              <div className="space-y-1">
-                                <div className="text-xs uppercase tracking-[0.2em] text-cyan-300">Summary</div>
-                                <div className="rounded-lg border border-cyan-950/80 bg-cyan-950/20 p-3 text-sm text-slate-100">
-                                  {worker.summary}
+                          </TableCell>
+                          <TableCell>
+                            <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${statusPill(worker.status)}`}>
+                              {String(worker.status ?? "unknown")}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-[var(--text-strong)]">{worker.template_name ?? worker.template_id ?? "n/a"}</TableCell>
+                          <TableCell className="max-w-[360px] text-[var(--text-muted)]" title={worker.task ?? ""}>
+                            <div className="line-clamp-2">{String(worker.task ?? "") || "n/a"}</div>
+                          </TableCell>
+                          <TableCell title={preview} className="max-w-[260px]">
+                            <div className={`text-sm ${tone(worker.status)}`}>{shortText(preview, 96)}</div>
+                          </TableCell>
+                          <TableCell className="text-[var(--text-dim)]">{formatLocalDateTime(worker.updated_at)}</TableCell>
+                        </tr>,
+                        isExpanded ? (
+                          <TableRow key={`${workerKey}-details`} className="border-white/6 hover:bg-transparent">
+                            <TableCell colSpan={7} className="p-4">
+                              <div className="space-y-4 rounded-[22px] border border-white/6 bg-black/20 p-4">
+                                <div className="flex flex-wrap gap-2 text-xs">
+                                  <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">Updated {formatLocalDateTime(worker.updated_at)}</Badge>
+                                  <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">Lineage {shortWorkerId(worker.lineage_id)}</Badge>
+                                  <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">Parent {worker.parent_worker_id ? shortWorkerId(worker.parent_worker_id) : "root"}</Badge>
+                                  <Badge variant="outline" className="rounded-full border-white/8 bg-white/[0.04] text-[var(--text-muted)]">Depth {worker.spawn_depth ?? 0}</Badge>
                                 </div>
-                              </div>
-                            ) : null}
 
-                            {worker.error ? (
-                              <div className="space-y-1">
-                                <div className="text-xs uppercase tracking-[0.2em] text-rose-300">Error</div>
-                                <div className="rounded-lg border border-rose-950/80 bg-rose-950/20 p-3 text-sm text-rose-100">
-                                  {worker.error}
-                                </div>
-                              </div>
-                            ) : null}
-
-                            {worker.output ? (
-                              <div className="space-y-1">
-                                <div className="text-xs uppercase tracking-[0.2em] text-emerald-300">Output</div>
-                                <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-slate-800 bg-slate-900 p-3 text-xs text-slate-200">
-                                  {JSON.stringify(worker.output, null, 2)}
-                                </pre>
-                              </div>
-                            ) : null}
-
-                            <div className="grid gap-4 xl:grid-cols-2">
-                              <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
-                                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Worker run</div>
-                                <div className="flex flex-wrap gap-2 text-xs text-slate-300">
-                                  <span className="rounded-full border border-slate-700 bg-slate-950 px-2.5 py-1">
-                                    Used tools {usedTools.length}
-                                  </span>
-                                  {usedTools.length > 0 ? (
-                                    <span className="text-slate-400">{usedTools.join(", ")}</span>
-                                  ) : (
-                                    <span className="text-slate-500">No tools reported</span>
-                                  )}
-                                </div>
-                              </div>
-
-                              <div className="space-y-2 rounded-xl border border-slate-800 bg-slate-900/80 p-3">
-                                <div className="text-xs uppercase tracking-[0.2em] text-slate-400">Template config</div>
-                                {templateConfig ? (
-                                  <div className="space-y-2 text-xs text-slate-300">
-                                    <div className="flex flex-wrap gap-2">
-                                      <span className="rounded-full border border-slate-700 bg-slate-950 px-2.5 py-1">
-                                        Thinking steps {templateConfig.max_thinking_steps ?? "n/a"}
-                                      </span>
-                                      <span className="rounded-full border border-slate-700 bg-slate-950 px-2.5 py-1">
-                                        Timeout {templateConfig.default_timeout_seconds ?? "n/a"}s
-                                      </span>
-                                      <span className="rounded-full border border-slate-700 bg-slate-950 px-2.5 py-1">
-                                        {templateConfig.can_spawn_children ? "Can spawn children" : "No child spawning"}
-                                      </span>
-                                    </div>
-                                    <div className="text-slate-400">Model: {templateConfig.model || "default"}</div>
-                                    <div className="text-slate-400">
-                                      Allowed tools: {allowedTools.length > 0 ? allowedTools.join(", ") : "not declared"}
+                                {worker.summary ? (
+                                  <div className="space-y-1">
+                                    <div className="text-xs uppercase tracking-[0.2em] text-cyan-300">Summary</div>
+                                    <div className="rounded-lg border border-white/6 bg-cyan-500/10 p-3 text-sm text-white">
+                                      {worker.summary}
                                     </div>
                                   </div>
-                                ) : (
-                                  <div className="text-xs text-slate-500">No template config found for this worker.</div>
-                                )}
+                                ) : null}
+
+                                {worker.error ? (
+                                  <div className="space-y-1">
+                                    <div className="text-xs uppercase tracking-[0.2em] text-rose-300">Error</div>
+                                    <div className="rounded-lg border border-rose-400/15 bg-rose-500/10 p-3 text-sm text-rose-100">
+                                      {worker.error}
+                                    </div>
+                                  </div>
+                                ) : null}
+
+                                {worker.output ? (
+                                  <div className="space-y-1">
+                                    <div className="text-xs uppercase tracking-[0.2em] text-emerald-300">Output</div>
+                                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-white/6 bg-[var(--surface-panel-strong)] p-3 text-xs text-[var(--text-strong)]">
+                                      {JSON.stringify(worker.output, null, 2)}
+                                    </pre>
+                                  </div>
+                                ) : null}
+
+                                <div className="grid gap-4 xl:grid-cols-2">
+                                  <div className="space-y-2 rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)] p-3">
+                                    <div className="text-xs uppercase tracking-[0.2em] text-[var(--text-dim)]">Worker run</div>
+                                    <div className="flex flex-wrap gap-2 text-xs text-[var(--text-strong)]">
+                                      <span className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1">
+                                        Used tools {usedTools.length}
+                                      </span>
+                                      {usedTools.length > 0 ? (
+                                        <span className="text-[var(--text-muted)]">{usedTools.join(", ")}</span>
+                                      ) : (
+                                        <span className="text-[var(--text-dim)]">No tools reported</span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-2 rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)] p-3">
+                                    <div className="text-xs uppercase tracking-[0.2em] text-[var(--text-dim)]">Template config</div>
+                                    {templateConfig ? (
+                                      <div className="space-y-2 text-xs text-[var(--text-strong)]">
+                                        <div className="flex flex-wrap gap-2">
+                                          <span className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1">
+                                            Thinking steps {templateConfig.max_thinking_steps ?? "n/a"}
+                                          </span>
+                                          <span className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1">
+                                            Timeout {templateConfig.default_timeout_seconds ?? "n/a"}s
+                                          </span>
+                                          <span className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1">
+                                            {templateConfig.can_spawn_children ? "Can spawn children" : "No child spawning"}
+                                          </span>
+                                        </div>
+                                        <div className="text-[var(--text-muted)]">Model: {templateConfig.model || "default"}</div>
+                                        <div className="text-[var(--text-muted)]">
+                                          Allowed tools: {allowedTools.length > 0 ? allowedTools.join(", ") : "not declared"}
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <div className="text-xs text-[var(--text-dim)]">No template config found for this worker.</div>
+                                    )}
+                                  </div>
+                                </div>
                               </div>
-                            </div>
-                          </div>
-                        </td>
-                      </tr>
-                    ) : null,
-                  ];
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                            </TableCell>
+                          </TableRow>
+                        ) : null,
+                      ];
+                    })}
+                  </TableBody>
+                </Table>
+              </div>
+            </ScrollArea>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -6,6 +6,11 @@ import { fetchActions, runDashboardAction } from "../api/dashboardClient";
 import type { components } from "../api/types";
 import type { AppShellOutletContext } from "../ui/AppShell";
 import { formatLocalDateTime } from "../utils/dateTime";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 type ActionsPayload = components["schemas"]["DashboardActionsV2"];
 type ActionHistoryItem = {
@@ -89,111 +94,124 @@ export function ActionsPage() {
   const history = actionsNode.history ?? [];
 
   return (
-    <section className="grid gap-5">
-      <section className="rounded-2xl border border-slate-800 bg-slate-900/70 p-5 shadow-xl shadow-slate-950/60">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-cyan-300">Actions</p>
-            <h2 className="mt-2 text-2xl font-semibold text-slate-100">Operational Controls</h2>
-            <p className="mt-2 text-sm text-slate-400">
-              Manual controls for worker recovery and queue cleanup, with audit history below.
-            </p>
-          </div>
-          <div className={`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] ${error ? statusTone("error") : statusTone("ok")}`}>
-            {error ? "load error" : "ready"}
-          </div>
-        </div>
-      </section>
-
-      <div className="grid gap-5 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)]">
-        <article className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Run Action</h3>
-          <form onSubmit={onRestartSubmit} className="mt-4 space-y-3">
-            <label className="block text-xs uppercase tracking-wide text-slate-500">
-              Worker ID
-              <input
-                value={workerId}
-                onChange={(event) => setWorkerId(event.target.value)}
-                placeholder="Worker ID"
-                aria-label="Worker ID"
-                className="mt-2 w-full rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm text-slate-100 outline-none transition focus:border-cyan-400/50"
-              />
-            </label>
-            <button
-              type="submit"
-              className="w-full rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-sm font-semibold text-cyan-200 transition hover:border-cyan-300/60 hover:bg-cyan-400/15"
-            >
-              Restart Worker
-            </button>
-          </form>
-
-          <div className="mt-3 grid gap-3">
-            <button
-              type="button"
-              className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm font-medium text-slate-200 transition hover:border-slate-700"
-              onClick={() => void runAction("retry_failed")}
-            >
-              Retry Latest Failed Worker
-            </button>
-            <button
-              type="button"
-              className="rounded-xl border border-slate-800 bg-slate-950/80 px-3 py-2 text-sm font-medium text-slate-200 transition hover:border-slate-700"
-              onClick={() => void runAction("clear_control_queue")}
-            >
-              Clear Control Queue
-            </button>
-          </div>
-
-          <div className="mt-4 rounded-xl border border-slate-800 bg-slate-950/70 p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Result</div>
-            <p className="mt-2 text-sm text-slate-300">{resultMessage}</p>
-            {error ? <p className="mt-2 text-sm text-rose-300">Load error: {error}</p> : null}
-          </div>
-        </article>
-
-        <article className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4 shadow-xl shadow-slate-950/60">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-300">Action History</h3>
-            <p className="text-xs text-slate-500">Latest backend audit entries</p>
-          </div>
-          {loading ? (
-            <p className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-slate-400">Loading history...</p>
-          ) : history.length === 0 ? (
-            <p className="rounded-xl border border-slate-800 bg-slate-950/70 p-4 text-slate-400">No action history.</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[720px] text-left text-sm">
-                <thead className="text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="border-b border-slate-800 px-3 py-2">Time</th>
-                    <th className="border-b border-slate-800 px-3 py-2">Action</th>
-                    <th className="border-b border-slate-800 px-3 py-2">Requester</th>
-                    <th className="border-b border-slate-800 px-3 py-2">Status</th>
-                    <th className="border-b border-slate-800 px-3 py-2">Message</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {history.slice(0, 12).map((item, index) => (
-                    <tr key={`${item.timestamp ?? "n/a"}-${index}`} className="border-b border-slate-900">
-                      <td className="px-3 py-3 text-slate-400">{formatLocalDateTime(item.timestamp)}</td>
-                      <td className="px-3 py-3 text-slate-200">
-                        {item.action ?? "action"}
-                        {item.worker_id ? ` (${item.worker_id})` : ""}
-                      </td>
-                      <td className="px-3 py-3 text-slate-300">{item.requested_by ?? "dashboard"}</td>
-                      <td className="px-3 py-3">
-                        <span className={`rounded-full border px-2 py-1 text-xs uppercase tracking-wide ${statusTone(item.result?.status)}`}>
-                          {String(item.result?.status ?? "unknown")}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 text-slate-300">{item.result?.message ?? "n/a"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+    <section className="grid gap-6">
+      <Card className="rounded-[32px] border-white/6 bg-[var(--surface-panel)] py-0 shadow-[0_24px_80px_rgba(0,0,0,0.24)]">
+        <CardContent className="px-6 py-6">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-3xl">
+              <p className="text-[11px] uppercase tracking-[0.24em] text-[var(--text-dim)]">Actions</p>
+              <h2 className="mt-3 text-3xl font-semibold tracking-[-0.04em] text-white">Operational controls</h2>
+              <p className="mt-3 text-sm leading-6 text-[var(--text-muted)]">
+                Manual recovery actions for worker restarts and queue cleanup, with backend audit history below.
+              </p>
             </div>
-          )}
-        </article>
+            <Badge variant="outline" className={`rounded-full px-3 py-1.5 text-[11px] uppercase tracking-[0.18em] ${error ? statusTone("error") : statusTone("ok")}`}>
+              {error ? "load error" : "ready"}
+            </Badge>
+          </div>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-6 xl:grid-cols-[minmax(320px,420px)_minmax(0,1fr)]">
+        <Card className="rounded-[30px] border-white/6 bg-[var(--surface-panel)] py-0">
+          <CardHeader className="px-6 py-5">
+            <CardTitle className="text-sm uppercase tracking-[0.18em] text-[var(--text-strong)]">Run action</CardTitle>
+            <CardDescription>Use this panel for targeted recovery when automation did not cleanly resolve an issue.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4 px-6 pb-6 pt-0">
+            <form onSubmit={onRestartSubmit} className="space-y-3">
+              <label className="grid gap-2">
+                <span className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Worker ID</span>
+                <Input
+                  value={workerId}
+                  onChange={(event) => setWorkerId(event.target.value)}
+                  placeholder="Worker ID"
+                  aria-label="Worker ID"
+                  className="rounded-[18px] border-white/8 bg-[var(--surface-panel-strong)]"
+                />
+              </label>
+              <Button
+                type="submit"
+                className="w-full rounded-[18px] bg-white/[0.08] text-white hover:bg-white/[0.12]"
+              >
+                Restart worker
+              </Button>
+            </form>
+
+            <div className="grid gap-3">
+              <Button
+                type="button"
+                variant="secondary"
+                className="rounded-[18px] bg-[var(--surface-panel-strong)] text-[var(--text-strong)] hover:bg-white/[0.08]"
+                onClick={() => void runAction("retry_failed")}
+              >
+                Retry latest failed worker
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                className="rounded-[18px] bg-[var(--surface-panel-strong)] text-[var(--text-strong)] hover:bg-white/[0.08]"
+                onClick={() => void runAction("clear_control_queue")}
+              >
+                Clear control queue
+              </Button>
+            </div>
+
+            <div className="rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)] p-4">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Result</div>
+              <p className="mt-3 text-sm text-[var(--text-strong)]">{resultMessage}</p>
+              {error ? <p className="mt-2 text-sm text-rose-300">Load error: {error}</p> : null}
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="rounded-[30px] border-white/6 bg-[var(--surface-panel)] py-0">
+          <CardHeader className="flex-row items-center justify-between gap-3 px-6 py-5">
+            <div>
+              <CardTitle className="text-sm uppercase tracking-[0.18em] text-[var(--text-strong)]">Action history</CardTitle>
+              <CardDescription>Latest backend audit entries for dashboard-triggered actions.</CardDescription>
+            </div>
+          </CardHeader>
+          <CardContent className="px-6 pb-6 pt-0">
+            {loading ? (
+              <p className="rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)] p-4 text-[var(--text-muted)]">Loading history...</p>
+            ) : history.length === 0 ? (
+              <p className="rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)] p-4 text-[var(--text-muted)]">No action history.</p>
+            ) : (
+              <div className="overflow-x-auto rounded-[24px] border border-white/6 bg-[var(--surface-panel-strong)]">
+                <Table className="min-w-[720px]">
+                  <TableHeader>
+                    <TableRow className="border-white/6 hover:bg-transparent">
+                      <TableHead>Time</TableHead>
+                      <TableHead>Action</TableHead>
+                      <TableHead>Requester</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Message</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {history.slice(0, 12).map((item, index) => (
+                      <TableRow key={`${item.timestamp ?? "n/a"}-${index}`} className="border-white/6 hover:bg-white/[0.02]">
+                        <TableCell className="text-[var(--text-muted)]">{formatLocalDateTime(item.timestamp)}</TableCell>
+                        <TableCell className="text-[var(--text-strong)]">
+                          {item.action ?? "action"}
+                          {item.worker_id ? ` (${item.worker_id})` : ""}
+                        </TableCell>
+                        <TableCell className="text-[var(--text-muted)]">{item.requested_by ?? "dashboard"}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className={`rounded-full ${statusTone(item.result?.status)}`}>
+                            {String(item.result?.status ?? "unknown")}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-[var(--text-strong)]">{item.result?.message ?? "n/a"}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </section>
   );
