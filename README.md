@@ -297,6 +297,9 @@ Workers can spawn subworkers for multi-step tasks. Workers can only return respo
   - Security Auditor
   - Test Runner
   - System Self-Controller
+  - DB Maintainer
+  - Repo Researcher
+  - Bug Investigator
 
 ### 📃 Multilayer memory system
 
@@ -307,6 +310,8 @@ Octo operates with a local vector database to store communication history and fi
 - **USER.md** – user profile, preferences, habits, and interaction style
 - **SOUL.md** – system identity, values, tone, and core behavioral principles
 - **HEARTBEAT.md** – recurring duties, monitoring loops, schedules, and background obligations
+
+See [docs/memory.md](docs/memory.md).
 
 ### 🤖 Multi-channel user communication
 
