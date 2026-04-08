@@ -260,6 +260,18 @@ function buildOctoSteps(logs: LogRow[]): OctoStep[] {
     }));
 }
 
+function countToolUsage(tools: string[]): Array<{ name: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const tool of tools) {
+    const name = String(tool ?? "").trim();
+    if (!name) {
+      continue;
+    }
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return Array.from(counts.entries()).map(([name, count]) => ({ name, count }));
+}
+
 function deriveOctoWaitingOn(args: {
   state: string;
   controlPending: number;
@@ -715,6 +727,7 @@ export function ControlCenterPage() {
                       const templateConfig = worker.template_config ?? null;
                       const allowedTools = templateConfig?.available_tools ?? [];
                       const usedTools = worker.tools_used ?? [];
+                      const usedToolCounts = countToolUsage(usedTools);
 
                       return [
                         <tr
@@ -804,12 +817,22 @@ export function ControlCenterPage() {
                                 <div className="grid gap-4 xl:grid-cols-2">
                                   <div className="space-y-2 rounded-[22px] border border-white/6 bg-[var(--surface-panel-strong)] p-3">
                                     <div className="text-xs uppercase tracking-[0.2em] text-[var(--text-dim)]">Worker run</div>
-                                    <div className="flex flex-wrap gap-2 text-xs text-[var(--text-strong)]">
+                                    <div className="space-y-2 text-xs text-[var(--text-strong)]">
                                       <span className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1">
                                         Used tools {usedTools.length}
                                       </span>
-                                      {usedTools.length > 0 ? (
-                                        <span className="break-words text-[var(--text-muted)]">{usedTools.join(", ")}</span>
+                                      {usedToolCounts.length > 0 ? (
+                                        <div className="flex flex-wrap gap-2">
+                                          {usedToolCounts.map(({ name, count }) => (
+                                            <span
+                                              key={`used-tool-${name}`}
+                                              className="rounded-full border border-cyan-400/20 bg-cyan-500/10 px-2.5 py-1 text-[11px] text-cyan-100"
+                                            >
+                                              {name}
+                                              {count > 1 ? ` x${count}` : ""}
+                                            </span>
+                                          ))}
+                                        </div>
                                       ) : (
                                         <span className="text-[var(--text-dim)]">No tools reported</span>
                                       )}
@@ -832,8 +855,22 @@ export function ControlCenterPage() {
                                           </span>
                                         </div>
                                         <div className="text-[var(--text-muted)]">Model: {templateConfig.model || "default"}</div>
-                                        <div className="break-words text-[var(--text-muted)]">
-                                          Allowed tools: {allowedTools.length > 0 ? allowedTools.join(", ") : "not declared"}
+                                        <div className="space-y-2">
+                                          <div className="text-[var(--text-muted)]">Allowed tools</div>
+                                          {allowedTools.length > 0 ? (
+                                            <div className="flex flex-wrap gap-2">
+                                              {allowedTools.map((toolName) => (
+                                                <span
+                                                  key={`allowed-tool-${toolName}`}
+                                                  className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] text-[var(--text-muted)]"
+                                                >
+                                                  {toolName}
+                                                </span>
+                                              ))}
+                                            </div>
+                                          ) : (
+                                            <div className="text-[var(--text-dim)]">Not declared</div>
+                                          )}
                                         </div>
                                       </div>
                                     ) : (
