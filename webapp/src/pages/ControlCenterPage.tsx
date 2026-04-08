@@ -159,7 +159,7 @@ function parseScheduledTask(task?: string | null): { meta: ScheduledTaskMeta | n
     return { meta: null, body: "" };
   }
 
-  const namedMatch = raw.match(/\[\s*scheduled\s*:\s*([^\]]+)\]\s*(.*)$/i);
+  const namedMatch = raw.match(/^\[\s*scheduled\s*:\s*([^\]]+)\]\s*([\s\S]*)$/i);
   if (namedMatch) {
     const [, kind, remainder] = namedMatch;
     return {
@@ -168,7 +168,7 @@ function parseScheduledTask(task?: string | null): { meta: ScheduledTaskMeta | n
     };
   }
 
-  const genericMatch = raw.match(/\[\s*scheduled\s*\]\s*(.*)$/i);
+  const genericMatch = raw.match(/^\[\s*scheduled\s*\]\s*([\s\S]*)$/i);
   if (genericMatch) {
     const [, remainder] = genericMatch;
     return {
