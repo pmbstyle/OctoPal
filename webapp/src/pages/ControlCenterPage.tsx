@@ -38,10 +38,7 @@ import {
   YAxis,
 } from "recharts";
 import {
-  Activity,
   Clock3,
-  Compass,
-  Search,
   type LucideIcon,
 } from "lucide-react";
 
@@ -106,10 +103,7 @@ type OctoStep = {
 };
 
 type ScheduledTaskMeta = {
-  kind: string;
   label: string;
-  detail: string;
-  badgeClass: string;
   icon: LucideIcon;
 };
 
@@ -149,43 +143,12 @@ function prettifyScheduledKind(kind: string): string {
     .replace(/[_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim()
-    .replace(/\b\w/g, (match) => match.toUpperCase());
+    .toUpperCase();
 }
 
 function getScheduledTaskMeta(kind: string): ScheduledTaskMeta {
-  const normalized = kind.trim().toLowerCase();
-  if (normalized.includes("explore")) {
-    return {
-      kind,
-      label: prettifyScheduledKind(kind),
-      detail: "Exploration",
-      badgeClass: "border-cyan-400/30 bg-cyan-500/12 text-cyan-200",
-      icon: Compass,
-    };
-  }
-  if (normalized.includes("research") || normalized.includes("paper")) {
-    return {
-      kind,
-      label: prettifyScheduledKind(kind),
-      detail: "Research",
-      badgeClass: "border-emerald-400/30 bg-emerald-500/12 text-emerald-200",
-      icon: Search,
-    };
-  }
-  if (normalized.includes("activity")) {
-    return {
-      kind,
-      label: prettifyScheduledKind(kind),
-      detail: "Activity",
-      badgeClass: "border-amber-300/30 bg-amber-400/12 text-amber-200",
-      icon: Activity,
-    };
-  }
   return {
-    kind,
     label: prettifyScheduledKind(kind),
-    detail: "Scheduled",
-    badgeClass: "border-fuchsia-300/30 bg-fuchsia-400/12 text-fuchsia-200",
     icon: Clock3,
   };
 }
@@ -196,7 +159,7 @@ function parseScheduledTask(task?: string | null): { meta: ScheduledTaskMeta | n
     return { meta: null, body: "" };
   }
 
-  const namedMatch = raw.match(/^\[scheduled:\s*([^\]]+)\]\s*(.*)$/i);
+  const namedMatch = raw.match(/\[\s*scheduled\s*:\s*([^\]]+)\]\s*(.*)$/i);
   if (namedMatch) {
     const [, kind, remainder] = namedMatch;
     return {
@@ -205,7 +168,7 @@ function parseScheduledTask(task?: string | null): { meta: ScheduledTaskMeta | n
     };
   }
 
-  const genericMatch = raw.match(/^\[scheduled\]\s*(.*)$/i);
+  const genericMatch = raw.match(/\[\s*scheduled\s*\]\s*(.*)$/i);
   if (genericMatch) {
     const [, remainder] = genericMatch;
     return {
@@ -221,6 +184,9 @@ function statusPill(status?: string): string {
   const v = String(status ?? "").toLowerCase();
   if (v === "running" || v === "started" || v === "completed" || v === "ok") {
     return "bg-emerald-500/15 text-emerald-300 ring-1 ring-inset ring-emerald-400/30";
+  }
+  if (v === "info" || v === "idle") {
+    return "bg-cyan-500/12 text-cyan-200 ring-1 ring-inset ring-cyan-400/30";
   }
   if (v === "warning" || v === "thinking" || v === "stopped" || v === "idle") {
     return "bg-amber-500/15 text-amber-300 ring-1 ring-inset ring-amber-300/30";
@@ -780,9 +746,9 @@ export function ControlCenterPage() {
                             <div className="space-y-1">
                               {scheduledTask.meta ? (
                                 <div>
-                                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] ${scheduledTask.meta.badgeClass}`}>
+                                  <span className="inline-flex items-center gap-1 rounded-full border border-cyan-400/30 bg-cyan-500/12 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan-200">
                                     <scheduledTask.meta.icon className="h-3.5 w-3.5" />
-                                    {scheduledTask.meta.detail}
+                                    Scheduled
                                     <span className="text-white/70">{scheduledTask.meta.label}</span>
                                   </span>
                                 </div>
