@@ -28,6 +28,14 @@ def _resolve_ws_chat_id(settings: Any) -> int:
     # Keep WS-only sessions on a positive ID so worker follow-ups are not suppressed.
     return 1_000_000_000 + (uuid.uuid4().int % 100_000_000)
 
+
+@dataclass
+class _ActiveWsSession:
+    connection_id: str
+    socket: WebSocket
+    closed: asyncio.Event = field(default_factory=asyncio.Event)
+
+
 @dataclass
 class WsApprovalManager:
     send: callable
@@ -59,6 +67,9 @@ class WsApprovalManager:
 
 
 def register_ws_routes(app: FastAPI) -> None:
+    app.state.ws_session_lock = getattr(app.state, "ws_session_lock", asyncio.Lock())
+    app.state.active_ws_session = getattr(app.state, "active_ws_session", None)
+
     @app.websocket("/ws")
     async def websocket_endpoint(socket: WebSocket) -> None:
         # 1. IP Validation (Tailscale)
@@ -84,6 +95,7 @@ def register_ws_routes(app: FastAPI) -> None:
         logger.info("WebSocket connection established", host=client_host)
         connection_id = f"ws-{uuid.uuid4().hex}"
         session_chat_id = _resolve_ws_chat_id(settings)
+        session = _ActiveWsSession(connection_id=connection_id, socket=socket)
 
         octo: Octo | None = getattr(app.state, "octo", None)
         if not octo:
@@ -105,14 +117,51 @@ def register_ws_routes(app: FastAPI) -> None:
         async def _ws_typing(chat_id: int, active: bool) -> None:
             await socket.send_json({"type": "typing", "active": active})
 
-        # Switch Octo to use WebSocket for output
-        claimed = octo.set_output_channel(
-            True,
-            send=_ws_send,
-            progress=_ws_progress,
-            typing=_ws_typing,
-            owner_id=connection_id,
-        )
+        # A newer WS client takes over the interactive channel from any older session.
+        async with app.state.ws_session_lock:
+            previous_session: _ActiveWsSession | None = getattr(app.state, "active_ws_session", None)
+            if previous_session and previous_session.connection_id != connection_id and not previous_session.closed.is_set():
+                logger.info(
+                    "Taking over active WebSocket session",
+                    host=client_host,
+                    previous_owner=previous_session.connection_id,
+                    new_owner=connection_id,
+                )
+                try:
+                    await previous_session.socket.send_json(
+                        {
+                            "type": "warning",
+                            "message": "Another WebSocket client connected and took over this session.",
+                        }
+                    )
+                except Exception:
+                    logger.debug("Failed to notify previous WebSocket session before takeover", exc_info=True)
+
+                try:
+                    await previous_session.socket.close(code=status.WS_1000_NORMAL_CLOSURE)
+                except Exception:
+                    logger.debug("Failed to close previous WebSocket session during takeover", exc_info=True)
+
+                try:
+                    await asyncio.wait_for(previous_session.closed.wait(), timeout=2.0)
+                except TimeoutError:
+                    logger.warning(
+                        "Timed out waiting for previous WebSocket session to close",
+                        previous_owner=previous_session.connection_id,
+                        new_owner=connection_id,
+                    )
+
+            claimed = octo.set_output_channel(
+                True,
+                send=_ws_send,
+                progress=_ws_progress,
+                typing=_ws_typing,
+                owner_id=connection_id,
+                force=True,
+            )
+            if claimed:
+                app.state.active_ws_session = session
+
         if not claimed:
             await socket.send_json({"type": "error", "message": "Another WebSocket session is currently active."})
             await socket.close(code=status.WS_1013_TRY_AGAIN_LATER)
@@ -152,6 +201,10 @@ def register_ws_routes(app: FastAPI) -> None:
         finally:
             # Switch back to Telegram when WS closes
             octo.set_output_channel(False, owner_id=connection_id)
+            session.closed.set()
+            active_session: _ActiveWsSession | None = getattr(app.state, "active_ws_session", None)
+            if active_session and active_session.connection_id == connection_id:
+                app.state.active_ws_session = None
             for task in tasks:
                 task.cancel()
 

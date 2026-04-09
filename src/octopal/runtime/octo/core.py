@@ -880,24 +880,39 @@ class Octo:
         progress: callable | None = None,
         typing: callable | None = None,
         owner_id: str | None = None,
+        force: bool = False,
     ) -> bool:
         """Switch between Telegram and WebSocket output channels."""
         if is_ws:
             if self._ws_active and self._ws_owner and owner_id and self._ws_owner != owner_id:
-                logger.warning(
-                    "Rejected WebSocket channel switch due to existing owner",
-                    current_owner=self._ws_owner,
-                    attempted_owner=owner_id,
-                )
-                return False
+                if force:
+                    logger.warning(
+                        "Forcing WebSocket channel takeover",
+                        current_owner=self._ws_owner,
+                        new_owner=owner_id,
+                    )
+                else:
+                    logger.warning(
+                        "Rejected WebSocket channel switch due to existing owner",
+                        current_owner=self._ws_owner,
+                        attempted_owner=owner_id,
+                    )
+                    return False
         else:
             if self._ws_owner and owner_id and self._ws_owner != owner_id:
-                logger.warning(
-                    "Rejected output channel reset from non-owner",
-                    current_owner=self._ws_owner,
-                    attempted_owner=owner_id,
-                )
-                return False
+                if force:
+                    logger.warning(
+                        "Forcing output channel reset from non-owner",
+                        current_owner=self._ws_owner,
+                        attempted_owner=owner_id,
+                    )
+                else:
+                    logger.warning(
+                        "Rejected output channel reset from non-owner",
+                        current_owner=self._ws_owner,
+                        attempted_owner=owner_id,
+                    )
+                    return False
 
         self._ws_active = is_ws
         if is_ws:
