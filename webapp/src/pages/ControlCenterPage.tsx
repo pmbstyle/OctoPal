@@ -461,7 +461,7 @@ export function ControlCenterPage() {
     };
   }, [filters.environment, filters.service, filters.token, filters.windowMinutes]);
 
-  const workers = (((bundle?.workers.workers as { recent?: WorkerRow[] })?.recent ?? []).slice(0, 12));
+  const workers = (((bundle?.workers.workers as { recent?: WorkerRow[] })?.recent ?? []).slice(0, 16));
   const health = (bundle?.overview.health as { status?: string; summary?: string; reasons?: string[] }) ?? {};
   const octoNode = (bundle?.octo.octo as Record<string, unknown>) ?? {};
   const octoHealth = (bundle?.octo.health as { summary?: string; reasons?: string[] }) ?? {};
