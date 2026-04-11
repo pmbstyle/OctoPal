@@ -228,6 +228,185 @@ function applyProviderDefaults(
   };
 }
 
+const FALLBACK_PROVIDERS: DashboardProviderOption[] = [
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    description: "Hosted model router with OpenRouter model ids.",
+    default_model: "anthropic/claude-sonnet-4",
+    model_prefix: "openrouter",
+    default_api_base: "https://openrouter.ai/api/v1",
+    requires_api_key: true,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: true,
+    api_key_label: "OpenRouter API key",
+    model_label: "OpenRouter model",
+    base_url_label: "OpenRouter base URL",
+  },
+  {
+    id: "zai",
+    label: "Z.ai (Coding plan)",
+    description: "GLM and Coding Plan endpoints via OpenAI-compatible LiteLLM routing.",
+    default_model: "glm-5",
+    model_prefix: "openai",
+    default_api_base: "https://api.z.ai/api/coding/paas/v4",
+    requires_api_key: true,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: false,
+    api_key_label: "Z.ai API key",
+    model_label: "Z.ai model",
+    base_url_label: "Z.ai base URL",
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    description: "Direct OpenAI API access through LiteLLM.",
+    default_model: "gpt-4.1-mini",
+    model_prefix: "openai",
+    default_api_base: "https://api.openai.com/v1",
+    requires_api_key: true,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: false,
+    api_key_label: "OpenAI API key",
+    model_label: "OpenAI model",
+    base_url_label: "OpenAI base URL",
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    description: "Direct Anthropic Messages API through LiteLLM.",
+    default_model: "claude-sonnet-4-20250514",
+    model_prefix: "anthropic",
+    default_api_base: "https://api.anthropic.com",
+    requires_api_key: true,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: false,
+    api_key_label: "Anthropic API key",
+    model_label: "Anthropic model",
+    base_url_label: "Anthropic base URL",
+  },
+  {
+    id: "google",
+    label: "Google Gemini",
+    description: "Gemini API via LiteLLM.",
+    default_model: "gemini-2.0-flash",
+    model_prefix: "gemini",
+    default_api_base: null,
+    requires_api_key: true,
+    supports_custom_base_url: false,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: false,
+    api_key_label: "Gemini API key",
+    model_label: "Gemini model",
+    base_url_label: "Base URL",
+  },
+  {
+    id: "mistral",
+    label: "Mistral AI",
+    description: "Hosted Mistral API.",
+    default_model: "mistral-medium-latest",
+    model_prefix: "mistral",
+    default_api_base: "https://api.mistral.ai/v1",
+    requires_api_key: true,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: false,
+    api_key_label: "Mistral API key",
+    model_label: "Mistral model",
+    base_url_label: "Mistral base URL",
+  },
+  {
+    id: "together",
+    label: "Together AI",
+    description: "Hosted open-model access through Together AI.",
+    default_model: "meta-llama/Llama-3.3-70B-Instruct-Turbo",
+    model_prefix: "together_ai",
+    default_api_base: "https://api.together.xyz/v1",
+    requires_api_key: true,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: false,
+    api_key_label: "Together API key",
+    model_label: "Together model",
+    base_url_label: "Together base URL",
+  },
+  {
+    id: "groq",
+    label: "Groq",
+    description: "Fast hosted inference with OpenAI-compatible API surface.",
+    default_model: "llama-3.3-70b-versatile",
+    model_prefix: "groq",
+    default_api_base: "https://api.groq.com/openai/v1",
+    requires_api_key: true,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: false,
+    api_key_label: "Groq API key",
+    model_label: "Groq model",
+    base_url_label: "Groq base URL",
+  },
+  {
+    id: "ollama",
+    label: "Ollama",
+    description: "Local Ollama instance using the OpenAI-compatible bridge.",
+    default_model: "llama3.2",
+    model_prefix: "ollama",
+    default_api_base: "http://localhost:11434",
+    requires_api_key: false,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: false,
+    api_key_label: "Ollama API key (optional)",
+    model_label: "Ollama model",
+    base_url_label: "Ollama base URL",
+  },
+  {
+    id: "minimax",
+    label: "Minimax (Token plan)",
+    description: "MiniMax API (M2.5, M2.7, etc.) via LiteLLM.",
+    default_model: "minimax-m2.5",
+    model_prefix: "minimax",
+    default_api_base: "https://api.minimax.io/anthropic/v1",
+    requires_api_key: true,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: false,
+    always_prefix_model: false,
+    api_key_label: "Minimax API key",
+    model_label: "Minimax model",
+    base_url_label: "Minimax base URL",
+  },
+  {
+    id: "custom",
+    label: "Custom OpenAI-compatible",
+    description: "Any custom LiteLLM target with configurable base URL and model prefix.",
+    default_model: "gpt-4.1-mini",
+    model_prefix: "openai",
+    default_api_base: "http://localhost:8000/v1",
+    requires_api_key: false,
+    supports_custom_base_url: true,
+    supports_custom_model: true,
+    supports_model_prefix_override: true,
+    always_prefix_model: false,
+    api_key_label: "API key (optional)",
+    model_label: "Model name",
+    base_url_label: "Base URL",
+  },
+];
+
 function L({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
     <label className="grid min-h-[112px] grid-rows-[auto_auto_1fr] gap-1.5 text-sm text-[var(--text-strong)]">
@@ -425,7 +604,7 @@ export function SystemPage() {
   }, [filters.token]);
 
   const initialForm = useMemo(() => (configData ? buildForm(configData.config) : null), [configData]);
-  const providerOptions = configData?.providers ?? [];
+  const providerOptions = configData?.providers?.length ? configData.providers : FALLBACK_PROVIDERS;
   const providerOptionsForSelect = useMemo(
     () => providerOptions.map((provider) => ({ value: provider.id, label: provider.label })),
     [providerOptions],
@@ -443,6 +622,36 @@ export function SystemPage() {
   const useSeparateWhatsAppBridge = (form?.whatsapp_mode ?? "separate") === "separate";
   const mainProvider = form ? providerMap.get(form.llm_provider_id) ?? null : null;
   const workerProvider = form ? providerMap.get(form.worker_llm_provider_id) ?? null : null;
+
+  useEffect(() => {
+    if (!form || providerOptions.length === 0) {
+      return;
+    }
+    const preferredProvider = providerMap.get("zai") ?? providerOptions[0] ?? null;
+    if (!preferredProvider) {
+      return;
+    }
+
+    let nextForm = form;
+    let changed = false;
+
+    if (!form.llm_provider_id || !providerMap.has(form.llm_provider_id)) {
+      nextForm = applyProviderDefaults(nextForm, preferredProvider, "main");
+      changed = true;
+    }
+
+    if (
+      form.worker_llm_enabled &&
+      (!form.worker_llm_provider_id || !providerMap.has(form.worker_llm_provider_id))
+    ) {
+      nextForm = applyProviderDefaults(nextForm, preferredProvider, "worker");
+      changed = true;
+    }
+
+    if (changed) {
+      setForm(nextForm);
+    }
+  }, [form, providerMap, providerOptions]);
 
   if (loading) {
     return <section className={panel}><h2 className="text-2xl font-semibold text-white">System</h2><p className="mt-2 text-sm text-[var(--text-muted)]">Loading system diagnostics...</p></section>;
