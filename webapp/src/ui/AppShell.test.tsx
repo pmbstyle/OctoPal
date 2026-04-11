@@ -12,8 +12,8 @@ describe("AppShell", () => {
 
     render(<RouterProvider router={router} />);
 
-    expect(screen.getByText("Operations Control Center")).toBeInTheDocument();
-    expect(screen.getByText("Window")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Control" })).toBeInTheDocument();
+    expect(screen.getAllByText("Live operating surface").length).toBeGreaterThan(0);
     expect(screen.getByText("Dashboard token")).toBeInTheDocument();
     expect(screen.getByText("Loading live operations view...")).toBeInTheDocument();
   });

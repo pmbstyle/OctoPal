@@ -10,8 +10,6 @@ type WorkersResponse =
   paths["/api/dashboard/v2/workers"]["get"]["responses"]["200"]["content"]["application/json"];
 type SystemResponse =
   paths["/api/dashboard/v2/system"]["get"]["responses"]["200"]["content"]["application/json"];
-type ActionsResponse =
-  paths["/api/dashboard/v2/actions"]["get"]["responses"]["200"]["content"]["application/json"];
 
 export type DashboardEditableConfig = {
   user_channel: string;
@@ -133,13 +131,6 @@ export type WorkerTemplate = {
   updated_at?: string;
 };
 
-type ActionRequest = {
-  action: "restart_worker" | "retry_failed" | "clear_control_queue";
-  worker_id?: string;
-  confirm?: boolean;
-  reason?: string;
-};
-
 export type DashboardQueryParams = {
   windowMinutes: 15 | 60 | 240 | 1440;
   service: "all" | "gateway" | "octo" | "telegram" | "exec_run" | "mcp" | "workers";
@@ -204,10 +195,6 @@ export async function fetchSystem(params: DashboardQueryParams): Promise<SystemR
   return fetchJson<SystemResponse>(withQuery("/api/dashboard/v2/system", params), params.token);
 }
 
-export async function fetchActions(params: DashboardQueryParams): Promise<ActionsResponse> {
-  return fetchJson<ActionsResponse>(withQuery("/api/dashboard/v2/actions", params), params.token);
-}
-
 export async function fetchDashboardConfig(token?: string): Promise<DashboardConfigResponse> {
   return fetchJson<DashboardConfigResponse>("/api/dashboard/config", token);
 }
@@ -217,10 +204,6 @@ export async function updateDashboardConfig(
   token?: string,
 ): Promise<DashboardConfigSaveResponse> {
   return mutateJson<DashboardConfigSaveResponse>("/api/dashboard/config", "PUT", token, payload);
-}
-
-export async function runDashboardAction(payload: ActionRequest, token?: string): Promise<Record<string, unknown>> {
-  return mutateJson<Record<string, unknown>>("/api/dashboard/actions", "POST", token, payload);
 }
 
 export async function fetchWorkerTemplates(token?: string): Promise<WorkerTemplate[]> {

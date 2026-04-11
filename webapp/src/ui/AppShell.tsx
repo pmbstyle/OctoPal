@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { Activity, Bell, Bot, Layers3, Settings2, Siren, Wrench } from "lucide-react";
+import { Activity, Settings2, Siren, Wrench } from "lucide-react";
 
 import octopalLogo from "../assets/octopal-logo.png";
 import { Button } from "@/components/ui/button";
@@ -35,8 +35,6 @@ const navGroups: { title: string; items: NavItem[] }[] = [
     title: "Operations",
     items: [
       { to: "/", label: "Control", description: "Live operating surface", icon: Activity },
-      { to: "/overview", label: "Overview", description: "Health, KPIs, incidents", icon: Layers3 },
-      { to: "/octo", label: "Octo", description: "Runtime state and coordination", icon: Bot },
       { to: "/incidents", label: "Incidents", description: "Open signals and pressure", icon: Siren },
     ],
   },
@@ -45,7 +43,6 @@ const navGroups: { title: string; items: NavItem[] }[] = [
     items: [
       { to: "/workers", label: "Workers", description: "Templates and worker setup", icon: Wrench },
       { to: "/system", label: "System", description: "Host, queues, and stability", icon: Settings2 },
-      { to: "/actions", label: "Actions", description: "Operator actions and controls", icon: Bell },
     ],
   },
 ];
