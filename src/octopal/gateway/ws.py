@@ -18,6 +18,41 @@ from octopal.utils import get_tailscale_ips, should_suppress_user_delivery
 logger = structlog.get_logger(__name__)
 
 
+async def _ws_send_json(
+    session: _ActiveWsSession,
+    payload: dict[str, Any],
+    *,
+    event_name: str,
+    chat_id: int | None = None,
+) -> None:
+    async with session.send_lock:
+        try:
+            logger.debug(
+                "Sending WebSocket payload",
+                connection_id=session.connection_id,
+                event_name=event_name,
+                chat_id=chat_id,
+                payload_type=payload.get("type"),
+            )
+            await session.socket.send_json(payload)
+            logger.debug(
+                "Sent WebSocket payload",
+                connection_id=session.connection_id,
+                event_name=event_name,
+                chat_id=chat_id,
+                payload_type=payload.get("type"),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to send WebSocket payload",
+                connection_id=session.connection_id,
+                event_name=event_name,
+                chat_id=chat_id,
+                payload_type=payload.get("type"),
+            )
+            raise
+
+
 def _build_ws_file_payload(file_path: str, caption: str | None = None) -> dict[str, Any]:
     path = Path(file_path).resolve()
     data = path.read_bytes()
@@ -65,6 +100,7 @@ def _resolve_ws_chat_id(settings: Any) -> int:
 class _ActiveWsSession:
     connection_id: str
     socket: WebSocket
+    send_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     closed: asyncio.Event = field(default_factory=asyncio.Event)
 
 
@@ -132,7 +168,11 @@ def register_ws_routes(app: FastAPI) -> None:
         octo: Octo | None = getattr(app.state, "octo", None)
         if not octo:
             logger.error("Octo not initialized in app state")
-            await socket.send_json({"type": "error", "message": "Octo not initialized"})
+            await _ws_send_json(
+                session,
+                {"type": "error", "message": "Octo not initialized"},
+                event_name="init_error",
+            )
             await socket.close(code=status.WS_1011_INTERNAL_ERROR)
             return
 
@@ -141,20 +181,45 @@ def register_ws_routes(app: FastAPI) -> None:
             if should_suppress_user_delivery(text):
                 logger.debug("Suppressed control response for WebSocket delivery", chat_id=chat_id)
                 return
-            await socket.send_json({"type": "message", "text": text})
+            await _ws_send_json(
+                session,
+                {"type": "message", "text": text},
+                event_name="channel_message",
+                chat_id=chat_id,
+            )
 
         async def _ws_progress(chat_id: int, state: str, text: str, meta: dict) -> None:
-            await socket.send_json({"type": "progress", "state": state, "text": text, "meta": meta})
+            await _ws_send_json(
+                session,
+                {"type": "progress", "state": state, "text": text, "meta": meta},
+                event_name="progress",
+                chat_id=chat_id,
+            )
 
         async def _ws_typing(chat_id: int, active: bool) -> None:
-            await socket.send_json({"type": "typing", "active": active})
+            await _ws_send_json(
+                session,
+                {"type": "typing", "active": active},
+                event_name="typing",
+                chat_id=chat_id,
+            )
 
         async def _ws_send_file(chat_id: int, file_path: str, caption: str | None = None) -> None:
             payload = _build_ws_file_payload(file_path, caption=caption)
-            await socket.send_json({"type": "file", **payload})
+            await _ws_send_json(
+                session,
+                {"type": "file", **payload},
+                event_name="file",
+                chat_id=chat_id,
+            )
 
         async def _ws_worker_event(chat_id: int, event: str, payload: dict[str, Any]) -> None:
-            await socket.send_json({"type": "worker_event", "event": event, "payload": payload})
+            await _ws_send_json(
+                session,
+                {"type": "worker_event", "event": event, "payload": payload},
+                event_name="worker_event",
+                chat_id=chat_id,
+            )
 
         # A newer WS client takes over the interactive channel from any older session.
         async with app.state.ws_session_lock:
@@ -167,11 +232,13 @@ def register_ws_routes(app: FastAPI) -> None:
                     new_owner=connection_id,
                 )
                 try:
-                    await previous_session.socket.send_json(
+                    await _ws_send_json(
+                        previous_session,
                         {
                             "type": "warning",
                             "message": "Another WebSocket client connected and took over this session.",
-                        }
+                        },
+                        event_name="takeover_warning",
                     )
                 except Exception:
                     logger.debug("Failed to notify previous WebSocket session before takeover", exc_info=True)
@@ -204,7 +271,11 @@ def register_ws_routes(app: FastAPI) -> None:
                 app.state.active_ws_session = session
 
         if not claimed:
-            await socket.send_json({"type": "error", "message": "Another WebSocket session is currently active."})
+            await _ws_send_json(
+                session,
+                {"type": "error", "message": "Another WebSocket session is currently active."},
+                event_name="session_conflict",
+            )
             await socket.close(code=status.WS_1013_TRY_AGAIN_LATER)
             return
 
@@ -213,14 +284,16 @@ def register_ws_routes(app: FastAPI) -> None:
         except Exception:
             logger.debug("Failed to load active workers snapshot for WebSocket session", exc_info=True)
             active_workers = []
-        await socket.send_json(
+        await _ws_send_json(
+            session,
             {
                 "type": "workers_snapshot",
                 "workers": _serialize_worker_snapshot(active_workers),
-            }
+            },
+            event_name="workers_snapshot",
         )
 
-        approvals = WsApprovalManager(send=lambda payload: socket.send_json(payload))
+        approvals = WsApprovalManager(send=lambda payload: _ws_send_json(session, payload, event_name="approval_request"))
         tasks: set[asyncio.Task] = set()
 
         try:
@@ -235,7 +308,7 @@ def register_ws_routes(app: FastAPI) -> None:
                     if isinstance(payload_chat_id, int) and payload_chat_id > 0:
                         chat_id = payload_chat_id
 
-                    task = asyncio.create_task(_handle_message(socket, octo, approvals, message, chat_id))
+                    task = asyncio.create_task(_handle_message(session, octo, approvals, message, chat_id))
                     tasks.add(task)
                     task.add_done_callback(lambda t: tasks.discard(t))
                     continue
@@ -248,7 +321,7 @@ def register_ws_routes(app: FastAPI) -> None:
                     continue
 
                 if msg_type == "ping":
-                    await socket.send_json({"type": "pong"})
+                    await _ws_send_json(session, {"type": "pong"}, event_name="pong")
         except WebSocketDisconnect:
             logger.info("WebSocket disconnected", host=client_host)
         finally:
@@ -263,7 +336,7 @@ def register_ws_routes(app: FastAPI) -> None:
 
 
 async def _handle_message(
-    socket: WebSocket,
+    session: _ActiveWsSession,
     octo: Octo,
     approvals: WsApprovalManager,
     payload: dict[str, Any],
@@ -286,4 +359,15 @@ async def _handle_message(
     if not decision.user_visible:
         logger.debug("Suppressed control response for WebSocket reply", chat_id=chat_id)
         return
-    await socket.send_json({"type": "message", "text": decision.text})
+    logger.info(
+        "Sending final WebSocket reply",
+        chat_id=chat_id,
+        connection_id=session.connection_id,
+        text_len=len(decision.text),
+    )
+    await _ws_send_json(
+        session,
+        {"type": "message", "text": decision.text},
+        event_name="final_reply",
+        chat_id=chat_id,
+    )

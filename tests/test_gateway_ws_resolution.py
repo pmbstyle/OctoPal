@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from octopal.gateway.ws import _build_ws_file_payload, _resolve_ws_chat_id, register_ws_routes
+from octopal.runtime.octo.core import OctoReply
 
 
 def test_resolve_ws_chat_id_returns_positive_when_no_allowlist() -> None:
@@ -64,3 +65,42 @@ def test_build_ws_file_payload_includes_base64_metadata(tmp_path: Path) -> None:
     assert payload["encoding"] == "base64"
     assert payload["caption"] == "Attached"
     assert payload["path"] == str(file_path.resolve())
+
+
+def test_websocket_message_is_delivered_as_client_expects() -> None:
+    class DummyStore:
+        def get_active_workers(self):
+            return []
+
+    class DummyOcto:
+        def __init__(self) -> None:
+            self.owner: str | None = None
+            self.store = DummyStore()
+
+        def set_output_channel(self, is_ws: bool, **kwargs) -> bool:
+            owner_id = kwargs.get("owner_id")
+            force = bool(kwargs.get("force"))
+            if is_ws:
+                if self.owner and owner_id and self.owner != owner_id and not force:
+                    return False
+                self.owner = owner_id
+                return True
+            if self.owner and owner_id and self.owner != owner_id and not force:
+                return False
+            self.owner = None
+            return True
+
+        async def handle_message(self, text: str, chat_id: int, **kwargs) -> OctoReply:
+            assert text == "hello"
+            assert chat_id > 0
+            return OctoReply(immediate="Hi from Octo", followup=None, followup_required=False)
+
+    app = FastAPI()
+    app.state.settings = SimpleNamespace(tailscale_ips="testclient", allowed_telegram_chat_ids="")
+    app.state.octo = DummyOcto()
+    register_ws_routes(app)
+
+    with TestClient(app) as client, client.websocket_connect("/ws") as ws:
+        assert ws.receive_json() == {"type": "workers_snapshot", "workers": []}
+        ws.send_json({"type": "message", "text": "hello"})
+        assert ws.receive_json() == {"type": "message", "text": "Hi from Octo"}
