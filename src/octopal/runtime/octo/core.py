@@ -36,6 +36,7 @@ from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.metrics import update_component_gauges
 from octopal.runtime.octo.delivery import (
     DeliveryMode,
+    _result_has_blocking_failure,
     resolve_user_delivery,
     resolve_worker_followup_delivery,
 )
@@ -47,10 +48,11 @@ from octopal.runtime.octo.router import (
     build_forced_worker_followup,
     normalize_plain_text,
     route_or_reply,
-    route_worker_result_back_to_octo,
+    route_worker_results_back_to_octo,
     should_force_worker_followup,
 )
 from octopal.runtime.policy.engine import PolicyEngine
+from octopal.runtime.scheduler.service import normalize_notify_user_policy
 from octopal.runtime.scheduler.service import SchedulerService
 from octopal.runtime.workers.contracts import TaskRequest, WorkerResult
 from octopal.runtime.workers.runtime import WorkerRuntime
@@ -81,9 +83,17 @@ _RESET_CONFIDENCE_MIN = 0.7
 @dataclass
 class _PendingWorkerFollowupBatch:
     texts: list[str]
+    items: list[_PendingWorkerFollowupItem]
     task: asyncio.Task | None = None
     loop: asyncio.AbstractEventLoop | None = None
     created_during_active_turn: bool = False
+
+
+@dataclass(frozen=True)
+class _PendingWorkerFollowupItem:
+    task_text: str
+    result: WorkerResult
+    notify_user: str | None = None
 
 
 def _build_worker_result_timeout_followup(result: WorkerResult) -> str:
@@ -97,6 +107,78 @@ def _build_worker_result_timeout_followup(result: WorkerResult) -> str:
         lines.extend(f"- {question}" for question in result.questions[:3] if str(question).strip())
 
     return "\n".join(lines).strip()
+
+
+def _build_worker_result_batch_timeout_followup(items: list[_PendingWorkerFollowupItem]) -> str:
+    if len(items) == 1:
+        return _build_worker_result_timeout_followup(items[0].result)
+
+    lines = [f"{len(items)} worker tasks finished, but the follow-up routing step timed out."]
+    questions: list[str] = []
+    for item in items:
+        for question in item.result.questions[:3]:
+            value = str(question).strip()
+            if value and value not in questions:
+                questions.append(value)
+    if questions:
+        lines.append("")
+        lines.append("Open questions:")
+        lines.extend(f"- {question}" for question in questions[:5])
+    return "\n".join(lines).strip()
+
+
+def _build_worker_followup_batch_result(items: list[_PendingWorkerFollowupItem]) -> WorkerResult:
+    summaries = [str(item.result.summary or "").strip() for item in items if str(item.result.summary or "").strip()]
+    questions: list[str] = []
+    knowledge_proposals = []
+    tools_used: list[str] = []
+    has_failure = False
+    for item in items:
+        if _result_has_blocking_failure(item.result):
+            has_failure = True
+        for question in item.result.questions:
+            value = str(question).strip()
+            if value and value not in questions:
+                questions.append(value)
+        for proposal in item.result.knowledge_proposals:
+            if proposal not in knowledge_proposals:
+                knowledge_proposals.append(proposal)
+        for tool_name in item.result.tools_used:
+            value = str(tool_name).strip()
+            if value and value not in tools_used:
+                tools_used.append(value)
+    summary = "\n\n".join(summaries)
+    if has_failure and "failed" not in summary.lower():
+        summary = f"{summary}\n\nAt least one worker failed.".strip()
+    return WorkerResult(
+        status="failed" if has_failure else "completed",
+        summary=summary,
+        output={"status": "failed" if has_failure else "completed", "batched_count": len(items)},
+        questions=questions,
+        knowledge_proposals=knowledge_proposals,
+        tools_used=tools_used,
+    )
+
+
+def _build_forced_worker_followup_batch(items: list[_PendingWorkerFollowupItem]) -> str:
+    if len(items) == 1:
+        return build_forced_worker_followup(items[0].result)
+
+    synthetic = _build_worker_followup_batch_result(items)
+    if synthetic.questions:
+        return "Tasks finished. I need your input on the next step."
+    if synthetic.status == "failed":
+        return f"Completed {len(items)} worker tasks, but at least one needs attention."
+    return f"Completed {len(items)} worker tasks. The results are ready."
+
+
+def _combine_worker_followup_notify_policy(items: list[_PendingWorkerFollowupItem]) -> str | None:
+    policies = [normalize_notify_user_policy(item.notify_user) for item in items]
+    if any(policy == "always" for policy in policies):
+        return "always"
+    if policies and all(policy == "never" for policy in policies):
+        return "never"
+    return "if_significant"
 
 
 def _coerce_control_plane_reply(text: str) -> str:
@@ -538,13 +620,66 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
         batch = _WORKER_FOLLOWUP_BATCHES.pop(batch_key, None)
         if batch is None:
             return
-        final_text = _merge_worker_followup_texts(batch.texts)
+        batched_count = len(batch.texts) + len(batch.items)
+        merged_texts = list(batch.texts)
+
+        if batch.items:
+            try:
+                batched_text = await asyncio.wait_for(
+                    route_worker_results_back_to_octo(
+                        octo,
+                        chat_id,
+                        [(item.task_text, item.result) for item in batch.items],
+                    ),
+                    timeout=_WORKER_RESULT_ROUTING_TIMEOUT_SECONDS,
+                )
+            except TimeoutError:
+                logger.warning(
+                    "Worker-result batch routing timed out",
+                    chat_id=chat_id,
+                    batched_count=len(batch.items),
+                )
+                batched_text = _build_worker_result_batch_timeout_followup(batch.items)
+
+            pending_closure = octo.has_pending_conversational_closure(correlation_id)
+            synthetic_result = _build_worker_followup_batch_result(batch.items)
+            notify_user = _combine_worker_followup_notify_policy(batch.items)
+            delivery = resolve_worker_followup_delivery(
+                batched_text,
+                result=synthetic_result,
+                pending_closure=pending_closure,
+                suppress_followup=octo.should_suppress_turn_followups(correlation_id),
+                should_force=any(should_force_worker_followup(item.result) for item in batch.items),
+                notify_user=notify_user,
+                forced_text_factory=lambda _result: _build_forced_worker_followup_batch(batch.items),
+            )
+            if delivery.reason == "forced_substantive_followup":
+                logger.info(
+                    "Forcing substantive batched worker follow-up",
+                    chat_id=chat_id,
+                    batched_count=len(batch.items),
+                )
+            if delivery.user_visible:
+                merged_texts.append(delivery.text)
+            else:
+                octo.clear_pending_conversational_closure(correlation_id)
+                if not merged_texts:
+                    logger.info(
+                        "Internal worker follow-up skipped",
+                        chat_id=chat_id,
+                        reason=delivery.reason,
+                        batched_count=batched_count,
+                    )
+                    return
+
+        final_text = _merge_worker_followup_texts(merged_texts)
         if not final_text:
+            octo.clear_pending_conversational_closure(correlation_id)
             logger.info(
                 "Internal worker follow-up skipped",
                 chat_id=chat_id,
                 reason="empty_batched_followup",
-                batched_count=len(batch.texts),
+                batched_count=batched_count,
             )
             return
         await _send_worker_followup(
@@ -552,7 +687,7 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
             chat_id,
             correlation_id,
             final_text,
-            batched_count=len(batch.texts),
+            batched_count=batched_count,
         )
     except asyncio.CancelledError:
         raise
@@ -610,10 +745,25 @@ async def _enqueue_batched_worker_followup(
     octo: Octo,
     chat_id: int,
     correlation_id: str | None,
-    text: str,
+    text: str | None = None,
+    *,
+    task_text: str | None = None,
+    result: WorkerResult | None = None,
+    notify_user: str | None = None,
 ) -> None:
     if not correlation_id:
-        await _send_worker_followup(octo, chat_id, correlation_id, text)
+        if text is not None:
+            await _send_worker_followup(octo, chat_id, correlation_id, text)
+            return
+        if task_text is not None and result is not None:
+            routed_text = await route_worker_results_back_to_octo(
+                octo,
+                chat_id,
+                [(task_text, result)],
+            )
+            decision = resolve_user_delivery(routed_text)
+            if decision.user_visible:
+                await _send_worker_followup(octo, chat_id, correlation_id, decision.text)
         return
 
     loop = asyncio.get_running_loop()
@@ -626,9 +776,18 @@ async def _enqueue_batched_worker_followup(
         _WORKER_FOLLOWUP_BATCHES.pop(batch_key, None)
         batch = None
     if batch is None:
-        batch = _PendingWorkerFollowupBatch(texts=[], loop=loop)
+        batch = _PendingWorkerFollowupBatch(texts=[], items=[], loop=loop)
         _WORKER_FOLLOWUP_BATCHES[batch_key] = batch
-    batch.texts.append(text)
+    if text is not None:
+        batch.texts.append(text)
+    if task_text is not None and result is not None:
+        batch.items.append(
+            _PendingWorkerFollowupItem(
+                task_text=task_text,
+                result=result,
+                notify_user=notify_user,
+            )
+        )
     if octo.has_active_user_turn(correlation_id):
         batch.created_during_active_turn = True
     _schedule_worker_followup_flush(octo, chat_id, correlation_id)
@@ -679,56 +838,27 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
             if chat_id <= 0:
                 logger.info("Skipping user follow-up for internal chat", chat_id=chat_id)
             else:
-                # Always route worker result back through Octo decision logic.
-                # User delivery is a separate concern from internal decision-making.
-                try:
-                    final_text = await asyncio.wait_for(
-                        route_worker_result_back_to_octo(octo, chat_id, task_text, result),
-                        timeout=_WORKER_RESULT_ROUTING_TIMEOUT_SECONDS,
-                    )
-                except TimeoutError:
-                    logger.warning("Worker-result routing timed out", chat_id=chat_id)
-                    final_text = _build_worker_result_timeout_followup(result)
-
-                pending_closure = octo.has_pending_conversational_closure(correlation_id)
-                delivery = resolve_worker_followup_delivery(
-                    final_text,
-                    result=result,
-                    pending_closure=pending_closure,
-                    suppress_followup=octo.should_suppress_turn_followups(correlation_id),
-                    should_force=should_force_worker_followup(result),
-                    notify_user=notify_user,
-                    forced_text_factory=build_forced_worker_followup,
-                )
-                if delivery.reason == "forced_substantive_followup":
-                    logger.info("Forcing substantive worker follow-up", chat_id=chat_id)
-
-                if delivery.mode == DeliveryMode.DEFERRED:
-                    await _enqueue_batched_worker_followup(
-                        octo,
-                        chat_id,
-                        correlation_id,
-                        delivery.text,
-                    )
-                    octo.clear_pending_conversational_closure(correlation_id)
-                    logger.info(
-                        "Internal worker follow-up deferred",
-                        chat_id=chat_id,
-                        reason=delivery.reason,
-                    )
-                elif delivery.mode == DeliveryMode.SILENT:
+                notify_policy = normalize_notify_user_policy(notify_user)
+                if notify_policy == "never" and not _result_has_blocking_failure(result):
                     octo.clear_pending_conversational_closure(correlation_id)
                     logger.info(
                         "Internal worker follow-up skipped",
                         chat_id=chat_id,
-                        reason=delivery.reason,
+                        reason="scheduled_notify_never",
                     )
-                elif delivery.mode == DeliveryMode.IMMEDIATE:
+                else:
                     await _enqueue_batched_worker_followup(
                         octo,
                         chat_id,
                         correlation_id,
-                        delivery.text,
+                        task_text=task_text,
+                        result=result,
+                        notify_user=notify_user,
+                    )
+                    logger.info(
+                        "Internal worker follow-up deferred",
+                        chat_id=chat_id,
+                        reason="batched_worker_results",
                     )
             logger.debug("Worker result processed", summary_len=len(result.summary or ""))
         except Exception:

@@ -408,13 +408,14 @@ async def test_suppressed_worker_followup_is_deferred_until_internal_turn_finish
     async def _send(chat_id, text):
         sent_messages.append((chat_id, text))
 
-    async def _route_worker_result_back_to_octo(_octo, _chat_id, _task_text, _result):
+    async def _route_worker_results_back_to_octo(_octo, _chat_id, worker_results):
+        assert len(worker_results) == 1
         return "Подготовила итог по расписанию."
 
     monkeypatch.setattr(
         octo_core,
-        "route_worker_result_back_to_octo",
-        _route_worker_result_back_to_octo,
+        "route_worker_results_back_to_octo",
+        _route_worker_results_back_to_octo,
     )
 
     octo = Octo(
@@ -449,6 +450,70 @@ async def test_suppressed_worker_followup_is_deferred_until_internal_turn_finish
         role == "assistant" and text == "Подготовила итог по расписанию."
         for role, text, _metadata in memory_messages
     )
+
+
+@pytest.mark.asyncio
+async def test_structured_worker_followups_route_once_per_batch(monkeypatch):
+    monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
+    octo_core._WORKER_FOLLOWUP_BATCHES.clear()
+
+    sent_messages = []
+    memory_messages = []
+    routed_batches = []
+
+    class DummyMemory:
+        async def add_message(self, role, text, metadata):
+            memory_messages.append((role, text, metadata))
+
+    async def _send(chat_id, text):
+        sent_messages.append((chat_id, text))
+
+    async def _route_worker_results_back_to_octo(_octo, _chat_id, worker_results):
+        routed_batches.append([(task_text, result.summary) for task_text, result in worker_results])
+        return "Объединила оба результата в один ответ."
+
+    monkeypatch.setattr(
+        octo_core,
+        "route_worker_results_back_to_octo",
+        _route_worker_results_back_to_octo,
+    )
+
+    octo = Octo(
+        approvals=None,
+        memory=DummyMemory(),
+        canon=None,
+        provider=None,
+        store=None,
+        policy=None,
+        runtime=None,
+        internal_send=_send,
+    )
+
+    await _enqueue_batched_worker_followup(
+        octo,
+        123,
+        "corr-structured",
+        task_text="Task A",
+        result=WorkerResult(summary="Result A"),
+    )
+    await _enqueue_batched_worker_followup(
+        octo,
+        123,
+        "corr-structured",
+        task_text="Task B",
+        result=WorkerResult(summary="Result B"),
+    )
+    await octo_core._flush_worker_followup_batch(octo, 123, "corr-structured")
+
+    assert routed_batches == [[("Task A", "Result A"), ("Task B", "Result B")]]
+    assert sent_messages == [(123, "Объединила оба результата в один ответ.")]
+    assert memory_messages == [
+        (
+            "assistant",
+            "Объединила оба результата в один ответ.",
+            {"chat_id": 123, "worker_followup": True, "batched_count": 2},
+        )
+    ]
 
 
 @pytest.mark.asyncio
