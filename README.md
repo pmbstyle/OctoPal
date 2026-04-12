@@ -168,7 +168,6 @@ uv run octopal configure
 
 - `uv run octopal configure` writes the structured config there.
 - Runtime loads `config.json` and maps it into legacy settings for older code paths.
-- `.env` is no longer part of the supported configuration flow.
 
 ### Start
 
