@@ -56,8 +56,7 @@
 
 - Use `uv run octopal configure` to manage the primary `config.json` settings.
 - **Tailscale Integration:** Managed in the `gateway` section of `config.json` via `tailscale_auto_serve` (boolean) and `tailscale_ips` (comma-separated string).
-- Important settings include channel credentials, provider API keys, dashboard protection, and `OCTOPAL_STATE_DIR` / workspace paths.
-- Copy `.env.example` to `.env` for legacy fallback or environment-level overrides (e.g., `OCTOPAL_TAILSCALE_AUTO_SERVE=1`).
+- Important settings include channel credentials, provider API keys, dashboard protection, and the storage paths in `config.json`.
 - Treat `data/`, WhatsApp auth state, and generated workspace files as local runtime artifacts unless the repo explicitly needs fixtures.
 
 ## Octo Context Reset Policy
