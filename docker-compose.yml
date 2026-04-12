@@ -4,8 +4,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile
       target: worker
-    env_file: .env
     volumes:
+      - ./config.json:/app/config.json:ro
       - ./data:/app/data
       - ./workspace:/app/workspace
       # Windows Docker Desktop socket

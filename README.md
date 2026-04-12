@@ -164,13 +164,11 @@ uv run octopal configure
 
 ### Configuration model
 
-`config.json` is now the primary configuration file.
+`config.json` is the configuration file.
 
 - `uv run octopal configure` writes the structured config there.
-- Runtime loads `config.json` first and maps it into legacy settings for older code paths.
-- If both files exist, `config.json` wins for overlapping settings.
-
-In practice: use the wizard and treat `.env.example` as a compatibility reference, not the main setup path.
+- Runtime loads `config.json` and maps it into legacy settings for older code paths.
+- `.env` is no longer part of the supported configuration flow.
 
 ### Start
 

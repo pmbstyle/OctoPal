@@ -23,7 +23,6 @@ from octopal.cli.wizard import (
 )
 from octopal.infrastructure.config.models import LLMConfig, OctopalConfig
 from octopal.infrastructure.config.settings import (
-    _resolve_env_file,
     load_config,
     save_config,
 )
@@ -138,17 +137,6 @@ def configure_wizard() -> None:
 
     config = load_config()
     original_config = config.model_copy(deep=True)
-
-    # Check if migration is needed
-    env_file = _resolve_env_file()
-    if (
-        env_file
-        and env_file.exists()
-        and not Path("config.json").exists()
-        and Confirm.ask("[yellow]Found legacy .env but no config.json. Migrate now?[/yellow]", default=True)
-    ):
-        save_config(config)
-        console.print("[green]Migration complete. Continuing with wizard...[/green]")
 
     sections = _build_sections(config, prompter)
     for section in sections:
