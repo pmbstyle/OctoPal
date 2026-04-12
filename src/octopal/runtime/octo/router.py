@@ -590,27 +590,7 @@ async def route_worker_result_back_to_octo(
     result: WorkerResult,
 ) -> str:
     """Decide next steps after a worker completes its task."""
-    output_summary = result.output
-    output_truncated = False
-    available_keys = []
-
-    if isinstance(result.output, dict):
-        available_keys = list(result.output.keys())
-        if len(json.dumps(result.output)) > 64000:
-            output_summary = {k: f"<{type(v).__name__}>" for k, v in result.output.items()}
-            output_truncated = True
-
-    payload = {
-        "task": task_text,
-        "summary": result.summary,
-        "output": output_summary,
-        "output_truncated": output_truncated,
-        "available_keys": available_keys,
-        "questions": result.questions,
-        "knowledge_proposals": [p.model_dump() for p in result.knowledge_proposals],
-        "tools_used": result.tools_used,
-    }
-    payload_json = json.dumps(payload, ensure_ascii=False)
+    payload_json = json.dumps(_build_worker_result_payload(task_text, result), ensure_ascii=False)
 
     worker_result_prompt = (
         "Worker completed. Decide and execute next action based on this payload.\n"
@@ -638,6 +618,71 @@ async def route_worker_result_back_to_octo(
         internal_followup=True,
     )
     return normalize_plain_text(reply_text)
+
+
+async def route_worker_results_back_to_octo(
+    octo: Any,
+    chat_id: int,
+    worker_results: list[tuple[str, WorkerResult]],
+) -> str:
+    """Decide on one combined follow-up after one or more workers complete."""
+    payload_json = json.dumps(
+        [_build_worker_result_payload(task_text, result) for task_text, result in worker_results],
+        ensure_ascii=False,
+    )
+
+    worker_result_prompt = (
+        "One or more workers completed for the same user request. Decide whether the user needs "
+        "one combined follow-up now based on these payloads.\n"
+        "<worker_results>\n"
+        f"{payload_json}\n"
+        "</worker_results>\n\n"
+        "Interpretation rules:\n"
+        "- Each `summary` is internal worker/runtime text and is not user-facing by default.\n"
+        "- Never forward transport/debug/auth/orchestration text to the user.\n"
+        "- If you answer the user, write exactly one clean Octo response in plain language.\n"
+        "- Synthesize across the payloads once; do not emit multiple overlapping summaries.\n\n"
+        "If any payload output is truncated and you need specific details, use `get_worker_output_path`.\n"
+        "If there are knowledge_proposals, review them and use `manage_canon` to save them if valid.\n"
+        "If a user-facing response is required now, provide it in plain text.\n"
+        "If no user-facing response is needed, return exactly: NO_USER_RESPONSE"
+    )
+
+    bootstrap_context = await build_bootstrap_context_prompt(octo.store, chat_id)
+    reply_text = await route_or_reply(
+        octo,
+        octo.provider,
+        octo.memory,
+        worker_result_prompt,
+        chat_id,
+        bootstrap_context.content,
+        internal_followup=True,
+    )
+    return normalize_plain_text(reply_text)
+
+
+def _build_worker_result_payload(task_text: str, result: WorkerResult) -> dict[str, Any]:
+    output_summary = result.output
+    output_truncated = False
+    available_keys = []
+
+    if isinstance(result.output, dict):
+        available_keys = list(result.output.keys())
+        if len(json.dumps(result.output)) > 64000:
+            output_summary = {k: f"<{type(v).__name__}>" for k, v in result.output.items()}
+            output_truncated = True
+
+    payload = {
+        "task": task_text,
+        "summary": result.summary,
+        "output": output_summary,
+        "output_truncated": output_truncated,
+        "available_keys": available_keys,
+        "questions": result.questions,
+        "knowledge_proposals": [p.model_dump() for p in result.knowledge_proposals],
+        "tools_used": result.tools_used,
+    }
+    return payload
 
 
 def should_send_worker_followup(text: str) -> bool:

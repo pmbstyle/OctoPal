@@ -326,6 +326,31 @@ def test_merge_worker_followup_texts_deduplicates_and_joins_updates():
     ) == "Подготовила короткий итог.\n\nСохранила отчёт в `research/report.md`."
 
 
+def test_merge_worker_followup_texts_drops_shorter_overlapping_summary():
+    assert _merge_worker_followup_texts(
+        [
+            (
+                "Окей, оба исследования вернулись. Рассказываю!\n\n"
+                "Kapoor & Narayanan показали, что consistency у моделей плавает, "
+                "а Moltbook после покупки Meta заметно затих."
+            ),
+            (
+                "Окей, покопалась. Вот что нашла.\n\n"
+                "Kapoor & Narayanan показали, что consistency у моделей плавает, "
+                "а Moltbook после покупки Meta заметно затих. "
+                "Главный вывод: reliability растёт медленнее accuracy, "
+                "а по Moltbook массовой миграции пока не видно."
+            ),
+        ]
+    ) == (
+        "Окей, покопалась. Вот что нашла.\n\n"
+        "Kapoor & Narayanan показали, что consistency у моделей плавает, "
+        "а Moltbook после покупки Meta заметно затих. "
+        "Главный вывод: reliability растёт медленнее accuracy, "
+        "а по Moltbook массовой миграции пока не видно."
+    )
+
+
 @pytest.mark.asyncio
 async def test_batched_worker_followups_send_single_combined_message(monkeypatch):
     monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 1.0)
@@ -383,13 +408,14 @@ async def test_suppressed_worker_followup_is_deferred_until_internal_turn_finish
     async def _send(chat_id, text):
         sent_messages.append((chat_id, text))
 
-    async def _route_worker_result_back_to_octo(_octo, _chat_id, _task_text, _result):
+    async def _route_worker_results_back_to_octo(_octo, _chat_id, worker_results):
+        assert len(worker_results) == 1
         return "Подготовила итог по расписанию."
 
     monkeypatch.setattr(
         octo_core,
-        "route_worker_result_back_to_octo",
-        _route_worker_result_back_to_octo,
+        "route_worker_results_back_to_octo",
+        _route_worker_results_back_to_octo,
     )
 
     octo = Octo(
@@ -424,6 +450,70 @@ async def test_suppressed_worker_followup_is_deferred_until_internal_turn_finish
         role == "assistant" and text == "Подготовила итог по расписанию."
         for role, text, _metadata in memory_messages
     )
+
+
+@pytest.mark.asyncio
+async def test_structured_worker_followups_route_once_per_batch(monkeypatch):
+    monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
+    octo_core._WORKER_FOLLOWUP_BATCHES.clear()
+
+    sent_messages = []
+    memory_messages = []
+    routed_batches = []
+
+    class DummyMemory:
+        async def add_message(self, role, text, metadata):
+            memory_messages.append((role, text, metadata))
+
+    async def _send(chat_id, text):
+        sent_messages.append((chat_id, text))
+
+    async def _route_worker_results_back_to_octo(_octo, _chat_id, worker_results):
+        routed_batches.append([(task_text, result.summary) for task_text, result in worker_results])
+        return "Объединила оба результата в один ответ."
+
+    monkeypatch.setattr(
+        octo_core,
+        "route_worker_results_back_to_octo",
+        _route_worker_results_back_to_octo,
+    )
+
+    octo = Octo(
+        approvals=None,
+        memory=DummyMemory(),
+        canon=None,
+        provider=None,
+        store=None,
+        policy=None,
+        runtime=None,
+        internal_send=_send,
+    )
+
+    await _enqueue_batched_worker_followup(
+        octo,
+        123,
+        "corr-structured",
+        task_text="Task A",
+        result=WorkerResult(summary="Result A"),
+    )
+    await _enqueue_batched_worker_followup(
+        octo,
+        123,
+        "corr-structured",
+        task_text="Task B",
+        result=WorkerResult(summary="Result B"),
+    )
+    await octo_core._flush_worker_followup_batch(octo, 123, "corr-structured")
+
+    assert routed_batches == [[("Task A", "Result A"), ("Task B", "Result B")]]
+    assert sent_messages == [(123, "Объединила оба результата в один ответ.")]
+    assert memory_messages == [
+        (
+            "assistant",
+            "Объединила оба результата в один ответ.",
+            {"chat_id": 123, "worker_followup": True, "batched_count": 2},
+        )
+    ]
 
 
 @pytest.mark.asyncio
@@ -605,6 +695,49 @@ async def test_background_delivery_suppresses_unwrapped_internal_heartbeat_text(
     assert reply.delivery_mode == DeliveryMode.SILENT
     assert reply.immediate == "HEARTBEAT_OK"
     assert not any(role == "assistant" for role, _text, _metadata in memory_messages)
+
+
+@pytest.mark.asyncio
+async def test_recent_visible_delivery_suppresses_following_heartbeat_send(monkeypatch):
+    memory_messages = []
+
+    class DummyMemory:
+        async def add_message(self, role, text, metadata):
+            memory_messages.append((role, text, metadata))
+
+    async def _route_or_reply(*args, **kwargs):
+        return "<user_visible>Свежий heartbeat-апдейт.</user_visible>"
+
+    async def _bootstrap_context(*args, **kwargs):
+        return SimpleNamespace(content="", hash="", files=[])
+
+    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply)
+    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_context)
+    monkeypatch.setattr(octo_core, "_HEARTBEAT_USER_VISIBLE_COOLDOWN_SECONDS", 300)
+
+    octo = Octo(
+        approvals=None,
+        memory=DummyMemory(),
+        canon=None,
+        provider=None,
+        store=None,
+        policy=None,
+        runtime=None,
+    )
+    octo.note_user_visible_delivery(123, "Уже отправила итог воркеров.")
+
+    reply = await octo.handle_message(
+        "heartbeat task",
+        123,
+        persist_to_memory=False,
+        track_progress=False,
+        include_wakeup=False,
+        background_delivery=True,
+    )
+
+    assert reply.delivery_mode == DeliveryMode.IMMEDIATE
+    assert reply.immediate == "Свежий heartbeat-апдейт."
+    assert octo.should_suppress_heartbeat_delivery(123, reply.immediate) is True
 
 
 @pytest.mark.asyncio
@@ -799,6 +932,59 @@ async def test_worker_followup_created_during_active_turn_is_dropped_even_with_f
 
     assert sent_messages == []
     assert octo_core._WORKER_FOLLOWUP_BATCHES == {}
+
+
+@pytest.mark.asyncio
+async def test_final_user_reply_drops_active_turn_worker_followup_even_with_pending_internal_results(monkeypatch):
+    monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
+    octo_core._WORKER_FOLLOWUP_BATCHES.clear()
+
+    sent_messages = []
+
+    class DummyMemory:
+        async def add_message(self, role, text, metadata):
+            return None
+
+    async def _send(chat_id, text):
+        sent_messages.append((chat_id, text))
+
+    async def _route_or_reply(*args, **kwargs):
+        await asyncio.sleep(0.02)
+        return "Оба поиска готовы."
+
+    async def _bootstrap_context(*args, **kwargs):
+        return SimpleNamespace(content="", hash="", files=[])
+
+    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply)
+    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_context)
+
+    octo = Octo(
+        approvals=None,
+        memory=DummyMemory(),
+        canon=None,
+        provider=None,
+        store=None,
+        policy=None,
+        runtime=None,
+        internal_send=_send,
+    )
+    correlation_id = "turn-test"
+    octo.mark_internal_result_pending(correlation_id)
+
+    token = octo_core.correlation_id_var.set(correlation_id)
+    try:
+        task = asyncio.create_task(octo.handle_message("test", 123))
+        await asyncio.sleep(0.005)
+        await octo_core._enqueue_batched_worker_followup(octo, 123, correlation_id, "Фоновый итог.")
+        reply = await task
+    finally:
+        octo_core.correlation_id_var.reset(token)
+    await asyncio.sleep(0.03)
+
+    assert reply.immediate == "Оба поиска готовы."
+    assert sent_messages == []
+    assert octo_core._WORKER_FOLLOWUP_BATCHES == {}
+    assert octo.should_suppress_turn_followups(correlation_id) is True
 
 
 def test_octo_does_not_have_web_fetch():

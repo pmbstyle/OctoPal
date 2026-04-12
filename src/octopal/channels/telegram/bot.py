@@ -54,8 +54,15 @@ async def _heartbeat_poker(octo: Octo, interval_seconds: int, chat_id: int):
             if isinstance(reply, OctoReply):
                 text = (reply.immediate or "").strip()
                 if reply.delivery_mode == DeliveryMode.IMMEDIATE and text:
-                    if octo.internal_send:
+                    if octo.should_suppress_heartbeat_delivery(chat_id, text):
+                        logger.info(
+                            "Heartbeat user-visible update suppressed due to recent delivery",
+                            chat_id=chat_id,
+                            text_len=len(text),
+                        )
+                    elif octo.internal_send:
                         await octo.internal_send(chat_id, text)
+                        octo.note_user_visible_delivery(chat_id, text)
                         logger.info("Heartbeat delivered user-visible update", chat_id=chat_id, text_len=len(text))
                     else:
                         logger.warning(
