@@ -61,6 +61,7 @@ from octopal.utils import (
     extract_reaction_and_strip,
     has_no_user_response_suffix,
     is_control_response,
+    sanitize_user_facing_text,
     sanitize_user_facing_text_preserving_reaction,
     should_suppress_user_delivery,
     utc_now,
@@ -160,6 +161,24 @@ def _build_worker_followup_batch_result(items: list[_PendingWorkerFollowupItem])
     )
 
 
+def _build_forced_worker_followup_batch_item(result: WorkerResult) -> str:
+    forced_text = build_forced_worker_followup(result).strip()
+    if forced_text:
+        return forced_text
+
+    summary = sanitize_user_facing_text(result.summary or "").strip()
+    if not summary:
+        return ""
+
+    summary = re.sub(r"^(?:worker completed|completed)\s*:\s*", "", summary, flags=re.IGNORECASE)
+    summary = re.sub(r"\s+", " ", summary).strip(" -")
+    if not summary or should_suppress_user_delivery(summary):
+        return ""
+    if len(summary) > 240:
+        summary = summary[:237].rstrip() + "..."
+    return summary
+
+
 def _build_forced_worker_followup_batch(items: list[_PendingWorkerFollowupItem]) -> str:
     if len(items) == 1:
         return build_forced_worker_followup(items[0].result)
@@ -167,6 +186,19 @@ def _build_forced_worker_followup_batch(items: list[_PendingWorkerFollowupItem])
     synthetic = _build_worker_followup_batch_result(items)
     if synthetic.questions:
         return "Tasks finished. I need your input on the next step."
+    item_summaries: list[str] = []
+    for item in items:
+        summary = _build_forced_worker_followup_batch_item(item.result)
+        if summary and summary not in item_summaries:
+            item_summaries.append(summary)
+    if item_summaries:
+        lead = (
+            f"Completed {len(items)} worker tasks, but at least one needs attention:"
+            if synthetic.status == "failed"
+            else f"Completed {len(items)} worker tasks:"
+        )
+        bullets = "\n".join(f"- {summary}" for summary in item_summaries[:3])
+        return f"{lead}\n{bullets}".strip()
     if synthetic.status == "failed":
         return f"Completed {len(items)} worker tasks, but at least one needs attention."
     return f"Completed {len(items)} worker tasks. The results are ready."

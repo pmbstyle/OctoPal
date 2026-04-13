@@ -8,6 +8,7 @@ from octopal.runtime.octo import core as octo_core
 from octopal.runtime.octo.delivery import DeliveryMode, resolve_user_delivery, resolve_worker_followup_delivery
 from octopal.runtime.octo.core import (
     Octo,
+    _build_forced_worker_followup_batch,
     _build_worker_result_timeout_followup,
     _coerce_control_plane_reply,
     _enqueue_batched_worker_followup,
@@ -152,6 +153,32 @@ def test_forced_worker_followup_drops_empty_generic_completion():
     assert should_force_worker_followup(result) is True
     assert build_forced_worker_followup(result) == ""
     assert should_send_worker_followup(build_forced_worker_followup(result)) is False
+
+
+def test_forced_worker_followup_batch_uses_meaningful_result_summary():
+    items = [
+        octo_core._PendingWorkerFollowupItem(
+            task_text="Task A",
+            result=WorkerResult(
+                summary="Created research/jobs/2026-03-10.md with seven ranked AI/ML roles.",
+                output={"report_path": "research/jobs/2026-03-10.md"},
+            ),
+        ),
+        octo_core._PendingWorkerFollowupItem(
+            task_text="Task B",
+            result=WorkerResult(
+                summary="Prepared a concise Moltbook activity report with two interesting discoveries.",
+                output={"status": "completed"},
+            ),
+        ),
+    ]
+
+    text = _build_forced_worker_followup_batch(items)
+
+    assert text.startswith("Completed 2 worker tasks:")
+    assert "research/jobs/2026-03-10.md" in text
+    assert "Moltbook activity report" in text
+    assert "The results are ready." not in text
 
 
 def test_followup_required_marker_is_stripped_and_detected():
