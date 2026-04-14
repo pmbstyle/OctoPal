@@ -191,7 +191,7 @@ uv run octopal start
 uv run octopal stop
 uv run octopal restart
 uv run octopal status
-uv run octopal logs --f
+uv run octopal update
 ```
 
 ## Docker Worker Launcher
