@@ -3,15 +3,19 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import re
 import shutil
 import subprocess
 import threading
 import time
 from collections import deque
 from datetime import UTC, datetime
+from itertools import zip_longest
 from pathlib import Path
 from typing import Any
 
+import httpx
 import typer
 from rich import box
 from rich.align import Align
@@ -65,6 +69,11 @@ skill_app = typer.Typer(add_completion=False)
 console = Console()
 logger = logging.getLogger(__name__)
 
+_DEFAULT_RELEASE_REPO = "pmbstyle/Octopal"
+_VERSION_CHECK_CACHE_NAME = "version_check.json"
+_VERSION_CHECK_TTL_SECONDS = 6 * 60 * 60
+_VERSION_CHECK_TIMEOUT_SECONDS = 1.5
+
 
 @app.command()
 def configure() -> None:
@@ -77,6 +86,287 @@ def _build_telegram_bot(token: str) -> Any:
     from aiogram import Bot
 
     return Bot(token=token)
+
+
+def _normalize_release_version(raw_version: str) -> str | None:
+    cleaned = raw_version.strip()
+    if not cleaned:
+        return None
+
+    if cleaned.lower().startswith("v"):
+        cleaned = cleaned[1:]
+
+    if not re.fullmatch(r"\d+(?:\.\d+)*", cleaned):
+        return None
+    return cleaned
+
+
+def _version_key(raw_version: str) -> tuple[int, ...] | None:
+    normalized = _normalize_release_version(raw_version)
+    if normalized is None:
+        return None
+    return tuple(int(part) for part in normalized.split("."))
+
+
+def _is_remote_version_newer(local_version: str, remote_version: str) -> bool:
+    local_key = _version_key(local_version)
+    remote_key = _version_key(remote_version)
+    if local_key is None or remote_key is None:
+        return False
+
+    for local_part, remote_part in zip_longest(local_key, remote_key, fillvalue=0):
+        if remote_part > local_part:
+            return True
+        if remote_part < local_part:
+            return False
+    return False
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _guess_update_command() -> str:
+    if (_project_root() / ".git").exists():
+        return "git pull && uv sync"
+    return "install the latest GitHub release"
+
+
+def _detect_release_repo_slug() -> str:
+    try:
+        result = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=_project_root(),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=0.75,
+            check=False,
+        )
+    except Exception:
+        return _DEFAULT_RELEASE_REPO
+
+    remote_url = result.stdout.strip()
+    if not remote_url:
+        return _DEFAULT_RELEASE_REPO
+
+    https_match = re.search(r"github\.com[:/](?P<slug>[^/\s]+/[^/\s]+?)(?:\.git)?$", remote_url)
+    if not https_match:
+        return _DEFAULT_RELEASE_REPO
+    return https_match.group("slug")
+
+
+def _version_check_cache_path(settings: Settings) -> Path:
+    return settings.state_dir / _VERSION_CHECK_CACHE_NAME
+
+
+def _read_cached_release_info(settings: Settings, repo_slug: str) -> tuple[str, str] | None:
+    cache_path = _version_check_cache_path(settings)
+    if not cache_path.exists():
+        return None
+
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    if payload.get("repo") != repo_slug:
+        return None
+
+    checked_at_raw = str(payload.get("checked_at") or "").strip()
+    cached_version = _normalize_release_version(str(payload.get("version") or ""))
+    cached_url = str(payload.get("url") or "").strip()
+    if not checked_at_raw or cached_version is None or not cached_url:
+        return None
+
+    try:
+        checked_at = datetime.fromisoformat(checked_at_raw)
+    except ValueError:
+        return None
+
+    if checked_at.tzinfo is None:
+        checked_at = checked_at.replace(tzinfo=UTC)
+    if (datetime.now(UTC) - checked_at).total_seconds() > _VERSION_CHECK_TTL_SECONDS:
+        return None
+
+    return cached_version, cached_url
+
+
+def _write_cached_release_info(settings: Settings, repo_slug: str, version: str, url: str) -> None:
+    cache_path = _version_check_cache_path(settings)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "repo": repo_slug,
+        "version": version,
+        "url": url,
+        "checked_at": datetime.now(UTC).isoformat(),
+    }
+    cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _fetch_latest_release_info_from_github(repo_slug: str) -> tuple[str, str] | None:
+    api_url = f"https://api.github.com/repos/{repo_slug}/releases/latest"
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "octopal-version-check",
+    }
+    timeout = httpx.Timeout(_VERSION_CHECK_TIMEOUT_SECONDS, connect=0.5)
+
+    try:
+        with httpx.Client(timeout=timeout, headers=headers, follow_redirects=True) as client:
+            response = client.get(api_url)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+    except Exception:
+        return None
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+
+    latest_version = _normalize_release_version(str(payload.get("tag_name") or payload.get("name") or ""))
+    if latest_version is None:
+        return None
+
+    release_url = str(payload.get("html_url") or f"https://github.com/{repo_slug}/releases").strip()
+    return latest_version, release_url
+
+
+def _get_latest_release_info(settings: Settings) -> tuple[str, str] | None:
+    repo_slug = _detect_release_repo_slug()
+    cached = _read_cached_release_info(settings, repo_slug)
+    if cached is not None:
+        return cached
+
+    fetched = _fetch_latest_release_info_from_github(repo_slug)
+    if fetched is None:
+        return None
+
+    latest_version, release_url = fetched
+    try:
+        _write_cached_release_info(settings, repo_slug, latest_version, release_url)
+    except Exception:
+        logger.debug("Failed to cache latest release info", exc_info=True)
+    return latest_version, release_url
+
+
+def _maybe_warn_about_newer_release(settings: Settings) -> None:
+    if os.environ.get("OCTOPAL_SKIP_VERSION_CHECK") == "1":
+        return
+
+    from octopal import __version__
+
+    latest_release = _get_latest_release_info(settings)
+    if latest_release is None:
+        return
+
+    latest_version, release_url = latest_release
+    if not _is_remote_version_newer(__version__, latest_version):
+        return
+
+    console.print(
+        f"[bold yellow]Update available:[/bold yellow] Octopal v{latest_version} is out "
+        f"(local v{__version__})."
+    )
+    console.print(f"   [dim]Release:[/dim] [cyan]{release_url}[/cyan]")
+    console.print(f"   [dim]Suggested update:[/dim] [magenta]{_guess_update_command()}[/magenta]")
+
+
+def _run_capture(command: list[str], *, cwd: Path, timeout: float = 10.0) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=timeout,
+        check=False,
+    )
+
+
+def _list_meaningful_worktree_changes(project_root: Path) -> list[str] | None:
+    diff = _run_capture(["git", "diff", "--name-only"], cwd=project_root)
+    if diff.returncode != 0:
+        return None
+
+    changes: list[str] = []
+    for raw_path in diff.stdout.splitlines():
+        path = raw_path.strip()
+        if not path:
+            continue
+
+        stats = _run_capture(["git", "diff", "--numstat", "--", path], cwd=project_root)
+        if stats.returncode != 0:
+            return None
+
+        stats_lines = [line.strip() for line in stats.stdout.splitlines() if line.strip()]
+        if not stats_lines:
+            continue
+
+        is_meaningful = False
+        for line in stats_lines:
+            parts = line.split("\t")
+            if len(parts) < 3:
+                is_meaningful = True
+                break
+
+            added, deleted = parts[0].strip(), parts[1].strip()
+            if added == "0" and deleted == "0":
+                continue
+
+            # Binary/content changes often show `-` counters and should still block update.
+            is_meaningful = True
+            break
+
+        if is_meaningful:
+            changes.append(path)
+
+    return changes
+
+
+def _git_checkout_ready_for_update(project_root: Path) -> tuple[bool, str | None]:
+    if not (project_root / ".git").exists():
+        return False, "This install is not a git checkout."
+
+    if shutil.which("git") is None:
+        return False, "`git` is not installed or not on PATH."
+
+    status = _run_capture(["git", "status", "--porcelain"], cwd=project_root)
+    if status.returncode != 0:
+        detail = status.stderr.strip() or status.stdout.strip() or "unknown git status error"
+        return False, f"Could not inspect git status: {detail}"
+
+    if status.stdout.strip():
+        meaningful_changes = _list_meaningful_worktree_changes(project_root)
+        if meaningful_changes is None:
+            return False, "Could not determine whether local changes are content changes or mode-only changes."
+        if meaningful_changes:
+            names = ", ".join(meaningful_changes[:3])
+            if len(meaningful_changes) > 3:
+                names += ", ..."
+            return False, f"Working tree has local content changes: {names}. Commit or stash them first."
+
+    return True, None
+
+
+def _perform_git_update(project_root: Path) -> tuple[bool, str]:
+    if shutil.which("uv") is None:
+        return False, "`uv` is not installed or not on PATH."
+
+    pull = _run_capture(["git", "pull", "--ff-only"], cwd=project_root, timeout=60.0)
+    if pull.returncode != 0:
+        detail = pull.stderr.strip() or pull.stdout.strip() or "git pull failed"
+        return False, f"`git pull --ff-only` failed: {detail}"
+
+    sync = _run_capture(["uv", "sync"], cwd=project_root, timeout=120.0)
+    if sync.returncode != 0:
+        detail = sync.stderr.strip() or sync.stdout.strip() or "uv sync failed"
+        return False, f"`uv sync` failed: {detail}"
+
+    pull_summary = pull.stdout.strip() or "Already up to date."
+    return True, pull_summary
 
 
 def _build_gateway_app(*args: Any, **kwargs: Any) -> Any:
@@ -422,6 +712,8 @@ def start(
         console.print("Use [magenta]octopal stop[/magenta] first, then start again.")
         raise typer.Exit(code=1)
 
+    _maybe_warn_about_newer_release(settings)
+
     if not foreground:
         print_banner()
         _start_background()
@@ -502,6 +794,7 @@ def _start_background() -> None:
     env = os.environ.copy()
     existing_pp = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = f"{src_dir}{os.pathsep}{existing_pp}" if existing_pp else str(src_dir)
+    env["OCTOPAL_SKIP_VERSION_CHECK"] = "1"
 
     # Redirect output to a file for debugging
     log_dir = project_root / "data" / "logs"
@@ -661,6 +954,35 @@ def version() -> None:
     from octopal import __version__
 
     console.print(f"Octopal [bold cyan]v{__version__}[/bold cyan]")
+
+
+@app.command()
+def update() -> None:
+    """Update Octopal from the current git checkout."""
+    project_root = _project_root()
+    ready, reason = _git_checkout_ready_for_update(project_root)
+    if not ready:
+        console.print(f"[bold red]Update unavailable:[/bold red] {reason}")
+        raise typer.Exit(code=1)
+
+    running_pids = list_octopal_runtime_pids()
+    if running_pids:
+        console.print("[yellow]Octopal is running right now.[/yellow]")
+        console.print("Update will continue, but restart after it finishes to pick up the new code.")
+
+    with console.status("[bold cyan]Updating Octopal...[/bold cyan]", spinner="dots"):
+        ok, detail = _perform_git_update(project_root)
+
+    if not ok:
+        console.print(f"[bold red]Update failed:[/bold red] {detail}")
+        raise typer.Exit(code=1)
+
+    console.print("[bold green][V] Octopal updated.[/bold green]")
+    console.print(f"   [dim]Git:[/dim] {detail}")
+    if running_pids:
+        console.print("   [dim]Next step:[/dim] [magenta]uv run octopal restart[/magenta]")
+    else:
+        console.print("   [dim]Next step:[/dim] [magenta]uv run octopal start[/magenta]")
 
 
 @app.command()
