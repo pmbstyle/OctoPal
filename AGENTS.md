@@ -45,6 +45,7 @@
 - Prefer focused pytest coverage near the behavior you change, especially for CLI flows, runtime safety checks, worker orchestration, and dashboard APIs.
 - Run `uv run pytest` before finishing substantial changes. For frontend-only changes, also run `npm run build` in `webapp/`.
 - When you add new tooling or test workflows, update this file and `README.md`.
+- GitHub releases use date-based versioning in `src/octopal/_version.py` and tags like `vYYYY.MM.DD` or `vYYYY.MM.DD.N`.
 
 ## Commit & Pull Request Guidelines
 

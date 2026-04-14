@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to release (for example v2026.04.14)"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG="${{ github.event.inputs.tag }}"
+            git fetch --tags origin "${TAG}:${TAG}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "${TAG}" =~ ^v[0-9]{4}\.[0-9]{2}\.[0-9]{2}(\.[0-9]+)?$ ]]; then
+            echo "Tag ${TAG} does not match vYYYY.MM.DD or vYYYY.MM.DD.N"
+            exit 1
+          fi
+
+          VERSION="$(python - <<'PY'
+from pathlib import Path
+import re
+
+text = Path("src/octopal/_version.py").read_text(encoding="utf-8")
+match = re.search(r'__version__\s*=\s*"([^"]+)"', text)
+if not match:
+    raise SystemExit("Could not find __version__ in src/octopal/_version.py")
+print(match.group(1))
+PY
+)"
+
+          EXPECTED_VERSION="${TAG#v}"
+          if [[ "${VERSION}" != "${EXPECTED_VERSION}" ]]; then
+            echo "Version mismatch: tag=${EXPECTED_VERSION}, file=${VERSION}"
+            exit 1
+          fi
+
+          echo "tag=${TAG}" >> "${GITHUB_OUTPUT}"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+  test:
+    name: Run release checks
+    runs-on: ubuntu-latest
+    needs: validate
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Sync dependencies
+        run: uv sync --extra dev
+
+      - name: Run test suite
+        run: uv run pytest
+
+  publish:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs:
+      - validate
+      - test
+
+    steps:
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists; skipping."
+            exit 0
+          fi
+
+          gh release create "${TAG}" \
+            --verify-tag \
+            --title "Octopal ${VERSION}" \
+            --generate-notes
