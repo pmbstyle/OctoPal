@@ -7,7 +7,8 @@
 </p>
 
 <p align="center">
-   <a href="https://img.shields.io/github/last-commit/pmbstyle/Octopal?svg=true"><img src="https://img.shields.io/github/last-commit/pmbstyle/Octopal?svg=true"></a>
+   <img src="https://img.shields.io/github/v/release/pmbstyle/Octopal">
+   <img src="https://img.shields.io/github/last-commit/pmbstyle/Octopal?svg=true">
    <a href="LICENSE"><img src="https://img.shields.io/github/license/pmbstyle/Octopal?svg=true"></a>
    <a href="https://deepwiki.com/pmbstyle/Octopal"><img src="https://deepwiki.com/badge.svg"></a>
 </p>
