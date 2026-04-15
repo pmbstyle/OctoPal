@@ -86,14 +86,18 @@ class _LauncherStub:
         return _FakeProcess(pid=500_000 + self.calls)
 
 
-def _spec() -> WorkerSpec:
+def _spec(
+    *,
+    mcp_tools: list[dict] | None = None,
+    effective_permissions: list[str] | None = None,
+) -> WorkerSpec:
     return WorkerSpec(
         id="w1",
         task="do task",
         inputs={},
         system_prompt="sys",
         available_tools=[],
-        mcp_tools=[],
+        mcp_tools=mcp_tools or [],
         model=None,
         granted_capabilities=[],
         timeout_seconds=2,
@@ -101,6 +105,7 @@ def _spec() -> WorkerSpec:
         run_id="w1",
         lifecycle="ephemeral",
         correlation_id=None,
+        effective_permissions=effective_permissions or [],
     )
 
 
@@ -217,7 +222,19 @@ def test_worker_mcp_call_restores_configured_session(tmp_path: Path) -> None:
     )
 
     async def scenario():
-        return await runtime._read_loop(_spec(), process)
+        return await runtime._read_loop(
+            _spec(
+                mcp_tools=[
+                    {
+                        "name": "read_data",
+                        "server_id": "demo",
+                        "permission": "mcp_exec",
+                    }
+                ],
+                effective_permissions=["mcp_exec"],
+            ),
+            process,
+        )
 
     result = asyncio.run(scenario())
     assert result.summary == "done"
