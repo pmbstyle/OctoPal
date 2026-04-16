@@ -10,6 +10,17 @@ from octopal.browser.snapshot import capture_aria_snapshot
 _SESSION_REFS: dict[int, dict[str, dict[str, Any]]] = {}
 
 
+def _format_browser_error(exc: Exception) -> str:
+    message = str(exc).strip()
+    lowered = message.lower()
+    if "executable doesn't exist" in lowered or "playwright" in lowered and "install" in lowered:
+        return (
+            "Playwright browser is not installed in this environment. "
+            "Run `playwright install` in the worker image or host setup."
+        )
+    return message or exc.__class__.__name__
+
+
 def _get_chat_id(ctx: dict[str, Any]) -> int:
     return int(ctx.get("chat_id") or 0)
 
@@ -50,12 +61,12 @@ async def browser_open(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, A
     chat_id = _get_chat_id(ctx)
     manager = get_browser_manager()
     target_id = str(args.get("target_id") or "").strip() or None
-    if bool(args.get("new_tab", False)):
-        opened = await manager.create_page(chat_id)
-        target_id = opened["target_id"]
-    page = await manager.get_page(chat_id, target_id=target_id)
 
     try:
+        if bool(args.get("new_tab", False)):
+            opened = await manager.create_page(chat_id)
+            target_id = opened["target_id"]
+        page = await manager.get_page(chat_id, target_id=target_id)
         await page.goto(url, wait_until="domcontentloaded", timeout=30000)
         pages = await manager.list_pages(chat_id)
         current = next((row for row in pages if row.get("is_current")), None)
@@ -66,7 +77,7 @@ async def browser_open(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, A
             "target_id": (current or {}).get("target_id"),
         }
     except Exception as e:
-        return {"ok": False, "url": url, "error": f"Error opening {url}: {e}"}
+        return {"ok": False, "url": url, "error": f"Error opening {url}: {_format_browser_error(e)}"}
 
 
 async def browser_tabs(args: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:

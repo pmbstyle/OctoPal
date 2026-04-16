@@ -25,16 +25,25 @@ class BrowserManager:
 
     async def _ensure_browser(self):
         async with self._lock:
-            if self._playwright is None:
-                self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.launch(headless=True)
+            if self._playwright is not None and self._browser is not None:
+                return
+            try:
+                if self._playwright is None:
+                    self._playwright = await async_playwright().start()
+                if self._browser is None:
+                    self._browser = await self._playwright.chromium.launch(headless=True)
                 logger.info("Playwright browser started")
+            except Exception:
+                await self._reset_failed_startup_locked()
+                raise
 
     async def get_page(self, chat_id: int, target_id: str | None = None) -> Page:
         """Get or create an isolated page for a specific chat/agent."""
         await self._ensure_browser()
 
         async with self._lock:
+            if self._browser is None:
+                raise RuntimeError("Browser is unavailable because Playwright failed to start.")
             if chat_id not in self._contexts:
                 context = await self._browser.new_context(
                     viewport={"width": 1280, "height": 720},
@@ -68,6 +77,8 @@ class BrowserManager:
         if chat_id not in self._contexts:
             await self.get_page(chat_id)
         async with self._lock:
+            if self._browser is None or chat_id not in self._contexts:
+                raise RuntimeError("Browser is unavailable because Playwright failed to start.")
             target_id, page = await self._create_page_locked(chat_id, self._contexts[chat_id])
             return {"target_id": target_id, "url": page.url}
 
@@ -171,6 +182,22 @@ class BrowserManager:
         self._pages.setdefault(chat_id, {})[target_id] = page
         self._current_targets[chat_id] = target_id
         return target_id, page
+
+    async def _reset_failed_startup_locked(self) -> None:
+        browser = self._browser
+        playwright = self._playwright
+        self._browser = None
+        self._playwright = None
+        self._contexts.clear()
+        self._pages.clear()
+        self._current_targets.clear()
+        self._target_counters.clear()
+        if browser is not None:
+            with suppress(Exception):
+                await browser.close()
+        if playwright is not None:
+            with suppress(Exception):
+                await playwright.stop()
 
 
 _manager = BrowserManager()

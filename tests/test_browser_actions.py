@@ -238,6 +238,24 @@ def test_browser_open_returns_structured_result(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_browser_open_returns_structured_error_when_browser_unavailable(monkeypatch) -> None:
+    class _FailingManager:
+        async def get_page(self, chat_id: int, target_id: str | None = None):
+            assert chat_id == 7
+            assert target_id is None
+            raise RuntimeError("Executable doesn't exist at /.cache/ms-playwright/chromium/chrome")
+
+    monkeypatch.setattr(browser_actions, "get_browser_manager", lambda: _FailingManager())
+
+    async def scenario() -> None:
+        result = await browser_actions.browser_open({"url": "https://example.com/docs"}, {"chat_id": 7})
+        assert result["ok"] is False
+        assert result["url"] == "https://example.com/docs"
+        assert "Playwright browser is not installed" in result["error"]
+
+    asyncio.run(scenario())
+
+
 def test_browser_snapshot_returns_structured_result(monkeypatch) -> None:
     page = _PageStub()
     monkeypatch.setattr(browser_actions, "get_browser_manager", lambda: _ManagerStub(page))
