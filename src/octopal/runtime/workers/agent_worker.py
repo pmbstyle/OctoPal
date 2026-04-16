@@ -519,7 +519,10 @@ Important:
                             )
 
                 # Add tool result message
-                rendered_tool_result = render_tool_result_for_llm(tool_result)
+                rendered_tool_result = render_tool_result_for_llm(
+                    tool_result,
+                    tool_name=str(tool_name or ""),
+                )
                 if rendered_tool_result.was_compacted:
                     telemetry["tool_result_truncations"] += 1
                 messages.append({

@@ -32,6 +32,33 @@ def test_render_tool_result_parses_json_strings_before_compacting() -> None:
     assert "__octopal_compaction__" in rendered.text
 
 
+def test_render_tool_result_preserves_larger_fetch_snippet_for_worker_tools() -> None:
+    payload = {
+        "ok": True,
+        "source": "basic_fetch",
+        "snippet": "x" * 20_000,
+    }
+
+    rendered = render_tool_result_for_llm(payload, tool_name="web_fetch")
+
+    assert rendered.was_compacted is False
+    assert len(rendered.text) > 20_000
+    assert "truncated" not in rendered.text
+
+
+def test_render_tool_result_default_budget_still_compacts_large_fetch_snippet() -> None:
+    payload = {
+        "ok": True,
+        "source": "basic_fetch",
+        "snippet": "x" * 20_000,
+    }
+
+    rendered = render_tool_result_for_llm(payload)
+
+    assert rendered.was_compacted is True
+    assert "truncated" in rendered.text
+
+
 def test_route_compacts_tool_messages_before_next_tool_round(monkeypatch) -> None:
     class DummyProvider:
         def __init__(self) -> None:
