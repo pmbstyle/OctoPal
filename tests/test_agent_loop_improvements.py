@@ -7,6 +7,7 @@ from pathlib import Path
 from octopal.runtime.tool_errors import ToolBridgeError
 from octopal.runtime.workers.agent_worker import (
     _auto_tune_max_steps,
+    _build_inference_unavailable_result,
     _classify_tool_error,
     _detect_orchestration_stall,
     _detect_tool_loop,
@@ -16,6 +17,7 @@ from octopal.runtime.workers.agent_worker import (
     _extract_tool_progress_key,
     _hash_tool_call,
     _hash_tool_outcome,
+    _is_upstream_unavailable_error,
     _meaningful_tool_history_size,
     _parse_tool_arguments,
     _resolve_tool_loop_thresholds,
@@ -328,6 +330,12 @@ def test_extract_tool_progress_key_reads_worker_result_signature_ignoring_runtim
     assert first == second == "w1:running:2026-04-16T22:02:26Z"
 
 
+def test_upstream_unavailable_error_detects_529_overload() -> None:
+    assert _is_upstream_unavailable_error(
+        "LiteLLM completion with tools failed: overloaded_error http_code 529 under high load"
+    )
+
+
 def test_meaningful_tool_history_size_dedupes_repeated_worker_polls_without_progress() -> None:
     history = [
         {
@@ -362,6 +370,23 @@ def test_meaningful_tool_history_size_dedupes_repeated_worker_polls_without_prog
         },
     ]
     assert _meaningful_tool_history_size(history) == 3
+
+
+def test_build_inference_unavailable_result_marks_retryable_failure() -> None:
+    worker = _dummy_worker()
+    result = _build_inference_unavailable_result(
+        worker=worker,
+        telemetry={"llm_calls": 0},
+        error_text="provider overloaded 529",
+        thinking_steps=2,
+        tools_used=["web_search"],
+        partial=True,
+    )
+    assert result.status == "failed"
+    assert "partially completed" in result.summary.lower()
+    assert result.output is not None
+    assert result.output["retryable"] is True
+    assert result.output["reason"] == "inference_upstream_unavailable"
 
 
 def test_detect_orchestration_stall_warns_and_breaks_on_repeated_no_progress() -> None:

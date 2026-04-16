@@ -71,3 +71,23 @@ def test_get_worker_result_running_includes_explicit_timing_fields(monkeypatch) 
     assert data["message"] == "Worker is still running. Result not available yet."
     assert data["runtime_seconds"] == 45
     assert data["seconds_since_update"] == 5
+
+
+def test_get_worker_result_failed_includes_summary_and_output(monkeypatch) -> None:
+    worker = _worker_record(status="failed").model_copy(
+        update={
+            "summary": "Task failed temporarily: inference provider is currently overloaded.",
+            "output": {"retryable": True, "reason": "inference_upstream_unavailable"},
+        }
+    )
+    frozen_now = datetime(2026, 4, 16, 20, 54, 30, tzinfo=UTC)
+    monkeypatch.setattr(management, "utc_now", lambda: frozen_now)
+    payload = management._tool_get_worker_result(
+        {"worker_id": worker.id},
+        {"octo": _Octo(worker)},
+    )
+    data = json.loads(payload)
+    assert data["status"] == "failed"
+    assert data["summary"] == "Task failed temporarily: inference provider is currently overloaded."
+    assert data["output"] == {"retryable": True, "reason": "inference_upstream_unavailable"}
+    assert data["error"] == "boom"

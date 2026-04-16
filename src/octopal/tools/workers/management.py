@@ -1498,7 +1498,9 @@ def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> 
             "parent_worker_id": worker.parent_worker_id,
             "root_task_id": worker.root_task_id,
             "spawn_depth": worker.spawn_depth,
+            "summary": worker.summary,
             "error": worker.error or "Unknown error",
+            "output": worker.output,
         }
         payload.update(_worker_timing_fields(worker))
         return json.dumps(payload, ensure_ascii=False)

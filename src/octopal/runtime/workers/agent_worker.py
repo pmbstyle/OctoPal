@@ -75,10 +75,14 @@ _PERMANENT_ERROR_HINTS = (
     "not found",
 )
 _UPSTREAM_UNAVAILABLE_HINTS = (
+    "529",
     "500",
     "502",
     "503",
     "504",
+    "overloaded",
+    "overloaded_error",
+    "high load",
     "service unavailable",
     "backend down",
     "bad gateway",
@@ -446,7 +450,21 @@ Important:
 
     while thinking_steps < effective_max_steps:
         llm_start = time.perf_counter()
-        response = await _call_llm(provider, messages, filtered_tools)
+        try:
+            response = await _call_llm(provider, messages, filtered_tools)
+        except Exception as exc:
+            telemetry["llm_latency_ms_total"] += int((time.perf_counter() - llm_start) * 1000)
+            error_text = str(exc)
+            if _is_upstream_unavailable_error(error_text):
+                return _build_inference_unavailable_result(
+                    worker=worker,
+                    telemetry=telemetry,
+                    error_text=error_text,
+                    thinking_steps=thinking_steps,
+                    tools_used=tools_used,
+                    partial=successful_tool_calls > 0 or bool(tools_used),
+                )
+            raise
         telemetry["llm_calls"] += 1
         telemetry["llm_latency_ms_total"] += int((time.perf_counter() - llm_start) * 1000)
         usage = response.get("usage") or {}
@@ -1128,6 +1146,38 @@ def _attach_telemetry(output: Any, telemetry: dict[str, Any]) -> dict[str, Any]:
     payload = output if isinstance(output, dict) else {}
     payload["_telemetry"] = telemetry
     return payload
+
+
+def _build_inference_unavailable_result(
+    *,
+    worker: Worker,
+    telemetry: dict[str, Any],
+    error_text: str,
+    thinking_steps: int,
+    tools_used: list[str],
+    partial: bool,
+) -> WorkerResult:
+    summary = (
+        "Task partially completed with degraded state: inference provider is currently overloaded."
+        if partial
+        else "Task failed temporarily: inference provider is currently overloaded."
+    )
+    return WorkerResult(
+        status="failed",
+        summary=summary,
+        output=_attach_telemetry(
+            {
+                "degraded": True,
+                "retryable": True,
+                "reason": "inference_upstream_unavailable",
+                "error": _truncate_text(error_text, 500),
+            },
+            telemetry,
+        ),
+        knowledge_proposals=worker.knowledge_proposals,
+        thinking_steps=thinking_steps,
+        tools_used=tools_used,
+    )
 
 
 def _summarize_tool_start(tool_name: str | None, tool_input: dict[str, Any], *, timeout_seconds: int | None) -> str:
