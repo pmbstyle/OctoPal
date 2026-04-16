@@ -36,6 +36,9 @@ from octopal.utils import utc_now
 
 logger = structlog.get_logger(__name__)
 _WORKER_BLOCKED_TOOL_NAMES = {"send_file_to_user"}
+_PERMISSION_ALIASES = {
+    "spawn_children": "worker_manage",
+}
 
 # Constants
 _MAX_RECOVERY_ATTEMPTS = 1
@@ -88,7 +91,12 @@ class WorkerRuntime:
             self.store.get_worker_template, task_request.worker_id
         )
         if not template:
-            return WorkerResult(summary=f"Worker template not found: {task_request.worker_id}")
+            return await self._preflight_failure(
+                task_request,
+                template=None,
+                granted_capabilities=[],
+                summary=f"Worker template not found: {task_request.worker_id}",
+            )
 
         required_permissions = _normalize_permission_names(template.required_permissions)
 
@@ -101,8 +109,10 @@ class WorkerRuntime:
 
         missing_permissions = sorted(set(required_permissions) - set(granted_permission_names))
         if missing_permissions:
-            return WorkerResult(
-                status="failed",
+            return await self._preflight_failure(
+                task_request,
+                template=template,
+                granted_capabilities=granted,
                 summary=(
                     "Permission denied for worker task: missing required permissions "
                     f"({', '.join(missing_permissions)})"
@@ -116,7 +126,10 @@ class WorkerRuntime:
                 requested_tools=task_request.tools,
             )
         except ValueError as exc:
-            return WorkerResult(
+            return await self._preflight_failure(
+                task_request,
+                template=template,
+                granted_capabilities=granted,
                 status="failed",
                 summary=f"Worker tool validation failed: {exc}",
                 output={"error": "invalid_worker_tool_override", "detail": str(exc)},
@@ -144,8 +157,10 @@ class WorkerRuntime:
             all_tools_by_name=all_tools_by_name,
         )
         if tool_validation_error:
-            return WorkerResult(
-                status="failed",
+            return await self._preflight_failure(
+                task_request,
+                template=template,
+                granted_capabilities=granted,
                 summary=f"Worker tool validation failed: {tool_validation_error}",
                 output={"error": "invalid_worker_tool_permissions", "detail": tool_validation_error},
             )
@@ -216,6 +231,69 @@ class WorkerRuntime:
 
         # Run worker
         return await self.run(spec, approval_requester=approval_requester)
+
+    async def _preflight_failure(
+        self,
+        task_request: TaskRequest,
+        *,
+        template: WorkerTemplateRecord | None,
+        granted_capabilities: list[Any],
+        summary: str,
+        output: dict[str, Any] | None = None,
+        status: str = "failed",
+    ) -> WorkerResult:
+        worker_id = task_request.run_id or str(uuid.uuid4())
+        now = utc_now()
+        error_value = None
+        if isinstance(output, dict):
+            raw_error = output.get("error")
+            if raw_error is not None:
+                error_value = str(raw_error)
+
+        get_worker = getattr(self.store, "get_worker", None)
+        create_worker = getattr(self.store, "create_worker", None)
+        update_worker_status = getattr(self.store, "update_worker_status", None)
+        update_worker_result = getattr(self.store, "update_worker_result", None)
+
+        if callable(get_worker) and callable(create_worker):
+            existing = await asyncio.to_thread(get_worker, worker_id)
+            if existing is None:
+                await asyncio.to_thread(
+                    create_worker,
+                    WorkerRecord(
+                        id=worker_id,
+                        status=status,
+                        task=task_request.task,
+                        granted_caps=[
+                            cap.model_dump() if hasattr(cap, "model_dump") else dict(cap)
+                            for cap in granted_capabilities
+                        ],
+                        created_at=now,
+                        updated_at=now,
+                        summary=summary,
+                        output=output,
+                        error=error_value,
+                        lineage_id=task_request.lineage_id,
+                        parent_worker_id=task_request.parent_worker_id,
+                        root_task_id=task_request.root_task_id,
+                        spawn_depth=task_request.spawn_depth,
+                        template_id=template.id if template else task_request.worker_id,
+                        template_name=template.name if template else task_request.worker_id,
+                    ),
+                )
+            else:
+                if callable(update_worker_status):
+                    await asyncio.to_thread(update_worker_status, worker_id, status)
+                if callable(update_worker_result):
+                    await asyncio.to_thread(
+                        update_worker_result,
+                        worker_id,
+                        summary=summary,
+                        output=output,
+                        error=error_value,
+                    )
+
+        return WorkerResult(status="failed", summary=summary, output=output)
 
     def _resolve_worker_llm_config(
         self, template: WorkerTemplateRecord, task_request: TaskRequest
@@ -1263,7 +1341,15 @@ def _normalize_name_list(value: object) -> list[str]:
 
 
 def _normalize_permission_names(value: object) -> list[str]:
-    return _normalize_name_list(value)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in _normalize_name_list(value):
+        canonical = _PERMISSION_ALIASES.get(item, item)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        normalized.append(canonical)
+    return normalized
 
 
 def _capability_types(capabilities: list[Any]) -> list[str]:

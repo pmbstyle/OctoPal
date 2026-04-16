@@ -30,7 +30,6 @@ from octopal.runtime.tool_loop import (
     _hash_tool_outcome,
     _resolve_tool_loop_thresholds,
 )
-from octopal.runtime.tool_loop import _tool_no_progress_streak as _tool_no_progress_streak
 from octopal.runtime.tool_payloads import render_tool_result_for_llm
 from octopal.runtime.workers.contracts import WorkerResult
 from octopal.tools.registry import ToolPolicy, ToolPolicyPipelineStep, apply_tool_policy_pipeline
@@ -42,6 +41,11 @@ _MAX_TOOL_ITERS = 10
 _DEFAULT_TOOL_TIMEOUT_SECONDS = 60
 _DEFAULT_MAX_STEP_CAP = 30
 _MAX_EMPTY_TURNS = 3
+_ORCHESTRATION_STALL_WARNING_THRESHOLD = 2
+_ORCHESTRATION_STALL_CRITICAL_THRESHOLD = 3
+_ORCHESTRATION_STALL_WARNING_MIN_ELAPSED_SECONDS = 15
+_ORCHESTRATION_STALL_CRITICAL_MIN_ELAPSED_SECONDS = 30
+_ORCHESTRATION_POLL_THROTTLE_SECONDS = 3
 _TRANSIENT_ERROR_HINTS = (
     "timeout",
     "timed out",
@@ -72,10 +76,14 @@ _PERMANENT_ERROR_HINTS = (
     "not found",
 )
 _UPSTREAM_UNAVAILABLE_HINTS = (
+    "529",
     "500",
     "502",
     "503",
     "504",
+    "overloaded",
+    "overloaded_error",
+    "high load",
     "service unavailable",
     "backend down",
     "bad gateway",
@@ -110,6 +118,11 @@ _OCTO_PROXY_TOOLS = {
     "update_worker_template",
     "delete_worker_template",
 }
+_ORCHESTRATION_PROGRESS_TOOLS = {
+    "get_worker_result",
+    "synthesize_worker_results",
+    "worker_yield",
+}
 
 def _parse_positive_int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -120,6 +133,216 @@ def _parse_positive_int_env(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _parse_nonnegative_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
+
+
+def _extract_tool_progress_key(tool_name: str | None, tool_result: Any) -> str | None:
+    normalized_tool = str(tool_name or "").strip()
+    structured = _decode_structured_tool_result(tool_result)
+    if not isinstance(structured, dict):
+        return None
+    if normalized_tool == "synthesize_worker_results":
+        progress_signature = str(structured.get("progress_signature") or "").strip()
+        return progress_signature or None
+    if normalized_tool == "get_worker_result":
+        worker_id = str(structured.get("worker_id") or "").strip()
+        status = str(structured.get("status") or "").strip().lower()
+        updated_at = str(structured.get("updated_at") or "").strip()
+        if not worker_id or not status:
+            return None
+        if updated_at:
+            return f"{worker_id}:{status}:{updated_at}"
+        summary = str(structured.get("summary") or structured.get("message") or structured.get("error") or "").strip()
+        return f"{worker_id}:{status}:{summary}" if summary else f"{worker_id}:{status}"
+    if normalized_tool == "worker_yield":
+        pending_count = int(structured.get("pending_count") or 0)
+        completed_count = int(structured.get("completed_count") or 0)
+        failed_count = int(structured.get("failed_count") or 0)
+        mode = str(structured.get("mode") or "").strip().lower()
+        lineage_id = str(structured.get("lineage_id") or "").strip()
+        pending_ids = ",".join(
+            sorted(
+                str(item.get("worker_id") or "").strip()
+                for item in structured.get("pending_workers", [])
+                if isinstance(item, dict) and str(item.get("worker_id") or "").strip()
+            )
+        )
+        return (
+            f"yield:{lineage_id}:{mode}:"
+            f"p{pending_count}:c{completed_count}:f{failed_count}:{pending_ids}"
+        )
+    return None
+
+
+def _tool_progress_streak(
+    history: list[dict[str, Any]],
+    *,
+    tool_name: str,
+    progress_key: str,
+) -> dict[str, float | int]:
+    streak = 0
+    first_seen_at: float | None = None
+    last_seen_at: float | None = None
+    for record in reversed(history):
+        if record.get("tool_name") != tool_name:
+            continue
+        if record.get("progress_key") != progress_key:
+            break
+        streak += 1
+        observed_at = record.get("observed_at")
+        if isinstance(observed_at, int | float):
+            seen_at = float(observed_at)
+            if last_seen_at is None:
+                last_seen_at = seen_at
+            first_seen_at = seen_at
+    elapsed_seconds = 0.0
+    if streak > 1 and first_seen_at is not None and last_seen_at is not None:
+        elapsed_seconds = max(0.0, last_seen_at - first_seen_at)
+    return {"count": streak, "elapsed_seconds": elapsed_seconds}
+
+
+def _meaningful_tool_history_size(history: list[dict[str, Any]]) -> int:
+    count = 0
+    last_progress_by_call: dict[tuple[str, str], str] = {}
+    for record in history:
+        tool_name = str(record.get("tool_name") or "").strip()
+        args_hash = str(record.get("args_hash") or "").strip()
+        progress_key = str(record.get("progress_key") or "").strip()
+        if tool_name in _ORCHESTRATION_PROGRESS_TOOLS and args_hash and progress_key:
+            call_key = (tool_name, args_hash)
+            if last_progress_by_call.get(call_key) == progress_key:
+                continue
+            last_progress_by_call[call_key] = progress_key
+        count += 1
+    return count
+
+
+def _resolve_orchestration_poll_throttle_seconds() -> int:
+    return _parse_nonnegative_int_env(
+        "OCTOPAL_ORCHESTRATION_POLL_THROTTLE_SECONDS",
+        _ORCHESTRATION_POLL_THROTTLE_SECONDS,
+    )
+
+
+async def _maybe_wait_for_orchestration_poll_window(
+    worker: Worker,
+    history: list[dict[str, Any]],
+    *,
+    tool_name: str | None,
+    tool_input: dict[str, Any] | None,
+) -> dict[str, Any]:
+    normalized_tool = str(tool_name or "").strip()
+    args = tool_input if isinstance(tool_input, dict) else {}
+    args_hash = _hash_tool_call(normalized_tool, args)
+    if normalized_tool != "get_worker_result":
+        return {"step_exempt": False, "waited_seconds": 0.0, "args_hash": args_hash}
+    throttle_seconds = _resolve_orchestration_poll_throttle_seconds()
+    if throttle_seconds <= 0:
+        return {"step_exempt": False, "waited_seconds": 0.0, "args_hash": args_hash}
+
+    last_seen_at: float | None = None
+    for record in reversed(history):
+        if record.get("tool_name") != normalized_tool or record.get("args_hash") != args_hash:
+            continue
+        observed_at = record.get("observed_at")
+        if isinstance(observed_at, int | float):
+            last_seen_at = float(observed_at)
+            break
+    if last_seen_at is None:
+        return {"step_exempt": False, "waited_seconds": 0.0, "args_hash": args_hash}
+
+    elapsed_seconds = max(0.0, time.monotonic() - last_seen_at)
+    remaining_seconds = float(throttle_seconds) - elapsed_seconds
+    if remaining_seconds <= 0:
+        return {"step_exempt": False, "waited_seconds": 0.0, "args_hash": args_hash}
+
+    worker_id = str(args.get("worker_id") or "").strip()
+    wait_seconds = max(0.0, remaining_seconds)
+    await worker.log(
+        "debug",
+        (
+            "Throttling get_worker_result poll "
+            f"for {worker_id or args_hash[:8]} by {wait_seconds:.2f}s"
+        ),
+    )
+    await asyncio.sleep(wait_seconds)
+    return {
+        "step_exempt": True,
+        "waited_seconds": wait_seconds,
+        "args_hash": args_hash,
+    }
+
+
+def _resolve_orchestration_stall_thresholds() -> dict[str, int]:
+    warning = _parse_positive_int_env(
+        "OCTOPAL_ORCHESTRATION_STALL_WARNING_SECONDS",
+        _ORCHESTRATION_STALL_WARNING_MIN_ELAPSED_SECONDS,
+    )
+    critical = _parse_positive_int_env(
+        "OCTOPAL_ORCHESTRATION_STALL_CRITICAL_SECONDS",
+        _ORCHESTRATION_STALL_CRITICAL_MIN_ELAPSED_SECONDS,
+    )
+    if critical <= warning:
+        critical = warning + 1
+    return {"warning_seconds": warning, "critical_seconds": critical}
+
+
+def _detect_orchestration_stall(
+    history: list[dict[str, Any]],
+    *,
+    tool_name: str | None,
+    tool_result: Any,
+    progress_key: str | None,
+) -> dict[str, Any] | None:
+    if str(tool_name or "") != "synthesize_worker_results":
+        return None
+    structured = _decode_structured_tool_result(tool_result)
+    if not progress_key or not isinstance(structured, dict):
+        return None
+    pending_count = int(structured.get("pending_count") or 0)
+    if pending_count <= 0:
+        return None
+    streak = _tool_progress_streak(
+        history,
+        tool_name="synthesize_worker_results",
+        progress_key=progress_key,
+    )
+    thresholds = _resolve_orchestration_stall_thresholds()
+    count = int(streak["count"])
+    elapsed_seconds = float(streak["elapsed_seconds"])
+    if (
+        count >= _ORCHESTRATION_STALL_CRITICAL_THRESHOLD
+        and elapsed_seconds >= thresholds["critical_seconds"]
+    ):
+        return {
+            "detector": "orchestration_no_progress",
+            "level": "critical",
+            "count": count,
+            "elapsed_seconds": elapsed_seconds,
+            "message": "Repeated synthesize_worker_results calls found no worker progress.",
+        }
+    if (
+        count >= _ORCHESTRATION_STALL_WARNING_THRESHOLD
+        and elapsed_seconds >= thresholds["warning_seconds"]
+    ):
+        return {
+            "detector": "orchestration_no_progress",
+            "level": "warning",
+            "count": count,
+            "elapsed_seconds": elapsed_seconds,
+            "message": "synthesize_worker_results is being retried without worker progress.",
+        }
+    return None
 
 
 async def run_agent_worker(spec_path: str) -> None:
@@ -290,12 +513,26 @@ Important:
     }
     upstream_failures: dict[str, int] = {}
     successful_tool_calls = 0
-    tool_call_history: list[dict[str, str]] = []
+    tool_call_history: list[dict[str, Any]] = []
     tool_loop_thresholds = _resolve_tool_loop_thresholds()
 
     while thinking_steps < effective_max_steps:
         llm_start = time.perf_counter()
-        response = await _call_llm(provider, messages, filtered_tools)
+        try:
+            response = await _call_llm(provider, messages, filtered_tools)
+        except Exception as exc:
+            telemetry["llm_latency_ms_total"] += int((time.perf_counter() - llm_start) * 1000)
+            error_text = str(exc)
+            if _is_upstream_unavailable_error(error_text):
+                return _build_inference_unavailable_result(
+                    worker=worker,
+                    telemetry=telemetry,
+                    error_text=error_text,
+                    thinking_steps=thinking_steps,
+                    tools_used=tools_used,
+                    partial=successful_tool_calls > 0 or bool(tools_used),
+                )
+            raise
         telemetry["llm_calls"] += 1
         telemetry["llm_latency_ms_total"] += int((time.perf_counter() - llm_start) * 1000)
         usage = response.get("usage") or {}
@@ -309,12 +546,12 @@ Important:
         # Handle OpenAI-style tool_calls
         tool_calls = response.get("tool_calls", [])
         if tool_calls:
-            cycle_steps = thinking_steps + 1
             content = response.get("content", "")
             assistant_msg: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
             if content:
                 assistant_msg["content"] = content
             messages.append(assistant_msg)
+            round_consumes_step = False
 
             # Process tool calls
             for tool_call in tool_calls:
@@ -324,6 +561,14 @@ Important:
                 tool_call_id = tool_call.get("id", "") or ""
 
                 await worker.log("info", f"Using tool: {tool_name}")
+
+                poll_window = await _maybe_wait_for_orchestration_poll_window(
+                    worker,
+                    tool_call_history,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                )
+                step_exempt = bool(poll_window.get("step_exempt"))
 
                 # Execute tool
                 elapsed = asyncio.get_running_loop().time() - loop_start
@@ -349,15 +594,21 @@ Important:
                 else:
                     successful_tool_calls += 1
                 tools_used.append(tool_name)
-                args_hash = _hash_tool_call(str(tool_name or ""), tool_input)
+                args_hash = str(poll_window.get("args_hash") or _hash_tool_call(str(tool_name or ""), tool_input))
                 result_hash = _hash_tool_outcome(tool_result, tool_meta)
+                progress_key = _extract_tool_progress_key(tool_name, tool_result)
                 tool_call_history.append(
                     {
                         "tool_name": str(tool_name or ""),
                         "args_hash": args_hash,
                         "result_hash": result_hash,
+                        "progress_key": progress_key,
+                        "observed_at": time.monotonic(),
+                        "step_exempt": step_exempt,
                     }
                 )
+                if not step_exempt:
+                    round_consumes_step = True
                 loop_state = _detect_tool_loop(
                     tool_call_history,
                     tool_name=str(tool_name or ""),
@@ -365,7 +616,15 @@ Important:
                     warning_threshold=tool_loop_thresholds["warning"],
                     critical_threshold=tool_loop_thresholds["critical"],
                     global_breaker_threshold=tool_loop_thresholds["global_breaker"],
+                    global_breaker_count=_meaningful_tool_history_size(tool_call_history),
                 )
+                if loop_state is None:
+                    loop_state = _detect_orchestration_stall(
+                        tool_call_history,
+                        tool_name=tool_name,
+                        tool_result=tool_result,
+                        progress_key=progress_key,
+                    )
                 if loop_state is not None:
                     if loop_state["level"] == "warning":
                         await worker.log(
@@ -397,7 +656,7 @@ Important:
                                 telemetry,
                             ),
                             knowledge_proposals=worker.knowledge_proposals,
-                            thinking_steps=cycle_steps,
+                            thinking_steps=thinking_steps + (1 if round_consumes_step else 0),
                             tools_used=tools_used,
                         )
 
@@ -419,7 +678,7 @@ Important:
                                 telemetry,
                             ),
                             knowledge_proposals=worker.knowledge_proposals,
-                            thinking_steps=cycle_steps,
+                            thinking_steps=thinking_steps + (1 if round_consumes_step else 0),
                             tools_used=tools_used,
                         )
                     if _is_upstream_unavailable_error(error_text):
@@ -441,12 +700,15 @@ Important:
                                     telemetry,
                                 ),
                                 knowledge_proposals=worker.knowledge_proposals,
-                                thinking_steps=cycle_steps,
+                                thinking_steps=thinking_steps + (1 if round_consumes_step else 0),
                                 tools_used=tools_used,
                             )
 
                 # Add tool result message
-                rendered_tool_result = render_tool_result_for_llm(tool_result)
+                rendered_tool_result = render_tool_result_for_llm(
+                    tool_result,
+                    tool_name=str(tool_name or ""),
+                )
                 if rendered_tool_result.was_compacted:
                     telemetry["tool_result_truncations"] += 1
                 messages.append({
@@ -454,7 +716,8 @@ Important:
                     "tool_call_id": tool_call_id,
                     "content": rendered_tool_result.text,
                 })
-            thinking_steps = cycle_steps
+            if round_consumes_step:
+                thinking_steps += 1
             empty_turns = 0
             telemetry["empty_turns"] = empty_turns
         else:
@@ -963,6 +1226,38 @@ def _attach_telemetry(output: Any, telemetry: dict[str, Any]) -> dict[str, Any]:
     payload = output if isinstance(output, dict) else {}
     payload["_telemetry"] = telemetry
     return payload
+
+
+def _build_inference_unavailable_result(
+    *,
+    worker: Worker,
+    telemetry: dict[str, Any],
+    error_text: str,
+    thinking_steps: int,
+    tools_used: list[str],
+    partial: bool,
+) -> WorkerResult:
+    summary = (
+        "Task partially completed with degraded state: inference provider is currently overloaded."
+        if partial
+        else "Task failed temporarily: inference provider is currently overloaded."
+    )
+    return WorkerResult(
+        status="failed",
+        summary=summary,
+        output=_attach_telemetry(
+            {
+                "degraded": True,
+                "retryable": True,
+                "reason": "inference_upstream_unavailable",
+                "error": _truncate_text(error_text, 500),
+            },
+            telemetry,
+        ),
+        knowledge_proposals=worker.knowledge_proposals,
+        thinking_steps=thinking_steps,
+        tools_used=tools_used,
+    )
 
 
 def _summarize_tool_start(tool_name: str | None, tool_input: dict[str, Any], *, timeout_seconds: int | None) -> str:

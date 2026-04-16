@@ -63,12 +63,14 @@ def _detect_tool_loop(
     warning_threshold: int = _DEFAULT_TOOL_LOOP_WARNING_THRESHOLD,
     critical_threshold: int = _DEFAULT_TOOL_LOOP_CRITICAL_THRESHOLD,
     global_breaker_threshold: int = _DEFAULT_TOOL_LOOP_GLOBAL_BREAKER_THRESHOLD,
+    global_breaker_count: int | None = None,
 ) -> dict[str, Any] | None:
-    if len(history) >= global_breaker_threshold:
+    effective_count = int(global_breaker_count) if isinstance(global_breaker_count, int) else len(history)
+    if effective_count >= global_breaker_threshold:
         return {
             "detector": "global_circuit_breaker",
             "level": "critical",
-            "count": len(history),
+            "count": effective_count,
             "message": "Too many tool calls in one run without completion.",
         }
 

@@ -243,3 +243,48 @@ def test_start_child_worker_rejects_tools_outside_child_template_allowlist() -> 
     result = asyncio.run(_scenario())
     assert "requested tools exceed template contract" in result
     assert "exec_run" in result
+
+
+def test_start_child_worker_accepts_spawn_children_permission_alias() -> None:
+    templates = {
+        "parent": _template(
+            "parent",
+            perms=["spawn_children", "network"],
+            tools=["start_child_worker"],
+            can_spawn=True,
+            allowed_children=["child"],
+        ),
+        "child": _template("child", perms=["network"], tools=["web_search"]),
+    }
+
+    class _Octo:
+        def __init__(self) -> None:
+            self.store = _Store(templates)
+            self.last_launch = None
+
+        async def _start_worker_async(self, **kwargs):
+            self.last_launch = kwargs
+            return {
+                "status": "started",
+                "worker_id": "child-run-1",
+                "run_id": "child-run-1",
+            }
+
+    octo = _Octo()
+
+    async def _scenario() -> dict[str, object]:
+        payload = await _tool_start_child_worker(
+            {"worker_id": "child", "task": "fetch rss"},
+            {
+                "octo": octo,
+                "chat_id": 1,
+                "worker": _caller_worker(
+                    effective_permissions=["worker_manage", "network"],
+                ),
+            },
+        )
+        return json.loads(payload)
+
+    result = asyncio.run(_scenario())
+    assert result["status"] == "started"
+    assert octo.last_launch is not None

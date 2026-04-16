@@ -6,7 +6,7 @@ from pathlib import Path
 
 from octopal.infrastructure.config.models import LLMConfig, OctopalConfig
 from octopal.infrastructure.config.settings import Settings
-from octopal.infrastructure.store.models import WorkerTemplateRecord
+from octopal.infrastructure.store.models import WorkerRecord, WorkerTemplateRecord
 from octopal.runtime.workers.contracts import Capability, TaskRequest, WorkerResult
 from octopal.runtime.workers.runtime import (
     WorkerRuntime,
@@ -62,6 +62,172 @@ def test_runtime_blocks_user_communication_tools_for_workers(tmp_path: Path) -> 
     spec = captured["spec"]
     assert "fs_read" in spec.available_tools
     assert "send_file_to_user" not in spec.available_tools
+
+
+def test_runtime_allows_worker_manage_templates(tmp_path: Path) -> None:
+    template = WorkerTemplateRecord(
+        id="research_coordinator",
+        name="Research Coordinator",
+        description="Test worker",
+        system_prompt="Coordinate child workers",
+        available_tools=["start_child_worker", "get_worker_result"],
+        required_permissions=["worker_manage"],
+        model=None,
+        max_thinking_steps=3,
+        default_timeout_seconds=30,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    class _Store:
+        def get_worker_template(self, worker_id: str):
+            return template
+
+    class _Policy:
+        def grant_capabilities(self, capabilities):
+            from octopal.runtime.policy.engine import PolicyEngine
+
+            return PolicyEngine().grant_capabilities(capabilities)
+
+    runtime = WorkerRuntime(
+        store=_Store(),
+        policy=_Policy(),
+        workspace_dir=tmp_path,
+        launcher=object(),
+        mcp_manager=None,
+        settings=Settings(),
+    )
+
+    captured: dict[str, object] = {}
+
+    async def _fake_run(spec, approval_requester=None):
+        captured["spec"] = spec
+        return WorkerResult(summary="ok")
+
+    runtime.run = _fake_run  # type: ignore[method-assign]
+
+    result = asyncio.run(runtime.run_task(TaskRequest(worker_id="research_coordinator", task="hello")))
+
+    assert result.status == "completed"
+    spec = captured["spec"]
+    assert spec.effective_permissions == ["worker_manage"]
+
+
+def test_runtime_allows_spawn_children_permission_alias(tmp_path: Path) -> None:
+    template = WorkerTemplateRecord(
+        id="research_coordinator",
+        name="Research Coordinator",
+        description="Test worker",
+        system_prompt="Coordinate child workers",
+        available_tools=["start_child_worker", "get_worker_result"],
+        required_permissions=["spawn_children", "network"],
+        model=None,
+        max_thinking_steps=3,
+        default_timeout_seconds=30,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    class _Store:
+        def get_worker_template(self, worker_id: str):
+            return template
+
+    class _Policy:
+        def grant_capabilities(self, capabilities):
+            from octopal.runtime.policy.engine import PolicyEngine
+
+            return PolicyEngine().grant_capabilities(capabilities)
+
+    runtime = WorkerRuntime(
+        store=_Store(),
+        policy=_Policy(),
+        workspace_dir=tmp_path,
+        launcher=object(),
+        mcp_manager=None,
+        settings=Settings(),
+    )
+
+    captured: dict[str, object] = {}
+
+    async def _fake_run(spec, approval_requester=None):
+        captured["spec"] = spec
+        return WorkerResult(summary="ok")
+
+    runtime.run = _fake_run  # type: ignore[method-assign]
+
+    result = asyncio.run(runtime.run_task(TaskRequest(worker_id="research_coordinator", task="hello")))
+
+    assert result.status == "completed"
+    spec = captured["spec"]
+    assert spec.effective_permissions == ["worker_manage", "network"]
+
+
+def test_runtime_persists_preflight_failure_for_worker_status(tmp_path: Path) -> None:
+    template = WorkerTemplateRecord(
+        id="research_coordinator",
+        name="Research Coordinator",
+        description="Test worker",
+        system_prompt="Coordinate child workers",
+        available_tools=["start_child_worker"],
+        required_permissions=["worker_manage"],
+        model=None,
+        max_thinking_steps=3,
+        default_timeout_seconds=30,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    class _Store:
+        def __init__(self) -> None:
+            self.records: dict[str, WorkerRecord] = {}
+
+        def get_worker_template(self, worker_id: str):
+            return template
+
+        def get_worker(self, worker_id: str):
+            return self.records.get(worker_id)
+
+        def create_worker(self, record: WorkerRecord) -> None:
+            self.records[record.id] = record
+
+        def update_worker_status(self, worker_id: str, status: str) -> None:
+            record = self.records[worker_id]
+            self.records[worker_id] = record.model_copy(update={"status": status})
+
+        def update_worker_result(self, worker_id: str, summary=None, output=None, error=None, tools_used=None) -> None:
+            record = self.records[worker_id]
+            update = {}
+            if summary is not None:
+                update["summary"] = summary
+            if output is not None:
+                update["output"] = output
+            if error is not None:
+                update["error"] = error
+            if tools_used is not None:
+                update["tools_used"] = tools_used
+            self.records[worker_id] = record.model_copy(update=update)
+
+    class _Policy:
+        def grant_capabilities(self, capabilities):
+            return []
+
+    runtime = WorkerRuntime(
+        store=_Store(),
+        policy=_Policy(),
+        workspace_dir=tmp_path,
+        launcher=object(),
+        mcp_manager=None,
+        settings=Settings(),
+    )
+
+    request = TaskRequest(worker_id="research_coordinator", task="hello", run_id="run-1")
+    result = asyncio.run(runtime.run_task(request))
+
+    assert result.status == "failed"
+    record = runtime.store.get_worker("run-1")
+    assert record is not None
+    assert record.status == "failed"
+    assert record.error == "missing_required_permissions"
 
 
 def test_runtime_does_not_auto_inject_global_mcp_tools(tmp_path: Path) -> None:

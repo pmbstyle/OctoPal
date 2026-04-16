@@ -2370,7 +2370,10 @@ class Octo:
                     result = await self.runtime.run_task(task_request, approval_requester=requester)
                     worker_record = await asyncio.to_thread(self.store.get_worker, run_id)
                     worker_status = getattr(worker_record, "status", None)
-                    failed = worker_status in {"failed", "stopped"}
+                    normalized_result_status = str(getattr(result, "status", "completed") or "completed").strip().lower()
+                    if worker_status is None and normalized_result_status == "failed":
+                        worker_status = "failed"
+                    failed = worker_status in {"failed", "stopped"} or normalized_result_status == "failed"
                     if scheduled_task_id and self.scheduler:
                         if not failed:
                             self.scheduler.mark_executed(scheduled_task_id)

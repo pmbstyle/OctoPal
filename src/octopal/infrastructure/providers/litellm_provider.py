@@ -530,7 +530,18 @@ def _looks_like_illegal_messages_error(exc: Exception) -> bool:
 def _is_rate_limit_error(exc: Exception) -> bool:
     name = type(exc).__name__.lower()
     err = str(exc).lower()
-    return "ratelimit" in name or "rate limit" in err or "error code: 429" in err or "status code 429" in err
+    markers = (
+        "ratelimit",
+        "rate limit",
+        "error code: 429",
+        "status code 429",
+        "http_code\":\"529\"",
+        "status code 529",
+        "server error '529",
+        "overloaded_error",
+        "under high load",
+    )
+    return any(marker in name or marker in err for marker in markers)
 
 
 def _is_closed_client_error(exc: Exception) -> bool:

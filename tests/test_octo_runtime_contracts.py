@@ -435,6 +435,64 @@ def test_start_worker_async_emits_failed_progress_when_store_marks_failed(monkey
     assert "failed" in final_text.lower()
     assert final_meta["worker_status"] == "failed"
 
+
+def test_start_worker_async_emits_failed_progress_when_failed_result_has_no_worker_record(monkeypatch) -> None:
+    class _Memory:
+        async def add_message(self, role: str, content: str, metadata: dict):
+            return None
+
+    class _Store:
+        def get_worker(self, worker_id: str):
+            return None
+
+    class _Runtime:
+        async def run_task(self, task_request, approval_requester=None):
+            return WorkerResult(
+                status="failed",
+                summary="Permission denied for worker task: missing required permissions (worker_manage)",
+                output={"error": "missing_required_permissions"},
+            )
+
+    import octopal.runtime.octo.core as octo_core
+
+    monkeypatch.setattr(octo_core, "_enqueue_internal_result", lambda *args, **kwargs: None)
+
+    progress_events: list[tuple[str, str, dict]] = []
+
+    async def _progress_sender(chat_id: int, state: str, text: str, meta: dict) -> None:
+        progress_events.append((state, text, dict(meta)))
+
+    octo = Octo(
+        provider=object(),
+        store=_Store(),
+        policy=object(),
+        runtime=_Runtime(),
+        approvals=object(),
+        memory=_Memory(),
+        canon=object(),
+        internal_progress_send=_progress_sender,
+    )
+
+    async def scenario() -> None:
+        launch = await octo._start_worker_async(
+            worker_id="research_coordinator",
+            task="coordinate research",
+            chat_id=1,
+            inputs={},
+            tools=None,
+            model=None,
+            timeout_seconds=30,
+        )
+        assert launch["status"] == "started"
+        await asyncio.sleep(0.05)
+
+    asyncio.run(scenario())
+
+    final_state, final_text, final_meta = progress_events[-1]
+    assert final_state == "failed"
+    assert "failed" in final_text.lower()
+    assert final_meta["worker_status"] == "failed"
+
 def test_start_worker_async_infers_longer_timeout_for_context_heavy_network_tasks(monkeypatch) -> None:
     class _Memory:
         async def add_message(self, role: str, content: str, metadata: dict):

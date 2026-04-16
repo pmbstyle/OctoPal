@@ -5,6 +5,7 @@ DEFAULT_CAPABILITY_WHITELIST: dict[str, list[str]] = {
     "filesystem_read": ["worker"],
     "filesystem_write": ["worker"],
     "network": ["*"],
+    "worker_manage": ["worker"],
     "exec": ["worker", "python", "node"],
     "service_read": ["worker"],
     "service_control": ["worker"],

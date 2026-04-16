@@ -7,17 +7,24 @@ from pathlib import Path
 from octopal.runtime.tool_errors import ToolBridgeError
 from octopal.runtime.workers.agent_worker import (
     _auto_tune_max_steps,
+    _build_inference_unavailable_result,
     _classify_tool_error,
+    _detect_orchestration_stall,
     _detect_tool_loop,
     _execute_tool,
     _extract_error_text,
     _extract_mcp_identity,
+    _extract_tool_progress_key,
     _hash_tool_call,
     _hash_tool_outcome,
+    _is_upstream_unavailable_error,
+    _maybe_wait_for_orchestration_poll_window,
+    _meaningful_tool_history_size,
     _parse_tool_arguments,
+    _resolve_orchestration_poll_throttle_seconds,
     _resolve_tool_loop_thresholds,
     _result_has_error,
-    _tool_no_progress_streak,
+    _tool_progress_streak,
     execute_agent_task,
 )
 from octopal.runtime.workers.contracts import WorkerSpec
@@ -245,15 +252,305 @@ def test_tool_call_hash_is_stable_for_key_order() -> None:
     assert h1 == h2
 
 
-def test_tool_no_progress_streak_counts_same_outcome() -> None:
+def test_tool_progress_streak_counts_same_progress_key() -> None:
     history = [
-        {"tool_name": "process", "args_hash": "a", "result_hash": "x"},
-        {"tool_name": "process", "args_hash": "a", "result_hash": "x"},
-        {"tool_name": "process", "args_hash": "a", "result_hash": "x"},
+        {"tool_name": "get_worker_result", "args_hash": "a", "result_hash": "x", "progress_key": None},
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "b",
+            "result_hash": "1",
+            "progress_key": "sig-1",
+            "observed_at": 100.0,
+        },
+        {"tool_name": "get_worker_result", "args_hash": "c", "result_hash": "y", "progress_key": None},
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "b",
+            "result_hash": "2",
+            "progress_key": "sig-1",
+            "observed_at": 108.0,
+        },
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "b",
+            "result_hash": "3",
+            "progress_key": "sig-1",
+            "observed_at": 116.0,
+        },
     ]
-    count, latest = _tool_no_progress_streak(history, tool_name="process", args_hash="a")
-    assert count == 3
-    assert latest == "x"
+    streak = _tool_progress_streak(
+        history,
+        tool_name="synthesize_worker_results",
+        progress_key="sig-1",
+    )
+    assert streak["count"] == 3
+    assert streak["elapsed_seconds"] == 16.0
+
+
+def test_extract_tool_progress_key_reads_synthesize_signature() -> None:
+    assert (
+        _extract_tool_progress_key(
+            "synthesize_worker_results",
+            {"progress_signature": "sig-1"},
+        )
+        == "sig-1"
+    )
+    assert _extract_tool_progress_key("get_worker_result", {"progress_signature": "sig-1"}) is None
+
+
+def test_extract_tool_progress_key_reads_synthesize_signature_from_json_string() -> None:
+    assert (
+        _extract_tool_progress_key(
+            "synthesize_worker_results",
+            '{"status":"pending","progress_signature":"sig-2","pending_count":2}',
+        )
+        == "sig-2"
+    )
+
+
+def test_extract_tool_progress_key_reads_worker_result_signature_ignoring_runtime_noise() -> None:
+    first = _extract_tool_progress_key(
+        "get_worker_result",
+        {
+            "status": "running",
+            "worker_id": "w1",
+            "updated_at": "2026-04-16T22:02:26Z",
+            "runtime_seconds": 3,
+            "seconds_since_update": 1,
+        },
+    )
+    second = _extract_tool_progress_key(
+        "get_worker_result",
+        {
+            "status": "running",
+            "worker_id": "w1",
+            "updated_at": "2026-04-16T22:02:26Z",
+            "runtime_seconds": 9,
+            "seconds_since_update": 7,
+        },
+    )
+    assert first == second == "w1:running:2026-04-16T22:02:26Z"
+
+
+def test_upstream_unavailable_error_detects_529_overload() -> None:
+    assert _is_upstream_unavailable_error(
+        "LiteLLM completion with tools failed: overloaded_error http_code 529 under high load"
+    )
+
+
+def test_meaningful_tool_history_size_dedupes_repeated_worker_polls_without_progress() -> None:
+    history = [
+        {
+            "tool_name": "get_worker_result",
+            "args_hash": "worker-a",
+            "result_hash": "r1",
+            "progress_key": "w1:running:t1",
+        },
+        {
+            "tool_name": "get_worker_result",
+            "args_hash": "worker-b",
+            "result_hash": "r2",
+            "progress_key": "w2:running:t1",
+        },
+        {
+            "tool_name": "get_worker_result",
+            "args_hash": "worker-a",
+            "result_hash": "r3",
+            "progress_key": "w1:running:t1",
+        },
+        {
+            "tool_name": "get_worker_result",
+            "args_hash": "worker-b",
+            "result_hash": "r4",
+            "progress_key": "w2:running:t1",
+        },
+        {
+            "tool_name": "get_worker_result",
+            "args_hash": "worker-a",
+            "result_hash": "r5",
+            "progress_key": "w1:completed:t2",
+        },
+    ]
+    assert _meaningful_tool_history_size(history) == 3
+
+
+def test_resolve_orchestration_poll_throttle_seconds_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("OCTOPAL_ORCHESTRATION_POLL_THROTTLE_SECONDS", "7")
+    assert _resolve_orchestration_poll_throttle_seconds() == 7
+
+
+def test_maybe_wait_for_orchestration_poll_window_throttles_recent_child_poll(
+    monkeypatch,
+) -> None:
+    worker = _dummy_worker()
+    sleep_calls: list[float] = []
+    log_messages: list[str] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    async def _fake_log(level: str, message: str) -> None:
+        log_messages.append(f"{level}:{message}")
+
+    monkeypatch.setenv("OCTOPAL_ORCHESTRATION_POLL_THROTTLE_SECONDS", "3")
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.time.monotonic", lambda: 101.0)
+    monkeypatch.setattr(worker, "log", _fake_log)
+
+    args_hash = _hash_tool_call("get_worker_result", {"worker_id": "child-1"})
+    outcome = asyncio.run(
+        _maybe_wait_for_orchestration_poll_window(
+            worker,
+            [
+                {
+                    "tool_name": "get_worker_result",
+                    "args_hash": args_hash,
+                    "observed_at": 100.0,
+                }
+            ],
+            tool_name="get_worker_result",
+            tool_input={"worker_id": "child-1"},
+        )
+    )
+
+    assert outcome["step_exempt"] is True
+    assert outcome["args_hash"] == args_hash
+    assert outcome["waited_seconds"] == 2.0
+    assert sleep_calls == [2.0]
+    assert any("Throttling get_worker_result poll" in message for message in log_messages)
+
+
+def test_build_inference_unavailable_result_marks_retryable_failure() -> None:
+    worker = _dummy_worker()
+    result = _build_inference_unavailable_result(
+        worker=worker,
+        telemetry={"llm_calls": 0},
+        error_text="provider overloaded 529",
+        thinking_steps=2,
+        tools_used=["web_search"],
+        partial=True,
+    )
+    assert result.status == "failed"
+    assert "partially completed" in result.summary.lower()
+    assert result.output is not None
+    assert result.output["retryable"] is True
+    assert result.output["reason"] == "inference_upstream_unavailable"
+
+
+def test_detect_orchestration_stall_warns_and_breaks_on_repeated_no_progress() -> None:
+    history = [
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r1",
+            "progress_key": "sig-1",
+            "observed_at": 100.0,
+        },
+        {
+            "tool_name": "get_worker_result",
+            "args_hash": "worker-1",
+            "result_hash": "running",
+            "progress_key": None,
+        },
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r2",
+            "progress_key": "sig-1",
+            "observed_at": 118.0,
+        },
+    ]
+    warning = _detect_orchestration_stall(
+        history,
+        tool_name="synthesize_worker_results",
+        tool_result={"pending_count": 2, "pending_results": [{"worker_id": "w1", "runtime_seconds": 2}]},
+        progress_key="sig-1",
+    )
+    assert warning is not None
+    assert warning["level"] == "warning"
+    assert warning["elapsed_seconds"] == 18.0
+
+    history.append(
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r3",
+            "progress_key": "sig-1",
+            "observed_at": 134.0,
+        }
+    )
+    critical = _detect_orchestration_stall(
+        history,
+        tool_name="synthesize_worker_results",
+        tool_result={"pending_count": 2, "pending_results": [{"worker_id": "w1", "runtime_seconds": 2}]},
+        progress_key="sig-1",
+    )
+    assert critical is not None
+    assert critical["level"] == "critical"
+    assert critical["elapsed_seconds"] == 34.0
+
+
+def test_detect_orchestration_stall_handles_json_string_tool_results() -> None:
+    history = [
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r1",
+            "progress_key": "sig-json",
+            "observed_at": 100.0,
+        },
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r2",
+            "progress_key": "sig-json",
+            "observed_at": 118.0,
+        },
+    ]
+    warning = _detect_orchestration_stall(
+        history,
+        tool_name="synthesize_worker_results",
+        tool_result='{"status":"pending","pending_count":2,"progress_signature":"sig-json","pending_results":[{"worker_id":"w1","runtime_seconds":2}]}',
+        progress_key="sig-json",
+    )
+    assert warning is not None
+    assert warning["level"] == "warning"
+
+
+def test_detect_orchestration_stall_ignores_short_repeat_windows() -> None:
+    history = [
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r1",
+            "progress_key": "sig-fresh",
+            "observed_at": 100.0,
+        },
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r2",
+            "progress_key": "sig-fresh",
+            "observed_at": 103.0,
+        },
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r3",
+            "progress_key": "sig-fresh",
+            "observed_at": 108.0,
+        },
+    ]
+    state = _detect_orchestration_stall(
+        history,
+        tool_name="synthesize_worker_results",
+        tool_result={
+            "pending_count": 2,
+            "pending_results": [{"worker_id": "w1", "runtime_seconds": 45}],
+        },
+        progress_key="sig-fresh",
+    )
+    assert state is None
 
 
 def test_detect_tool_loop_warning_and_critical_thresholds() -> None:
@@ -388,3 +685,77 @@ def test_execute_agent_task_stops_after_repeated_empty_turns(monkeypatch, tmp_pa
     assert isinstance(result.output, dict)
     assert result.output["reason"] == "empty_turn_limit"
     assert result.output["_telemetry"]["empty_turns"] == 3
+
+
+def test_execute_agent_task_does_not_charge_step_for_throttled_poll_round(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    worker = _dummy_worker()
+
+    async def _noop_log(level: str, message: str) -> None:
+        return None
+
+    monkeypatch.setattr(worker, "log", _noop_log)
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.load_settings", lambda: object())
+    monkeypatch.setattr(
+        "octopal.runtime.workers.agent_worker.LiteLLMProvider",
+        lambda settings, model=None, config=None: object(),
+    )
+
+    tool = ToolSpec(
+        name="get_worker_result",
+        description="poll child",
+        parameters={"type": "object"},
+        permission="worker_manage",
+        handler=lambda args, ctx: {"worker_id": args.get("worker_id"), "status": "running"},
+        is_async=False,
+    )
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.get_tools", lambda: [tool])
+
+    responses = iter(
+        [
+            {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "function": {
+                            "name": "get_worker_result",
+                            "arguments": '{"worker_id": "child-1"}',
+                        },
+                    }
+                ]
+            },
+            {"content": '{"type":"result","summary":"done"}'},
+        ]
+    )
+
+    async def _fake_call_llm(provider, messages, tools):
+        return next(responses)
+
+    async def _fake_execute_tool(tool_name, tool_input, workspace_root, worker_dir, worker_obj, tool_map, *, timeout_seconds=None):
+        return {
+            "worker_id": tool_input["worker_id"],
+            "status": "running",
+            "updated_at": "2026-04-16T21:12:52Z",
+        }, {"retries": 0, "timed_out": False, "had_error": False, "error_type": "none"}
+
+    async def _fake_wait_for_poll_window(worker_obj, history, *, tool_name, tool_input):
+        return {
+            "step_exempt": True,
+            "waited_seconds": 1.0,
+            "args_hash": _hash_tool_call(str(tool_name or ""), tool_input or {}),
+        }
+
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker._call_llm", _fake_call_llm)
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker._execute_tool", _fake_execute_tool)
+    monkeypatch.setattr(
+        "octopal.runtime.workers.agent_worker._maybe_wait_for_orchestration_poll_window",
+        _fake_wait_for_poll_window,
+    )
+
+    result = asyncio.run(execute_agent_task(worker, tmp_path, tmp_path))
+
+    assert result.summary == "done"
+    assert result.thinking_steps == 1
+    assert result.tools_used == ["get_worker_result"]
