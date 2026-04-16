@@ -52,8 +52,7 @@ from octopal.runtime.octo.router import (
     should_force_worker_followup,
 )
 from octopal.runtime.policy.engine import PolicyEngine
-from octopal.runtime.scheduler.service import normalize_notify_user_policy
-from octopal.runtime.scheduler.service import SchedulerService
+from octopal.runtime.scheduler.service import SchedulerService, normalize_notify_user_policy
 from octopal.runtime.workers.contracts import TaskRequest, WorkerResult
 from octopal.runtime.workers.runtime import WorkerRuntime
 from octopal.utils import (
@@ -92,6 +91,7 @@ class _PendingWorkerFollowupBatch:
 
 @dataclass(frozen=True)
 class _PendingWorkerFollowupItem:
+    worker_id: str
     task_text: str
     result: WorkerResult
     notify_user: str | None = None
@@ -661,7 +661,7 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
                     route_worker_results_back_to_octo(
                         octo,
                         chat_id,
-                        [(item.task_text, item.result) for item in batch.items],
+                        [(item.worker_id, item.task_text, item.result) for item in batch.items],
                     ),
                     timeout=_WORKER_RESULT_ROUTING_TIMEOUT_SECONDS,
                 )
@@ -779,6 +779,7 @@ async def _enqueue_batched_worker_followup(
     correlation_id: str | None,
     text: str | None = None,
     *,
+    worker_id: str = "",
     task_text: str | None = None,
     result: WorkerResult | None = None,
     notify_user: str | None = None,
@@ -791,7 +792,7 @@ async def _enqueue_batched_worker_followup(
             routed_text = await route_worker_results_back_to_octo(
                 octo,
                 chat_id,
-                [(task_text, result)],
+                [(str(worker_id or "").strip(), task_text, result)],
             )
             decision = resolve_user_delivery(routed_text)
             if decision.user_visible:
@@ -815,6 +816,7 @@ async def _enqueue_batched_worker_followup(
     if task_text is not None and result is not None:
         batch.items.append(
             _PendingWorkerFollowupItem(
+                worker_id=str(worker_id or "").strip(),
                 task_text=task_text,
                 result=result,
                 notify_user=notify_user,
@@ -836,7 +838,10 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
         try:
             item = await asyncio.wait_for(queue.get(), timeout=_QUEUE_IDLE_TIMEOUT_SECONDS)
             notify_user = None
-            if len(item) == 4:
+            worker_id = ""
+            if len(item) == 5:
+                worker_id, task_text, result, correlation_id, notify_user = item
+            elif len(item) == 4:
                 task_text, result, correlation_id, notify_user = item
             else:
                 task_text, result, correlation_id = item
@@ -883,6 +888,7 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
                         octo,
                         chat_id,
                         correlation_id,
+                        worker_id=worker_id,
                         task_text=task_text,
                         result=result,
                         notify_user=notify_user,
@@ -910,6 +916,7 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
 def _enqueue_internal_result(
     octo: Octo,
     chat_id: int,
+    worker_id: str,
     task_text: str,
     result: WorkerResult,
     *,
@@ -930,7 +937,7 @@ def _enqueue_internal_result(
     if chat_id not in _INTERNAL_TASKS or _INTERNAL_TASKS[chat_id].done():
         _INTERNAL_TASKS[chat_id] = asyncio.create_task(_internal_worker(octo, chat_id, queue))
     octo.mark_internal_result_pending(correlation_id)
-    queue.put_nowait((task_text, result, correlation_id, notify_user))
+    queue.put_nowait((str(worker_id or "").strip(), task_text, result, correlation_id, notify_user))
     logger.info("Queued internal worker result", chat_id=chat_id, queue_size=queue.qsize())
     _publish_runtime_metrics()
 
@@ -2444,6 +2451,7 @@ class Octo:
                 _enqueue_internal_result(
                     self,
                     chat_id,
+                    run_id,
                     task,
                     result,
                     correlation_id=task_request.correlation_id,

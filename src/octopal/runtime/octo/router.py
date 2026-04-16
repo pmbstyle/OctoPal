@@ -105,6 +105,10 @@ _ALWAYS_INCLUDE_TOOL_NAMES = {
     "fs_move",
     "fs_delete",
 }
+_WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES = {
+    "get_worker_output_path",
+    "manage_canon",
+}
 _TEXTUAL_TOOL_NAME_RE = re.compile(r"^(?:mcp__[\w-]+__)?[a-z][a-z0-9_]{1,63}$", re.IGNORECASE)
 _TEXTUAL_TOOL_PREVIEW_RE = re.compile(
     r"^(?P<tool>(?:mcp__[\w-]+__)?[a-z][a-z0-9_]{1,63})(?P<rest>(?:,\s*[a-z_][a-z0-9_ -]{0,31}:\s*[^,\n]{1,200})+)$",
@@ -145,6 +149,16 @@ def _build_saved_image_fallback_text(user_text: str, saved_paths: list[str]) -> 
     )
 
 
+async def _ensure_mcp_connected_for_routing(octo: Any) -> None:
+    mcp_manager = getattr(octo, "mcp_manager", None)
+    if mcp_manager is None:
+        return
+    try:
+        await mcp_manager.ensure_configured_servers_connected()
+    except Exception:
+        logger.warning("Failed to refresh configured MCP servers before routing", exc_info=True)
+
+
 async def route_or_reply(
     octo: Any,
     provider: InferenceProvider,
@@ -171,12 +185,7 @@ async def route_or_reply(
         wake_notice = ""
         if include_wakeup and hasattr(octo, "peek_context_wakeup"):
             wake_notice = str(octo.peek_context_wakeup(chat_id) or "")
-        mcp_manager = getattr(octo, "mcp_manager", None)
-        if mcp_manager is not None:
-            try:
-                await mcp_manager.ensure_configured_servers_connected()
-            except Exception:
-                logger.warning("Failed to refresh configured MCP servers before routing", exc_info=True)
+        await _ensure_mcp_connected_for_routing(octo)
 
         octo_tools, ctx = _get_octo_tools(octo, chat_id)
         logger.info("Octo tools fetched: count=%d", len(octo_tools))
@@ -241,337 +250,16 @@ async def route_or_reply(
                         ),
                     )
                 )
-        tool_capable = getattr(provider, "complete_with_tools", None)
-
-        if callable(tool_capable):
-            active_tool_specs = list(octo_tools)
-            tools = [spec.to_openai_tool() for spec in active_tool_specs]
-            last_error: str | None = None
-            had_tool_calls = False
-            transient_tool_failures = 0
-            tool_call_history: list[dict[str, str]] = []
-            tool_loop_thresholds = _resolve_tool_loop_thresholds()
-            max_attempts = 10
-            vision_tool_fallback_used = False
-
-            for _ in range(max_attempts):
-                try:
-                    result = await provider.complete_with_tools(messages, tools=tools, tool_choice="auto")
-                except Exception as e:
-                    # If we have images, this might be a multi-modal conflict (e.g. z.ai GLM-4 doesn't support tools + vision).
-                    # Fallback strategy: Save images to disk and retry with a text-only prompt pointing to the files.
-                    if images and not vision_tool_fallback_used and _is_vision_tool_compatibility_error(e):
-                        logger.warning("Vision+Tools failed; attempting save-to-disk fallback", error=str(e))
-                        try:
-                            saved_paths = []
-                            workspace_dir = Path(os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")).resolve()
-                            img_dir = workspace_dir / "tmp" / "telegram_images"
-                            img_dir.mkdir(parents=True, exist_ok=True)
-
-                            for _idx, img_data in enumerate(images):
-                                # expect data:image/jpeg;base64,....
-                                if "," in img_data:
-                                    header, b64_str = img_data.split(",", 1)
-                                    ext = ".jpg"
-                                    if "png" in header:
-                                        ext = ".png"
-                                    elif "webp" in header:
-                                        ext = ".webp"
-                                else:
-                                    b64_str = img_data
-                                    ext = ".jpg"  # assume jpg
-
-                                file_name = f"img_{uuid.uuid4()}{ext}"
-                                file_path = img_dir / file_name
-                                with open(file_path, "wb") as f:
-                                    f.write(base64.b64decode(b64_str))
-                                saved_paths.append(str(file_path))
-
-                            fallback_text = _build_saved_image_fallback_text(user_text, saved_paths)
-
-                            logger.info("Retrying with text-only fallback and saved images", count=len(saved_paths))
-                            messages[-1] = {"role": "user", "content": fallback_text}
-                            images = None
-                            vision_tool_fallback_used = True
-                            continue
-
-                        except Exception as fallback_exc:
-                            logger.error("Fallback save-and-retry failed", error=str(fallback_exc))
-                            return "I see you sent an image, but I am unable to process it. My current model configuration might not support vision, and I could not save it for tool analysis."
-                    if vision_tool_fallback_used:
-                        logger.warning(
-                            "Tool-enabled retry after image save failed; falling back to plain text completion",
-                            error=_exception_chain_text(e)[:500],
-                        )
-                        messages.append(
-                            Message(
-                                role="system",
-                                content=(
-                                    "Tool calling failed even after converting the image request into a text-only "
-                                    "instruction with local file paths. Reply without tools. Be transparent that the "
-                                    "image files were saved locally but could not be inspected automatically."
-                                ),
-                            )
-                        )
-                        fallback_text = await _complete_text(
-                            provider,
-                            messages,
-                            context="saved_image_tool_retry_failed",
-                        )
-                        return await _finalize_response(
-                            provider=provider,
-                            messages=messages,
-                            response_text=fallback_text,
-                            internal_followup=internal_followup,
-                        )
-                    if _is_context_overflow_error(e) and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW:
-                        prior_count = len(active_tool_specs)
-                        active_tool_specs = _shrink_tool_specs_for_retry(active_tool_specs)
-                        tools = [spec.to_openai_tool() for spec in active_tool_specs]
-                        logger.warning(
-                            "Retrying completion with fewer tools after context overflow",
-                            previous_tool_count=prior_count,
-                            reduced_tool_count=len(active_tool_specs),
-                        )
-                        continue
-                    if _is_invalid_tool_payload_error(e) and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW:
-                        prior_count = len(active_tool_specs)
-                        active_tool_specs = _shrink_tool_specs_for_retry(active_tool_specs)
-                        tools = [spec.to_openai_tool() for spec in active_tool_specs]
-                        logger.warning(
-                            "Retrying completion with fewer tools after provider rejected tool payload",
-                            previous_tool_count=prior_count,
-                            reduced_tool_count=len(active_tool_specs),
-                            provider_id=getattr(provider, "provider_id", "unknown"),
-                            error=_exception_chain_text(e)[:500],
-                        )
-                        continue
-                    if _is_transient_provider_error(e):
-                        transient_tool_failures += 1
-                        if transient_tool_failures >= 3:
-                            logger.warning(
-                                "Tool completion repeatedly failed with transient provider errors; falling back to plain completion",
-                                failures=transient_tool_failures,
-                                error=_exception_chain_text(e)[:500],
-                            )
-                            messages.append(
-                                Message(
-                                    role="system",
-                                    content=(
-                                        "Tool calling is temporarily unavailable due to provider instability. "
-                                        "Reply without tools, summarize status, and ask for retry only if needed."
-                                    ),
-                                )
-                            )
-                            fallback_text = await _complete_text(
-                                provider,
-                                messages,
-                                context="transient_tool_error_fallback",
-                            )
-                            return await _finalize_response(
-                                provider=provider,
-                                messages=messages,
-                                response_text=fallback_text,
-                                internal_followup=internal_followup,
-                            )
-                        delay_s = min(4.0, 0.8 * (2 ** (transient_tool_failures - 1)))
-                        logger.warning(
-                            "Transient provider error during tool completion; retrying",
-                            failure_count=transient_tool_failures,
-                            retry_delay_s=round(delay_s, 2),
-                            error=_exception_chain_text(e)[:500],
-                        )
-                        await asyncio.sleep(delay_s)
-                        continue
-                    raise e
-
-                content_raw = result.get("content", "")
-                tool_calls = result.get("tool_calls") or []
-                if not tool_calls and content_raw:
-                    recovered_call = _recover_textual_tool_call(content_raw, active_tool_specs)
-                    if recovered_call is not None:
-                        logger.warning(
-                            "Recovered textual tool invocation from model content",
-                            tool_name=recovered_call.get("function", {}).get("name"),
-                            raw_content=str(content_raw)[:200],
-                        )
-                        tool_calls = [recovered_call]
-
-                if tool_calls:
-                    had_tool_calls = True
-                    assistant_msg: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
-                    if content_raw:
-                        assistant_msg["content"] = content_raw
-                    messages.append(assistant_msg)
-
-                    for call in tool_calls:
-                        tool_result, tool_meta = await _handle_octo_tool_call(call, active_tool_specs, ctx)
-                        expanded_names: list[str] = []
-                        if str(call.get("function", {}).get("name") or "") == "tool_catalog_search":
-                            active_tool_specs, expanded_names = _expand_active_tool_specs_from_catalog_result(
-                                tool_result,
-                                active_tool_specs=active_tool_specs,
-                                ctx=ctx,
-                            )
-                            tools = [spec.to_openai_tool() for spec in active_tool_specs]
-                            if expanded_names:
-                                messages.append(
-                                    Message(
-                                        role="system",
-                                        content=(
-                                            "Tool catalog expansion complete. The following tools are now active for this turn:\n"
-                                            + "\n".join(f"- {name}" for name in expanded_names)
-                                            + "\nUse them directly if they fit the task."
-                                        ),
-                                    )
-                                )
-                        tool_result_text = render_tool_result_for_llm(tool_result).text
-                        loop_state = _record_octo_tool_call(
-                            tool_call_history,
-                            call=call,
-                            tool_result=tool_result,
-                            tool_meta=tool_meta,
-                            thresholds=tool_loop_thresholds,
-                        )
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": call.get("id"),
-                                "name": call.get("function", {}).get("name"),
-                                "content": tool_result_text,
-                            }
-                        )
-                        if loop_state is not None:
-                            logger.warning(
-                                "Octo tool loop detected",
-                                detector=loop_state["detector"],
-                                level=loop_state["level"],
-                                count=loop_state["count"],
-                                message=loop_state["message"],
-                            )
-                            if loop_state["level"] == "critical":
-                                messages.append(
-                                    Message(
-                                        role="system",
-                                        content=(
-                                            "Tool loop breaker triggered. Do not call more tools in this turn. "
-                                            "Summarize what happened, what is blocked, and what the next best step is."
-                                        ),
-                                    )
-                                )
-                                fallback_text = await _complete_text(
-                                    provider,
-                                    messages,
-                                    context="octo_tool_loop_breaker",
-                                )
-                                return await _finalize_response(
-                                    provider=provider,
-                                    messages=messages,
-                                    response_text=fallback_text,
-                                    internal_followup=internal_followup,
-                                )
-                        if "error" in tool_result_text.lower() or "failed" in tool_result_text.lower():
-                            last_error = tool_result_text
-                    continue
-
-                if content_raw:
-                    logger.debug("Octo output", output=content_raw)
-                    return await _finalize_response(
-                        provider=provider,
-                        messages=messages,
-                        response_text=content_raw,
-                        internal_followup=internal_followup,
-                    )
-
-                if had_tool_calls:
-                    logger.warning(
-                        "Tool execution completed without a final assistant response; falling back to text completion",
-                    )
-                    messages.append(
-                        Message(
-                            role="system",
-                            content=(
-                                "You have already used tools for this turn, but your last response was empty. "
-                                "Reply to the user now with a concise plain-language status update or answer."
-                            ),
-                        )
-                    )
-                    fallback_text = await _complete_text(
-                        provider,
-                        messages,
-                        context="empty_tool_response_fallback",
-                    )
-                    return await _finalize_response(
-                        provider=provider,
-                        messages=messages,
-                        response_text=fallback_text,
-                        internal_followup=internal_followup,
-                    )
-
-                return await _finalize_response(
-                    provider=provider,
-                    messages=messages,
-                    response_text=content_raw,
-                    internal_followup=internal_followup,
-                )
-
-            if had_tool_calls:
-                if internal_followup:
-                    return "NO_USER_RESPONSE"
-                # Force a final response without tools to explain progress.
-                messages.append(
-                    Message(
-                        role="system",
-                        content="You have reached the tool call limit for this turn. Summarize what you have initiated and let the user know you are processing their request.",
-                    )
-                )
-                final_resp = await _complete_text(
-                    provider,
-                    messages,
-                    context="tool_limit_fallback",
-                )
-                return await _finalize_response(
-                    provider=provider,
-                    messages=messages,
-                    response_text=final_resp,
-                    internal_followup=internal_followup,
-                )
-
-            if last_error and _looks_like_tool_error(last_error):
-                if internal_followup:
-                    return "NO_USER_RESPONSE"
-                messages.append(
-                    Message(
-                        role="system",
-                        content=f"A tool call failed: {last_error}. Explain the problem to the user naturally and ask for guidance if needed.",
-                    )
-                )
-                final_resp = await _complete_text(
-                    provider,
-                    messages,
-                    context="tool_error_fallback",
-                )
-                return await _finalize_response(
-                    provider=provider,
-                    messages=messages,
-                    response_text=final_resp,
-                    internal_followup=internal_followup,
-                )
-
-            return ""
-
-        response_raw = await _complete_text(
-            provider,
-            messages,
-            context="plain_completion",
-            on_partial=partial_callback,
-        )
-        logger.debug("Octo output", output=response_raw)
-        return await _finalize_response(
+        return await _complete_route_with_tools(
             provider=provider,
             messages=messages,
-            response_text=response_raw,
+            tool_specs=octo_tools,
+            ctx=ctx,
             internal_followup=internal_followup,
+            user_text=user_text,
+            images=images,
+            on_plain_partial=partial_callback,
+            allow_tool_catalog_expansion=True,
         )
     except Exception:
         logger.exception("Error in route_or_reply")
@@ -583,6 +271,351 @@ async def route_or_reply(
             await octo.set_typing(chat_id, False)
 
 
+async def _complete_route_with_tools(
+    *,
+    provider: InferenceProvider,
+    messages: list[Message | dict[str, Any]],
+    tool_specs: list[ToolSpec],
+    ctx: dict[str, object],
+    internal_followup: bool,
+    user_text: str,
+    images: list[str] | None,
+    on_plain_partial: Callable[[str], Awaitable[None]] | None = None,
+    allow_tool_catalog_expansion: bool,
+) -> str:
+    tool_capable = getattr(provider, "complete_with_tools", None)
+
+    if callable(tool_capable) and tool_specs:
+        active_tool_specs = list(tool_specs)
+        tools = [spec.to_openai_tool() for spec in active_tool_specs]
+        last_error: str | None = None
+        had_tool_calls = False
+        transient_tool_failures = 0
+        tool_call_history: list[dict[str, str]] = []
+        tool_loop_thresholds = _resolve_tool_loop_thresholds()
+        max_attempts = 10
+        vision_tool_fallback_used = False
+
+        for _ in range(max_attempts):
+            try:
+                result = await provider.complete_with_tools(messages, tools=tools, tool_choice="auto")
+            except Exception as e:
+                if images and not vision_tool_fallback_used and _is_vision_tool_compatibility_error(e):
+                    logger.warning("Vision+Tools failed; attempting save-to-disk fallback", error=str(e))
+                    try:
+                        saved_paths = []
+                        workspace_dir = Path(os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")).resolve()
+                        img_dir = workspace_dir / "tmp" / "telegram_images"
+                        img_dir.mkdir(parents=True, exist_ok=True)
+
+                        for _idx, img_data in enumerate(images):
+                            if "," in img_data:
+                                header, b64_str = img_data.split(",", 1)
+                                ext = ".jpg"
+                                if "png" in header:
+                                    ext = ".png"
+                                elif "webp" in header:
+                                    ext = ".webp"
+                            else:
+                                b64_str = img_data
+                                ext = ".jpg"
+
+                            file_name = f"img_{uuid.uuid4()}{ext}"
+                            file_path = img_dir / file_name
+                            with open(file_path, "wb") as f:
+                                f.write(base64.b64decode(b64_str))
+                            saved_paths.append(str(file_path))
+
+                        fallback_text = _build_saved_image_fallback_text(user_text, saved_paths)
+
+                        logger.info("Retrying with text-only fallback and saved images", count=len(saved_paths))
+                        messages[-1] = {"role": "user", "content": fallback_text}
+                        images = None
+                        vision_tool_fallback_used = True
+                        continue
+
+                    except Exception as fallback_exc:
+                        logger.error("Fallback save-and-retry failed", error=str(fallback_exc))
+                        return (
+                            "I see you sent an image, but I am unable to process it. "
+                            "My current model configuration might not support vision, and I could not save it for tool analysis."
+                        )
+                if vision_tool_fallback_used:
+                    logger.warning(
+                        "Tool-enabled retry after image save failed; falling back to plain text completion",
+                        error=_exception_chain_text(e)[:500],
+                    )
+                    messages.append(
+                        Message(
+                            role="system",
+                            content=(
+                                "Tool calling failed even after converting the image request into a text-only "
+                                "instruction with local file paths. Reply without tools. Be transparent that the "
+                                "image files were saved locally but could not be inspected automatically."
+                            ),
+                        )
+                    )
+                    fallback_text = await _complete_text(
+                        provider,
+                        messages,
+                        context="saved_image_tool_retry_failed",
+                    )
+                    return await _finalize_response(
+                        provider=provider,
+                        messages=messages,
+                        response_text=fallback_text,
+                        internal_followup=internal_followup,
+                    )
+                if _is_context_overflow_error(e) and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW:
+                    prior_count = len(active_tool_specs)
+                    active_tool_specs = _shrink_tool_specs_for_retry(active_tool_specs)
+                    tools = [spec.to_openai_tool() for spec in active_tool_specs]
+                    logger.warning(
+                        "Retrying completion with fewer tools after context overflow",
+                        previous_tool_count=prior_count,
+                        reduced_tool_count=len(active_tool_specs),
+                    )
+                    continue
+                if _is_invalid_tool_payload_error(e) and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW:
+                    prior_count = len(active_tool_specs)
+                    active_tool_specs = _shrink_tool_specs_for_retry(active_tool_specs)
+                    tools = [spec.to_openai_tool() for spec in active_tool_specs]
+                    logger.warning(
+                        "Retrying completion with fewer tools after provider rejected tool payload",
+                        previous_tool_count=prior_count,
+                        reduced_tool_count=len(active_tool_specs),
+                        provider_id=getattr(provider, "provider_id", "unknown"),
+                        error=_exception_chain_text(e)[:500],
+                    )
+                    continue
+                if _is_transient_provider_error(e):
+                    transient_tool_failures += 1
+                    if transient_tool_failures >= 3:
+                        logger.warning(
+                            "Tool completion repeatedly failed with transient provider errors; falling back to plain completion",
+                            failures=transient_tool_failures,
+                            error=_exception_chain_text(e)[:500],
+                        )
+                        messages.append(
+                            Message(
+                                role="system",
+                                content=(
+                                    "Tool calling is temporarily unavailable due to provider instability. "
+                                    "Reply without tools, summarize status, and ask for retry only if needed."
+                                ),
+                            )
+                        )
+                        fallback_text = await _complete_text(
+                            provider,
+                            messages,
+                            context="transient_tool_error_fallback",
+                        )
+                        return await _finalize_response(
+                            provider=provider,
+                            messages=messages,
+                            response_text=fallback_text,
+                            internal_followup=internal_followup,
+                        )
+                    delay_s = min(4.0, 0.8 * (2 ** (transient_tool_failures - 1)))
+                    logger.warning(
+                        "Transient provider error during tool completion; retrying",
+                        failure_count=transient_tool_failures,
+                        retry_delay_s=round(delay_s, 2),
+                        error=_exception_chain_text(e)[:500],
+                    )
+                    await asyncio.sleep(delay_s)
+                    continue
+                raise e
+
+            content_raw = result.get("content", "")
+            tool_calls = result.get("tool_calls") or []
+            if not tool_calls and content_raw:
+                recovered_call = _recover_textual_tool_call(content_raw, active_tool_specs)
+                if recovered_call is not None:
+                    logger.warning(
+                        "Recovered textual tool invocation from model content",
+                        tool_name=recovered_call.get("function", {}).get("name"),
+                        raw_content=str(content_raw)[:200],
+                    )
+                    tool_calls = [recovered_call]
+
+            if tool_calls:
+                had_tool_calls = True
+                assistant_msg: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
+                if content_raw:
+                    assistant_msg["content"] = content_raw
+                messages.append(assistant_msg)
+
+                for call in tool_calls:
+                    tool_result, tool_meta = await _handle_octo_tool_call(call, active_tool_specs, ctx)
+                    expanded_names: list[str] = []
+                    if allow_tool_catalog_expansion and str(call.get("function", {}).get("name") or "") == "tool_catalog_search":
+                        active_tool_specs, expanded_names = _expand_active_tool_specs_from_catalog_result(
+                            tool_result,
+                            active_tool_specs=active_tool_specs,
+                            ctx=ctx,
+                        )
+                        tools = [spec.to_openai_tool() for spec in active_tool_specs]
+                        if expanded_names:
+                            messages.append(
+                                Message(
+                                    role="system",
+                                    content=(
+                                        "Tool catalog expansion complete. The following tools are now active for this turn:\n"
+                                        + "\n".join(f"- {name}" for name in expanded_names)
+                                        + "\nUse them directly if they fit the task."
+                                    ),
+                                )
+                            )
+                    tool_result_text = render_tool_result_for_llm(tool_result).text
+                    loop_state = _record_octo_tool_call(
+                        tool_call_history,
+                        call=call,
+                        tool_result=tool_result,
+                        tool_meta=tool_meta,
+                        thresholds=tool_loop_thresholds,
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id"),
+                            "name": call.get("function", {}).get("name"),
+                            "content": tool_result_text,
+                        }
+                    )
+                    if loop_state is not None:
+                        logger.warning(
+                            "Octo tool loop detected",
+                            detector=loop_state["detector"],
+                            level=loop_state["level"],
+                            count=loop_state["count"],
+                            message=loop_state["message"],
+                        )
+                        if loop_state["level"] == "critical":
+                            messages.append(
+                                Message(
+                                    role="system",
+                                    content=(
+                                        "Tool loop breaker triggered. Do not call more tools in this turn. "
+                                        "Summarize what happened, what is blocked, and what the next best step is."
+                                    ),
+                                )
+                            )
+                            fallback_text = await _complete_text(
+                                provider,
+                                messages,
+                                context="octo_tool_loop_breaker",
+                            )
+                            return await _finalize_response(
+                                provider=provider,
+                                messages=messages,
+                                response_text=fallback_text,
+                                internal_followup=internal_followup,
+                            )
+                    if "error" in tool_result_text.lower() or "failed" in tool_result_text.lower():
+                        last_error = tool_result_text
+                continue
+
+            if content_raw:
+                logger.debug("Octo output", output=content_raw)
+                return await _finalize_response(
+                    provider=provider,
+                    messages=messages,
+                    response_text=content_raw,
+                    internal_followup=internal_followup,
+                )
+
+            if had_tool_calls:
+                logger.warning(
+                    "Tool execution completed without a final assistant response; falling back to text completion",
+                )
+                messages.append(
+                    Message(
+                        role="system",
+                        content=(
+                            "You have already used tools for this turn, but your last response was empty. "
+                            "Reply to the user now with a concise plain-language status update or answer."
+                        ),
+                    )
+                )
+                fallback_text = await _complete_text(
+                    provider,
+                    messages,
+                    context="empty_tool_response_fallback",
+                )
+                return await _finalize_response(
+                    provider=provider,
+                    messages=messages,
+                    response_text=fallback_text,
+                    internal_followup=internal_followup,
+                )
+
+            return await _finalize_response(
+                provider=provider,
+                messages=messages,
+                response_text=content_raw,
+                internal_followup=internal_followup,
+            )
+
+        if had_tool_calls:
+            if internal_followup:
+                return "NO_USER_RESPONSE"
+            messages.append(
+                Message(
+                    role="system",
+                    content="You have reached the tool call limit for this turn. Summarize what you have initiated and let the user know you are processing their request.",
+                )
+            )
+            final_resp = await _complete_text(
+                provider,
+                messages,
+                context="tool_limit_fallback",
+            )
+            return await _finalize_response(
+                provider=provider,
+                messages=messages,
+                response_text=final_resp,
+                internal_followup=internal_followup,
+            )
+
+        if last_error and _looks_like_tool_error(last_error):
+            if internal_followup:
+                return "NO_USER_RESPONSE"
+            messages.append(
+                Message(
+                    role="system",
+                    content=f"A tool call failed: {last_error}. Explain the problem to the user naturally and ask for guidance if needed.",
+                )
+            )
+            final_resp = await _complete_text(
+                provider,
+                messages,
+                context="tool_error_fallback",
+            )
+            return await _finalize_response(
+                provider=provider,
+                messages=messages,
+                response_text=final_resp,
+                internal_followup=internal_followup,
+            )
+
+        return ""
+
+    response_raw = await _complete_text(
+        provider,
+        messages,
+        context="plain_completion",
+        on_partial=on_plain_partial,
+    )
+    logger.debug("Octo output", output=response_raw)
+    return await _finalize_response(
+        provider=provider,
+        messages=messages,
+        response_text=response_raw,
+        internal_followup=internal_followup,
+    )
+
+
 async def route_worker_result_back_to_octo(
     octo: Any,
     chat_id: int,
@@ -590,50 +623,32 @@ async def route_worker_result_back_to_octo(
     result: WorkerResult,
 ) -> str:
     """Decide next steps after a worker completes its task."""
-    payload_json = json.dumps(_build_worker_result_payload(task_text, result), ensure_ascii=False)
-
-    worker_result_prompt = (
-        "Worker completed. Decide and execute next action based on this payload.\n"
-        "<worker_result>\n"
-        f"{payload_json}\n"
-        "</worker_result>\n\n"
-        "Interpretation rules:\n"
-        "- `summary` is internal worker/runtime text and is not user-facing by default.\n"
-        "- Never forward transport/debug/auth/orchestration text to the user.\n"
-        "- If you answer the user, write a clean Octo response in plain language.\n\n"
-        "If the output is truncated and you need specific details, use `get_worker_output_path`.\n"
-        "If there are knowledge_proposals, review them and use `manage_canon` to save them if valid.\n"
-        "If a user-facing response is required now, provide it in plain text.\n"
-        "If no user-facing response is needed, return exactly: NO_USER_RESPONSE"
-    )
-
-    bootstrap_context = await build_bootstrap_context_prompt(octo.store, chat_id)
-    reply_text = await route_or_reply(
+    return await route_worker_results_back_to_octo(
         octo,
-        octo.provider,
-        octo.memory,
-        worker_result_prompt,
         chat_id,
-        bootstrap_context.content,
-        internal_followup=True,
+        [("", task_text, result)],
     )
-    return normalize_plain_text(reply_text)
 
 
 async def route_worker_results_back_to_octo(
     octo: Any,
     chat_id: int,
-    worker_results: list[tuple[str, WorkerResult]],
+    worker_results: list[tuple[str, WorkerResult] | tuple[str, str, WorkerResult]],
 ) -> str:
     """Decide on one combined follow-up after one or more workers complete."""
+    normalized_results = [_normalize_worker_result_entry(item) for item in worker_results]
     payload_json = json.dumps(
-        [_build_worker_result_payload(task_text, result) for task_text, result in worker_results],
+        [
+            _build_worker_result_payload(worker_id, task_text, result)
+            for worker_id, task_text, result in normalized_results
+        ],
         ensure_ascii=False,
     )
 
     worker_result_prompt = (
-        "One or more workers completed for the same user request. Decide whether the user needs "
-        "one combined follow-up now based on these payloads.\n"
+        "One or more workers completed for the same user request. You are in bounded worker-result "
+        "follow-up mode, not full orchestration mode. Decide whether the user needs one combined "
+        "follow-up now based on these payloads.\n"
         "<worker_results>\n"
         f"{payload_json}\n"
         "</worker_results>\n\n"
@@ -641,41 +656,100 @@ async def route_worker_results_back_to_octo(
         "- Each `summary` is internal worker/runtime text and is not user-facing by default.\n"
         "- Never forward transport/debug/auth/orchestration text to the user.\n"
         "- If you answer the user, write exactly one clean Octo response in plain language.\n"
-        "- Synthesize across the payloads once; do not emit multiple overlapping summaries.\n\n"
-        "If any payload output is truncated and you need specific details, use `get_worker_output_path`.\n"
+        "- Synthesize across the payloads once; do not emit multiple overlapping summaries.\n"
+        "- Do not start, stop, schedule, or orchestrate workers from this path.\n"
+        "- Do not invent follow-up tool needs beyond the tools already exposed here.\n\n"
+        "If any payload output is truncated and a payload includes `worker_id`, you may use "
+        "`get_worker_output_path` for a specific dotted path lookup.\n"
         "If there are knowledge_proposals, review them and use `manage_canon` to save them if valid.\n"
         "If a user-facing response is required now, provide it in plain text.\n"
         "If no user-facing response is needed, return exactly: NO_USER_RESPONSE"
     )
 
-    bootstrap_context = await build_bootstrap_context_prompt(octo.store, chat_id)
-    reply_text = await route_or_reply(
-        octo,
-        octo.provider,
-        octo.memory,
-        worker_result_prompt,
-        chat_id,
-        bootstrap_context.content,
-        internal_followup=True,
-    )
-    return normalize_plain_text(reply_text)
+    await octo.set_thinking(True)
+    try:
+        await _ensure_mcp_connected_for_routing(octo)
+        octo_tools, ctx = _get_worker_followup_tools(octo, chat_id)
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
+            ctx.get("tool_resolution_report"),
+        )
+        bootstrap_context = await build_bootstrap_context_prompt(octo.store, chat_id)
+        messages = await build_octo_prompt(
+            store=octo.store,
+            memory=octo.memory,
+            canon=octo.canon,
+            user_text=worker_result_prompt,
+            chat_id=chat_id,
+            bootstrap_context=bootstrap_context.content,
+            is_ws=getattr(octo, "is_ws_active", False),
+            images=None,
+            saved_file_paths=None,
+            wake_notice="",
+            tool_policy_summary=tool_policy_summary,
+            facts=getattr(octo, "facts", None),
+            reflection=getattr(octo, "reflection", None),
+        )
+        messages.append(
+            Message(
+                role="system",
+                content=(
+                    "Worker-result follow-up path rules:\n"
+                    "- Keep this turn cheap, bounded, and deterministic.\n"
+                    "- Use tools only if they are clearly necessary to inspect a specific worker result detail.\n"
+                    "- Return either one user-facing response or exactly NO_USER_RESPONSE.\n"
+                ),
+            )
+        )
+        _log_system_prompt(messages, "worker_followup")
+        reply_text = await _complete_route_with_tools(
+            provider=octo.provider,
+            messages=messages,
+            tool_specs=octo_tools,
+            ctx=ctx,
+            internal_followup=True,
+            user_text=worker_result_prompt,
+            images=None,
+            allow_tool_catalog_expansion=False,
+        )
+        return normalize_plain_text(reply_text)
+    finally:
+        await octo.set_thinking(False)
 
 
-def _build_worker_result_payload(task_text: str, result: WorkerResult) -> dict[str, Any]:
+def _normalize_worker_result_entry(
+    item: tuple[str, WorkerResult] | tuple[str, str, WorkerResult],
+) -> tuple[str, str, WorkerResult]:
+    if len(item) == 2:
+        task_text, result = item
+        return "", task_text, result
+    worker_id, task_text, result = item
+    return str(worker_id or "").strip(), task_text, result
+
+
+def _build_worker_result_payload(worker_id: str, task_text: str, result: WorkerResult) -> dict[str, Any]:
     output_summary = result.output
     output_truncated = False
-    available_keys = []
+    output_preview_text = ""
+    available_keys: list[str] = []
 
     if isinstance(result.output, dict):
         available_keys = list(result.output.keys())
-        if len(json.dumps(result.output)) > 64000:
-            output_summary = {k: f"<{type(v).__name__}>" for k, v in result.output.items()}
+        serialized_output = json.dumps(result.output, ensure_ascii=False, default=str)
+        if len(serialized_output) > 64000:
+            output_summary = {"available_keys": available_keys[:200]}
+            output_preview_text = render_tool_result_for_llm(
+                result.output,
+                max_chars=48000,
+            ).text
             output_truncated = True
 
     payload = {
+        "worker_id": worker_id,
         "task": task_text,
         "summary": result.summary,
         "output": output_summary,
+        "output_preview_text": output_preview_text,
         "output_truncated": output_truncated,
         "available_keys": available_keys,
         "questions": result.questions,
@@ -824,6 +898,52 @@ def _get_octo_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, 
     )
     max_tools = _env_int("OCTOPAL_OCTO_MAX_TOOL_COUNT", _DEFAULT_MAX_TOOL_COUNT, minimum=8)
     tool_specs = _budget_tool_specs(tool_specs, max_count=max_tools)
+    ctx["active_tool_specs"] = tool_specs
+    ctx["tool_resolution_report"] = resolution_report
+    ctx["all_tool_specs"] = all_tools
+    return tool_specs, ctx
+
+
+def _get_worker_followup_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, object]]:
+    perms = {
+        "filesystem_read": True,
+        "filesystem_write": True,
+        "worker_manage": True,
+        "llm_subtask": True,
+        "canon_manage": True,
+        "network": True,
+        "exec": True,
+        "service_read": True,
+        "service_control": True,
+        "deploy_control": True,
+        "db_admin": True,
+        "security_audit": True,
+        "self_control": True,
+        "mcp_exec": True,
+        "skill_use": True,
+        "skill_exec": True,
+        "skill_manage": True,
+    }
+    ctx = {
+        "base_dir": Path(os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")).resolve(),
+        "octo": octo,
+        "chat_id": chat_id,
+    }
+    mcp_manager = getattr(octo, "mcp_manager", None)
+    policy_steps = [
+        ToolPolicyPipelineStep(
+            label="octo.worker_followup_allowlist",
+            policy=ToolPolicy(allow=sorted(_WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES)),
+        )
+    ]
+    all_tools = get_tools(mcp_manager=mcp_manager)
+    resolution_report = resolve_tool_diagnostics(
+        all_tools,
+        permissions=perms,
+        policy_pipeline_steps=policy_steps,
+    )
+    tool_specs = list(resolution_report.available_tools)
+    tool_specs = _budget_tool_specs(tool_specs, max_count=len(_WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES))
     ctx["active_tool_specs"] = tool_specs
     ctx["tool_resolution_report"] = resolution_report
     ctx["all_tool_specs"] = all_tools

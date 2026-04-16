@@ -5,7 +5,6 @@ from types import SimpleNamespace
 import pytest
 
 from octopal.runtime.octo import core as octo_core
-from octopal.runtime.octo.delivery import DeliveryMode, resolve_user_delivery, resolve_worker_followup_delivery
 from octopal.runtime.octo.core import (
     Octo,
     _build_forced_worker_followup_batch,
@@ -15,6 +14,11 @@ from octopal.runtime.octo.core import (
     _extract_followup_required_marker,
     _merge_worker_followup_texts,
     _schedule_worker_followup_flush,
+)
+from octopal.runtime.octo.delivery import (
+    DeliveryMode,
+    resolve_user_delivery,
+    resolve_worker_followup_delivery,
 )
 from octopal.runtime.octo.router import (
     build_forced_worker_followup,
@@ -158,6 +162,7 @@ def test_forced_worker_followup_drops_empty_generic_completion():
 def test_forced_worker_followup_batch_uses_meaningful_result_summary():
     items = [
         octo_core._PendingWorkerFollowupItem(
+            worker_id="",
             task_text="Task A",
             result=WorkerResult(
                 summary="Created research/jobs/2026-03-10.md with seven ranked AI/ML roles.",
@@ -165,6 +170,7 @@ def test_forced_worker_followup_batch_uses_meaningful_result_summary():
             ),
         ),
         octo_core._PendingWorkerFollowupItem(
+            worker_id="",
             task_text="Task B",
             result=WorkerResult(
                 summary="Prepared a concise Moltbook activity report with two interesting discoveries.",
@@ -437,6 +443,7 @@ async def test_suppressed_worker_followup_is_deferred_until_internal_turn_finish
 
     async def _route_worker_results_back_to_octo(_octo, _chat_id, worker_results):
         assert len(worker_results) == 1
+        assert len(worker_results[0]) == 3
         return "Подготовила итог по расписанию."
 
     monkeypatch.setattr(
@@ -496,7 +503,7 @@ async def test_structured_worker_followups_route_once_per_batch(monkeypatch):
         sent_messages.append((chat_id, text))
 
     async def _route_worker_results_back_to_octo(_octo, _chat_id, worker_results):
-        routed_batches.append([(task_text, result.summary) for task_text, result in worker_results])
+        routed_batches.append([(worker_id, task_text, result.summary) for worker_id, task_text, result in worker_results])
         return "Объединила оба результата в один ответ."
 
     monkeypatch.setattr(
@@ -532,7 +539,7 @@ async def test_structured_worker_followups_route_once_per_batch(monkeypatch):
     )
     await octo_core._flush_worker_followup_batch(octo, 123, "corr-structured")
 
-    assert routed_batches == [[("Task A", "Result A"), ("Task B", "Result B")]]
+    assert routed_batches == [[("", "Task A", "Result A"), ("", "Task B", "Result B")]]
     assert sent_messages == [(123, "Объединила оба результата в один ответ.")]
     assert memory_messages == [
         (

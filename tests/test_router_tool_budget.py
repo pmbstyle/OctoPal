@@ -5,13 +5,17 @@ import asyncio
 from octopal.infrastructure.providers.base import Message
 from octopal.runtime.octo.router import (
     _budget_tool_specs,
+    _build_worker_result_payload,
     _expand_active_tool_specs_from_catalog_result,
     _finalize_response,
+    _get_worker_followup_tools,
     _recover_textual_tool_call,
-    route_or_reply,
     _sanitize_messages_for_complete,
     _shrink_tool_specs_for_retry,
+    route_or_reply,
+    route_worker_results_back_to_octo,
 )
+from octopal.runtime.workers.contracts import WorkerResult
 from octopal.tools.registry import ToolSpec
 from octopal.tools.tools import get_tools
 
@@ -39,6 +43,163 @@ def test_shrink_retry_keeps_start_worker() -> None:
     shrunk = _shrink_tool_specs_for_retry(all_tools)
     names = {spec.name for spec in shrunk}
     assert "start_worker" in names
+
+
+def test_worker_followup_tools_are_narrow(monkeypatch) -> None:
+    import octopal.runtime.octo.router as router
+
+    def fake_get_tools(mcp_manager=None):
+        return [
+            ToolSpec(
+                name="start_worker",
+                description="start",
+                parameters={"type": "object", "properties": {}},
+                permission="worker_manage",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="manage_canon",
+                description="canon",
+                parameters={"type": "object", "properties": {}},
+                permission="canon_manage",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="get_worker_output_path",
+                description="worker output",
+                parameters={"type": "object", "properties": {}},
+                permission="worker_manage",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="fs_read",
+                description="fs read",
+                parameters={"type": "object", "properties": {}},
+                permission="filesystem_read",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+        ]
+
+    class DummyOcto:
+        mcp_manager = None
+
+    monkeypatch.setattr(router, "get_tools", fake_get_tools)
+
+    tools, _ctx = _get_worker_followup_tools(DummyOcto(), 123)
+
+    assert {tool.name for tool in tools} == {"manage_canon", "get_worker_output_path"}
+
+
+def test_worker_followup_route_skips_planner_and_uses_narrow_tools(monkeypatch) -> None:
+    import octopal.runtime.octo.router as router
+
+    class DummyProvider:
+        def __init__(self) -> None:
+            self.tool_snapshots: list[list[str]] = []
+
+        async def complete(self, messages, **kwargs):
+            raise AssertionError("follow-up route should use tool-capable path first in this test")
+
+        async def complete_stream(self, messages, *, on_partial, **kwargs):
+            raise AssertionError("streaming should not be used in this test")
+
+        async def complete_with_tools(self, messages, *, tools, tool_choice="auto", **kwargs):
+            self.tool_snapshots.append([tool["function"]["name"] for tool in tools])
+            return {"content": "NO_USER_RESPONSE", "tool_calls": []}
+
+    class DummyMemory:
+        async def add_message(self, role, content, metadata=None):
+            return None
+
+    class DummyOcto:
+        store = object()
+        canon = object()
+        facts = None
+        reflection = None
+        is_ws_active = False
+        mcp_manager = None
+
+        def __init__(self) -> None:
+            self.provider = DummyProvider()
+            self.memory = DummyMemory()
+            self.thinking_states: list[bool] = []
+
+        async def set_thinking(self, active: bool) -> None:
+            self.thinking_states.append(active)
+
+    def fake_get_tools(mcp_manager=None):
+        return [
+            ToolSpec(
+                name="start_worker",
+                description="start",
+                parameters={"type": "object", "properties": {}},
+                permission="worker_manage",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="manage_canon",
+                description="canon",
+                parameters={"type": "object", "properties": {}},
+                permission="canon_manage",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="get_worker_output_path",
+                description="worker output",
+                parameters={"type": "object", "properties": {}},
+                permission="worker_manage",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+        ]
+
+    async def fake_build_octo_prompt(**kwargs):
+        return [Message(role="user", content=str(kwargs["user_text"]))]
+
+    async def fake_build_bootstrap_context_prompt(store, chat_id):
+        return Message(role="system", content="bootstrap")
+
+    async def fake_build_plan(provider, messages, has_tools):
+        raise AssertionError("planner should not run for worker follow-up route")
+
+    monkeypatch.setattr(router, "get_tools", fake_get_tools)
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
+    monkeypatch.setattr(router, "build_bootstrap_context_prompt", fake_build_bootstrap_context_prompt)
+    monkeypatch.setattr(router, "_build_plan", fake_build_plan)
+
+    async def scenario() -> None:
+        octo = DummyOcto()
+        response = await route_worker_results_back_to_octo(
+            octo,
+            123,
+            [("worker-1", "summarize findings", WorkerResult(summary="done", output={"report_path": "reports/out.md"}))],
+        )
+        assert response == "NO_USER_RESPONSE"
+        assert len(octo.provider.tool_snapshots) == 1
+        assert set(octo.provider.tool_snapshots[0]) == {"get_worker_output_path", "manage_canon"}
+        assert octo.thinking_states == [True, False]
+
+    asyncio.run(scenario())
+
+
+def test_build_worker_result_payload_keeps_preview_text_for_large_output() -> None:
+    payload = _build_worker_result_payload(
+        "worker-1",
+        "collect data",
+        WorkerResult(
+            summary="done",
+            output={
+                "report_path": "reports/out.md",
+                "results": [{"body": "x" * 2000, "idx": idx} for idx in range(80)],
+            },
+        ),
+    )
+
+    assert payload["worker_id"] == "worker-1"
+    assert payload["output_truncated"] is True
+    assert payload["output"] == {"available_keys": ["report_path", "results"]}
+    assert payload["output_preview_text"]
+    assert "report_path" in payload["output_preview_text"]
+    assert "results" in payload["output_preview_text"]
 
 
 def test_catalog_result_expands_active_tool_specs() -> None:
