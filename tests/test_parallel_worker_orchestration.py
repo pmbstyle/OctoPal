@@ -215,8 +215,66 @@ def test_synthesize_worker_results_reports_completed_failed_and_pending() -> Non
         {"octo": _Octo()},
     )
     result = json.loads(payload)
+    assert result["status"] == "partial"
+    assert result["can_synthesize"] is True
+    assert result["next_best_action"] == "synthesize_ready_results"
+    assert result["followup_required"] is True
     assert result["completed_count"] == 1
     assert result["failed_count"] == 1
     assert result["pending_count"] == 1
     assert result["missing_count"] == 1
+    assert len(result["ready_results"]) == 1
+    assert len(result["failed_results"]) == 1
+    assert len(result["pending_results"]) == 1
+    assert len(result["missing_results"]) == 1
+    assert result["progress_signature"]
     assert "Completed worker findings:" in result["synthesis"]
+
+
+def test_synthesize_worker_results_blocks_synthesis_when_nothing_completed() -> None:
+    now = datetime.now(UTC)
+    records = {
+        "w1": WorkerRecord(
+            id="w1",
+            status="running",
+            task="one",
+            granted_caps=[],
+            created_at=now,
+            updated_at=now,
+            summary=None,
+            output=None,
+            error=None,
+            tools_used=[],
+        ),
+        "w2": WorkerRecord(
+            id="w2",
+            status="failed",
+            task="two",
+            granted_caps=[],
+            created_at=now,
+            updated_at=now,
+            summary=None,
+            output=None,
+            error="Timeout",
+            tools_used=[],
+        ),
+    }
+
+    class _Store:
+        def get_worker(self, worker_id: str):
+            return records.get(worker_id)
+
+    class _Octo:
+        store = _Store()
+
+    payload = _tool_synthesize_worker_results(
+        {"worker_ids": ["w1", "w2"]},
+        {"octo": _Octo()},
+    )
+    result = json.loads(payload)
+    assert result["status"] == "pending"
+    assert result["can_synthesize"] is False
+    assert result["next_best_action"] == "wait_for_worker_progress"
+    assert result["followup_required"] is True
+    assert result["completed_count"] == 0
+    assert "Do not synthesize yet" in result["synthesis"]

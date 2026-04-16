@@ -8,16 +8,18 @@ from octopal.runtime.tool_errors import ToolBridgeError
 from octopal.runtime.workers.agent_worker import (
     _auto_tune_max_steps,
     _classify_tool_error,
+    _detect_orchestration_stall,
     _detect_tool_loop,
     _execute_tool,
     _extract_error_text,
     _extract_mcp_identity,
+    _extract_tool_progress_key,
     _hash_tool_call,
     _hash_tool_outcome,
     _parse_tool_arguments,
     _resolve_tool_loop_thresholds,
     _result_has_error,
-    _tool_no_progress_streak,
+    _tool_progress_streak,
     execute_agent_task,
 )
 from octopal.runtime.workers.contracts import WorkerSpec
@@ -245,15 +247,94 @@ def test_tool_call_hash_is_stable_for_key_order() -> None:
     assert h1 == h2
 
 
-def test_tool_no_progress_streak_counts_same_outcome() -> None:
+def test_tool_progress_streak_counts_same_progress_key() -> None:
     history = [
-        {"tool_name": "process", "args_hash": "a", "result_hash": "x"},
-        {"tool_name": "process", "args_hash": "a", "result_hash": "x"},
-        {"tool_name": "process", "args_hash": "a", "result_hash": "x"},
+        {"tool_name": "get_worker_result", "args_hash": "a", "result_hash": "x", "progress_key": None},
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "b",
+            "result_hash": "1",
+            "progress_key": "sig-1",
+        },
+        {"tool_name": "get_worker_result", "args_hash": "c", "result_hash": "y", "progress_key": None},
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "b",
+            "result_hash": "2",
+            "progress_key": "sig-1",
+        },
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "b",
+            "result_hash": "3",
+            "progress_key": "sig-1",
+        },
     ]
-    count, latest = _tool_no_progress_streak(history, tool_name="process", args_hash="a")
+    count = _tool_progress_streak(
+        history,
+        tool_name="synthesize_worker_results",
+        progress_key="sig-1",
+    )
     assert count == 3
-    assert latest == "x"
+
+
+def test_extract_tool_progress_key_reads_synthesize_signature() -> None:
+    assert (
+        _extract_tool_progress_key(
+            "synthesize_worker_results",
+            {"progress_signature": "sig-1"},
+        )
+        == "sig-1"
+    )
+    assert _extract_tool_progress_key("get_worker_result", {"progress_signature": "sig-1"}) is None
+
+
+def test_detect_orchestration_stall_warns_and_breaks_on_repeated_no_progress() -> None:
+    history = [
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r1",
+            "progress_key": "sig-1",
+        },
+        {
+            "tool_name": "get_worker_result",
+            "args_hash": "worker-1",
+            "result_hash": "running",
+            "progress_key": None,
+        },
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r2",
+            "progress_key": "sig-1",
+        },
+    ]
+    warning = _detect_orchestration_stall(
+        history,
+        tool_name="synthesize_worker_results",
+        tool_result={"pending_count": 2},
+        progress_key="sig-1",
+    )
+    assert warning is not None
+    assert warning["level"] == "warning"
+
+    history.append(
+        {
+            "tool_name": "synthesize_worker_results",
+            "args_hash": "same",
+            "result_hash": "r3",
+            "progress_key": "sig-1",
+        }
+    )
+    critical = _detect_orchestration_stall(
+        history,
+        tool_name="synthesize_worker_results",
+        tool_result={"pending_count": 2},
+        progress_key="sig-1",
+    )
+    assert critical is not None
+    assert critical["level"] == "critical"
 
 
 def test_detect_tool_loop_warning_and_critical_thresholds() -> None:

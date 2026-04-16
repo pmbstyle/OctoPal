@@ -30,7 +30,6 @@ from octopal.runtime.tool_loop import (
     _hash_tool_outcome,
     _resolve_tool_loop_thresholds,
 )
-from octopal.runtime.tool_loop import _tool_no_progress_streak as _tool_no_progress_streak
 from octopal.runtime.tool_payloads import render_tool_result_for_llm
 from octopal.runtime.workers.contracts import WorkerResult
 from octopal.tools.registry import ToolPolicy, ToolPolicyPipelineStep, apply_tool_policy_pipeline
@@ -42,6 +41,8 @@ _MAX_TOOL_ITERS = 10
 _DEFAULT_TOOL_TIMEOUT_SECONDS = 60
 _DEFAULT_MAX_STEP_CAP = 30
 _MAX_EMPTY_TURNS = 3
+_ORCHESTRATION_STALL_WARNING_THRESHOLD = 2
+_ORCHESTRATION_STALL_CRITICAL_THRESHOLD = 3
 _TRANSIENT_ERROR_HINTS = (
     "timeout",
     "timed out",
@@ -120,6 +121,67 @@ def _parse_positive_int_env(name: str, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return value if value > 0 else default
+
+
+def _extract_tool_progress_key(tool_name: str | None, tool_result: Any) -> str | None:
+    if str(tool_name or "") != "synthesize_worker_results":
+        return None
+    if not isinstance(tool_result, dict):
+        return None
+    progress_signature = str(tool_result.get("progress_signature") or "").strip()
+    return progress_signature or None
+
+
+def _tool_progress_streak(
+    history: list[dict[str, str | None]],
+    *,
+    tool_name: str,
+    progress_key: str,
+) -> int:
+    streak = 0
+    for record in reversed(history):
+        if record.get("tool_name") != tool_name:
+            continue
+        if record.get("progress_key") != progress_key:
+            break
+        streak += 1
+    return streak
+
+
+def _detect_orchestration_stall(
+    history: list[dict[str, str | None]],
+    *,
+    tool_name: str | None,
+    tool_result: Any,
+    progress_key: str | None,
+) -> dict[str, Any] | None:
+    if str(tool_name or "") != "synthesize_worker_results":
+        return None
+    if not progress_key or not isinstance(tool_result, dict):
+        return None
+    pending_count = int(tool_result.get("pending_count") or 0)
+    if pending_count <= 0:
+        return None
+    streak = _tool_progress_streak(
+        history,
+        tool_name="synthesize_worker_results",
+        progress_key=progress_key,
+    )
+    if streak >= _ORCHESTRATION_STALL_CRITICAL_THRESHOLD:
+        return {
+            "detector": "orchestration_no_progress",
+            "level": "critical",
+            "count": streak,
+            "message": "Repeated synthesize_worker_results calls found no worker progress.",
+        }
+    if streak >= _ORCHESTRATION_STALL_WARNING_THRESHOLD:
+        return {
+            "detector": "orchestration_no_progress",
+            "level": "warning",
+            "count": streak,
+            "message": "synthesize_worker_results is being retried without worker progress.",
+        }
+    return None
 
 
 async def run_agent_worker(spec_path: str) -> None:
@@ -290,7 +352,7 @@ Important:
     }
     upstream_failures: dict[str, int] = {}
     successful_tool_calls = 0
-    tool_call_history: list[dict[str, str]] = []
+    tool_call_history: list[dict[str, str | None]] = []
     tool_loop_thresholds = _resolve_tool_loop_thresholds()
 
     while thinking_steps < effective_max_steps:
@@ -351,11 +413,13 @@ Important:
                 tools_used.append(tool_name)
                 args_hash = _hash_tool_call(str(tool_name or ""), tool_input)
                 result_hash = _hash_tool_outcome(tool_result, tool_meta)
+                progress_key = _extract_tool_progress_key(tool_name, tool_result)
                 tool_call_history.append(
                     {
                         "tool_name": str(tool_name or ""),
                         "args_hash": args_hash,
                         "result_hash": result_hash,
+                        "progress_key": progress_key,
                     }
                 )
                 loop_state = _detect_tool_loop(
@@ -366,6 +430,13 @@ Important:
                     critical_threshold=tool_loop_thresholds["critical"],
                     global_breaker_threshold=tool_loop_thresholds["global_breaker"],
                 )
+                if loop_state is None:
+                    loop_state = _detect_orchestration_stall(
+                        tool_call_history,
+                        tool_name=tool_name,
+                        tool_result=tool_result,
+                        progress_key=progress_key,
+                    )
                 if loop_state is not None:
                     if loop_state["level"] == "warning":
                         await worker.log(

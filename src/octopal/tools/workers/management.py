@@ -938,28 +938,69 @@ def _tool_synthesize_worker_results(args: dict[str, object], ctx: dict[str, obje
     pending: list[dict[str, object]] = []
     missing: list[str] = []
     summary_hashes: set[str] = set()
+    ready_progress: list[dict[str, object]] = []
+    pending_progress: list[dict[str, object]] = []
+    failed_progress: list[dict[str, object]] = []
+    missing_progress: list[str] = []
 
     for wid in worker_ids:
         worker = octo.store.get_worker(wid)
         if not worker:
             missing.append(wid)
+            missing_progress.append(wid)
             continue
         status = str(worker.status)
         if status == "completed":
             summary = str(worker.summary or "").strip()
-            completed.append({"worker_id": wid, "summary": summary, "output": worker.output})
+            item = {
+                "worker_id": wid,
+                "summary": summary,
+                "output": worker.output,
+                **_worker_timing_fields(worker),
+            }
+            completed.append(item)
+            ready_progress.append(
+                {
+                    "worker_id": wid,
+                    "summary_hash": hashlib.sha256(summary.encode("utf-8")).hexdigest() if summary else None,
+                }
+            )
             if summary:
                 summary_hashes.add(hashlib.sha256(summary.encode("utf-8")).hexdigest())
         elif status == "failed":
-            failed.append({"worker_id": wid, "error": str(worker.error or "Unknown error")})
+            error = str(worker.error or "Unknown error")
+            item = {
+                "worker_id": wid,
+                "error": error,
+                **_worker_timing_fields(worker),
+            }
+            failed.append(item)
+            failed_progress.append({"worker_id": wid, "error": error})
         else:
-            pending.append({"worker_id": wid, "status": status})
+            item = {
+                "worker_id": wid,
+                "status": status,
+                **_worker_timing_fields(worker),
+            }
+            pending.append(item)
+            pending_progress.append({"worker_id": wid, "status": status})
 
     synthesis_lines: list[str] = []
-    if completed:
+    can_synthesize = len(completed) > 0
+    if can_synthesize:
         synthesis_lines.append("Completed worker findings:")
         for item in completed:
             synthesis_lines.append(f"- {item['worker_id']}: {item['summary'] or 'No summary'}")
+    elif pending:
+        synthesis_lines.append(
+            "No completed worker results are ready yet. Do not synthesize yet; wait for worker progress."
+        )
+    elif failed:
+        synthesis_lines.append("No completed worker results are available. Inspect the worker failures instead.")
+    elif missing:
+        synthesis_lines.append("No completed worker results are available. Some worker IDs could not be found.")
+    else:
+        synthesis_lines.append("No completed worker results are available yet.")
     if failed:
         synthesis_lines.append("Failed workers:")
         for item in failed:
@@ -977,16 +1018,62 @@ def _tool_synthesize_worker_results(args: dict[str, object], ctx: dict[str, obje
     if conflicting:
         synthesis_lines.append("Potential conflict detected: completed workers reported different summaries.")
 
+    status = "ready"
+    next_best_action = "continue_current_plan"
+    followup_required = False
+    if not can_synthesize and pending:
+        status = "pending"
+        next_best_action = "wait_for_worker_progress"
+        followup_required = True
+    elif can_synthesize and pending:
+        status = "partial"
+        next_best_action = "synthesize_ready_results"
+        followup_required = True
+    elif can_synthesize:
+        status = "ready"
+        next_best_action = "synthesize_ready_results"
+    elif failed:
+        status = "failed_only"
+        next_best_action = "inspect_worker_failures"
+    elif missing:
+        status = "missing"
+        next_best_action = "verify_worker_ids"
+    else:
+        status = "idle"
+
+    progress_signature = hashlib.sha256(
+        json.dumps(
+            {
+                "worker_ids": worker_ids,
+                "ready": ready_progress,
+                "pending": pending_progress,
+                "failed": failed_progress,
+                "missing": missing_progress,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
     return json.dumps(
         {
-            "status": "ok",
+            "status": status,
             "worker_ids": worker_ids,
             "completed_count": len(completed),
             "failed_count": len(failed),
             "pending_count": len(pending),
             "missing_count": len(missing),
+            "can_synthesize": can_synthesize,
+            "followup_required": followup_required,
+            "next_best_action": next_best_action,
+            "progress_signature": progress_signature,
             "conflicting_summaries": conflicting,
             "synthesis": "\n".join(synthesis_lines),
+            "ready_results": completed,
+            "failed_results": failed,
+            "pending_results": pending,
+            "missing_results": missing,
             "completed": completed,
             "failed": failed,
             "pending": pending,
