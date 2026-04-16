@@ -45,6 +45,7 @@ _ORCHESTRATION_STALL_WARNING_THRESHOLD = 2
 _ORCHESTRATION_STALL_CRITICAL_THRESHOLD = 3
 _ORCHESTRATION_STALL_WARNING_MIN_ELAPSED_SECONDS = 15
 _ORCHESTRATION_STALL_CRITICAL_MIN_ELAPSED_SECONDS = 30
+_ORCHESTRATION_POLL_THROTTLE_SECONDS = 3
 _TRANSIENT_ERROR_HINTS = (
     "timeout",
     "timed out",
@@ -134,6 +135,17 @@ def _parse_positive_int_env(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+def _parse_nonnegative_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default
+
+
 def _extract_tool_progress_key(tool_name: str | None, tool_result: Any) -> str | None:
     normalized_tool = str(tool_name or "").strip()
     structured = _decode_structured_tool_result(tool_result)
@@ -213,6 +225,62 @@ def _meaningful_tool_history_size(history: list[dict[str, Any]]) -> int:
             last_progress_by_call[call_key] = progress_key
         count += 1
     return count
+
+
+def _resolve_orchestration_poll_throttle_seconds() -> int:
+    return _parse_nonnegative_int_env(
+        "OCTOPAL_ORCHESTRATION_POLL_THROTTLE_SECONDS",
+        _ORCHESTRATION_POLL_THROTTLE_SECONDS,
+    )
+
+
+async def _maybe_wait_for_orchestration_poll_window(
+    worker: Worker,
+    history: list[dict[str, Any]],
+    *,
+    tool_name: str | None,
+    tool_input: dict[str, Any] | None,
+) -> dict[str, Any]:
+    normalized_tool = str(tool_name or "").strip()
+    args = tool_input if isinstance(tool_input, dict) else {}
+    args_hash = _hash_tool_call(normalized_tool, args)
+    if normalized_tool != "get_worker_result":
+        return {"step_exempt": False, "waited_seconds": 0.0, "args_hash": args_hash}
+    throttle_seconds = _resolve_orchestration_poll_throttle_seconds()
+    if throttle_seconds <= 0:
+        return {"step_exempt": False, "waited_seconds": 0.0, "args_hash": args_hash}
+
+    last_seen_at: float | None = None
+    for record in reversed(history):
+        if record.get("tool_name") != normalized_tool or record.get("args_hash") != args_hash:
+            continue
+        observed_at = record.get("observed_at")
+        if isinstance(observed_at, int | float):
+            last_seen_at = float(observed_at)
+            break
+    if last_seen_at is None:
+        return {"step_exempt": False, "waited_seconds": 0.0, "args_hash": args_hash}
+
+    elapsed_seconds = max(0.0, time.monotonic() - last_seen_at)
+    remaining_seconds = float(throttle_seconds) - elapsed_seconds
+    if remaining_seconds <= 0:
+        return {"step_exempt": False, "waited_seconds": 0.0, "args_hash": args_hash}
+
+    worker_id = str(args.get("worker_id") or "").strip()
+    wait_seconds = max(0.0, remaining_seconds)
+    await worker.log(
+        "debug",
+        (
+            "Throttling get_worker_result poll "
+            f"for {worker_id or args_hash[:8]} by {wait_seconds:.2f}s"
+        ),
+    )
+    await asyncio.sleep(wait_seconds)
+    return {
+        "step_exempt": True,
+        "waited_seconds": wait_seconds,
+        "args_hash": args_hash,
+    }
 
 
 def _resolve_orchestration_stall_thresholds() -> dict[str, int]:
@@ -478,12 +546,12 @@ Important:
         # Handle OpenAI-style tool_calls
         tool_calls = response.get("tool_calls", [])
         if tool_calls:
-            cycle_steps = thinking_steps + 1
             content = response.get("content", "")
             assistant_msg: dict[str, Any] = {"role": "assistant", "tool_calls": tool_calls}
             if content:
                 assistant_msg["content"] = content
             messages.append(assistant_msg)
+            round_consumes_step = False
 
             # Process tool calls
             for tool_call in tool_calls:
@@ -493,6 +561,14 @@ Important:
                 tool_call_id = tool_call.get("id", "") or ""
 
                 await worker.log("info", f"Using tool: {tool_name}")
+
+                poll_window = await _maybe_wait_for_orchestration_poll_window(
+                    worker,
+                    tool_call_history,
+                    tool_name=tool_name,
+                    tool_input=tool_input,
+                )
+                step_exempt = bool(poll_window.get("step_exempt"))
 
                 # Execute tool
                 elapsed = asyncio.get_running_loop().time() - loop_start
@@ -518,7 +594,7 @@ Important:
                 else:
                     successful_tool_calls += 1
                 tools_used.append(tool_name)
-                args_hash = _hash_tool_call(str(tool_name or ""), tool_input)
+                args_hash = str(poll_window.get("args_hash") or _hash_tool_call(str(tool_name or ""), tool_input))
                 result_hash = _hash_tool_outcome(tool_result, tool_meta)
                 progress_key = _extract_tool_progress_key(tool_name, tool_result)
                 tool_call_history.append(
@@ -528,8 +604,11 @@ Important:
                         "result_hash": result_hash,
                         "progress_key": progress_key,
                         "observed_at": time.monotonic(),
+                        "step_exempt": step_exempt,
                     }
                 )
+                if not step_exempt:
+                    round_consumes_step = True
                 loop_state = _detect_tool_loop(
                     tool_call_history,
                     tool_name=str(tool_name or ""),
@@ -577,7 +656,7 @@ Important:
                                 telemetry,
                             ),
                             knowledge_proposals=worker.knowledge_proposals,
-                            thinking_steps=cycle_steps,
+                            thinking_steps=thinking_steps + (1 if round_consumes_step else 0),
                             tools_used=tools_used,
                         )
 
@@ -599,7 +678,7 @@ Important:
                                 telemetry,
                             ),
                             knowledge_proposals=worker.knowledge_proposals,
-                            thinking_steps=cycle_steps,
+                            thinking_steps=thinking_steps + (1 if round_consumes_step else 0),
                             tools_used=tools_used,
                         )
                     if _is_upstream_unavailable_error(error_text):
@@ -621,7 +700,7 @@ Important:
                                     telemetry,
                                 ),
                                 knowledge_proposals=worker.knowledge_proposals,
-                                thinking_steps=cycle_steps,
+                                thinking_steps=thinking_steps + (1 if round_consumes_step else 0),
                                 tools_used=tools_used,
                             )
 
@@ -637,7 +716,8 @@ Important:
                     "tool_call_id": tool_call_id,
                     "content": rendered_tool_result.text,
                 })
-            thinking_steps = cycle_steps
+            if round_consumes_step:
+                thinking_steps += 1
             empty_turns = 0
             telemetry["empty_turns"] = empty_turns
         else:
