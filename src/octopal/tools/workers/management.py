@@ -1020,7 +1020,7 @@ def _tool_get_worker_status(args: dict[str, object], ctx: dict[str, object]) -> 
         }, ensure_ascii=False)
     worker = _reconcile_stale_worker_status(octo, worker)
 
-    return json.dumps({
+    payload = {
         "status": worker.status,
         "worker_id": worker.id,
         "task": worker.task,
@@ -1028,11 +1028,11 @@ def _tool_get_worker_status(args: dict[str, object], ctx: dict[str, object]) -> 
         "parent_worker_id": worker.parent_worker_id,
         "root_task_id": worker.root_task_id,
         "spawn_depth": worker.spawn_depth,
-        "created_at": worker.created_at.isoformat(),
-        "updated_at": worker.updated_at.isoformat(),
         "summary": worker.summary,
         "error": worker.error,
-    }, ensure_ascii=False)
+    }
+    payload.update(_worker_timing_fields(worker))
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _tool_list_active_workers(args: dict[str, object], ctx: dict[str, object]) -> str:
@@ -1359,6 +1359,23 @@ def _serialize_worker_run(worker: Any) -> dict[str, object]:
     }
 
 
+def _worker_timing_fields(worker: Any) -> dict[str, object]:
+    now = utc_now()
+    created_at = getattr(worker, "created_at", None)
+    updated_at = getattr(worker, "updated_at", None)
+    payload: dict[str, object] = {
+        "created_at": created_at.isoformat() if created_at is not None else None,
+        "updated_at": updated_at.isoformat() if updated_at is not None else None,
+        "runtime_seconds": None,
+        "seconds_since_update": None,
+    }
+    if created_at is not None:
+        payload["runtime_seconds"] = max(0, int((now - created_at).total_seconds()))
+    if updated_at is not None:
+        payload["seconds_since_update"] = max(0, int((now - updated_at).total_seconds()))
+    return payload
+
+
 def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> str:
     octo: Octo = ctx["octo"]
     worker_id = str(args.get("worker_id", "")).strip()
@@ -1374,7 +1391,7 @@ def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> 
         }, ensure_ascii=False)
 
     if worker.status == "completed":
-        return json.dumps({
+        payload = {
             "status": "completed",
             "worker_id": worker.id,
             "lineage_id": worker.lineage_id,
@@ -1383,9 +1400,11 @@ def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> 
             "spawn_depth": worker.spawn_depth,
             "summary": worker.summary,
             "output": worker.output,
-        }, ensure_ascii=False)
+        }
+        payload.update(_worker_timing_fields(worker))
+        return json.dumps(payload, ensure_ascii=False)
     elif worker.status == "failed":
-        return json.dumps({
+        payload = {
             "status": "failed",
             "worker_id": worker.id,
             "lineage_id": worker.lineage_id,
@@ -1393,9 +1412,11 @@ def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> 
             "root_task_id": worker.root_task_id,
             "spawn_depth": worker.spawn_depth,
             "error": worker.error or "Unknown error",
-        }, ensure_ascii=False)
+        }
+        payload.update(_worker_timing_fields(worker))
+        return json.dumps(payload, ensure_ascii=False)
     else:
-        return json.dumps({
+        payload = {
             "status": worker.status,
             "worker_id": worker.id,
             "lineage_id": worker.lineage_id,
@@ -1403,7 +1424,9 @@ def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> 
             "root_task_id": worker.root_task_id,
             "spawn_depth": worker.spawn_depth,
             "message": f"Worker is still {worker.status}. Result not available yet.",
-        }, ensure_ascii=False)
+        }
+        payload.update(_worker_timing_fields(worker))
+        return json.dumps(payload, ensure_ascii=False)
 
 
 def _tool_get_worker_output_path(args: dict[str, object], ctx: dict[str, object]) -> str:
