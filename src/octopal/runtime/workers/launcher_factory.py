@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import subprocess
 import time
@@ -13,6 +15,7 @@ from octopal.runtime.workers.launcher import DockerLauncher, SameEnvLauncher, Wo
 
 logger = structlog.get_logger(__name__)
 _DOCKER_STATUS_CACHE_TTL_SECONDS = 10.0
+_WORKER_IMAGE_FINGERPRINT_LABEL = "io.octopal.worker-image-fingerprint"
 _docker_status_cache: dict[tuple[str, str, str], tuple[float, WorkerLauncherStatus]] = {}
 
 
@@ -44,22 +47,36 @@ def ensure_worker_launcher_status(settings: Settings) -> WorkerLauncherStatus:
 
 def _get_worker_launcher_status(settings: Settings, *, auto_build_image: bool) -> WorkerLauncherStatus:
     configured = str(settings.worker_launcher or "same_env").strip() or "same_env"
+    project_root = Path(__file__).resolve().parents[4]
+    image_fingerprint = _compute_worker_image_fingerprint(project_root)
     cache_key = (
         configured,
         str(settings.worker_docker_image or "").strip(),
         str(settings.worker_docker_host_workspace or settings.workspace_dir),
+        image_fingerprint,
     )
     cached = _docker_status_cache.get(cache_key)
     now = time.monotonic()
     if cached and now - cached[0] < _DOCKER_STATUS_CACHE_TTL_SECONDS:
         return cached[1]
 
-    status = _compute_worker_launcher_status(settings, auto_build_image=auto_build_image)
+    status = _compute_worker_launcher_status(
+        settings,
+        auto_build_image=auto_build_image,
+        image_fingerprint=image_fingerprint,
+        project_root=project_root,
+    )
     _docker_status_cache[cache_key] = (now, status)
     return status
 
 
-def _compute_worker_launcher_status(settings: Settings, *, auto_build_image: bool) -> WorkerLauncherStatus:
+def _compute_worker_launcher_status(
+    settings: Settings,
+    *,
+    auto_build_image: bool,
+    image_fingerprint: str,
+    project_root: Path,
+) -> WorkerLauncherStatus:
     configured = str(settings.worker_launcher or "same_env").strip() or "same_env"
     if configured != "docker":
         return WorkerLauncherStatus(
@@ -121,7 +138,12 @@ def _compute_worker_launcher_status(settings: Settings, *, auto_build_image: boo
     if image_result.returncode != 0:
         if auto_build_image:
             logger.info("Docker worker image missing; attempting automatic build", image=image_name)
-            build_result, build_error = _build_worker_image(docker_cli_path, image_name)
+            build_result, build_error = _build_worker_image(
+                docker_cli_path,
+                image_name,
+                image_fingerprint=image_fingerprint,
+                project_root=project_root,
+            )
             if build_error is None and build_result is not None and build_result.returncode == 0:
                 logger.info("Docker worker image built successfully", image=image_name)
                 return WorkerLauncherStatus(
@@ -162,6 +184,78 @@ def _compute_worker_launcher_status(settings: Settings, *, auto_build_image: boo
             docker_image_present=False,
         )
 
+    image_label, label_error = _read_image_label(
+        docker_cli_path,
+        image_name,
+        _WORKER_IMAGE_FINGERPRINT_LABEL,
+    )
+    if label_error is not None:
+        return WorkerLauncherStatus(
+            configured_launcher="docker",
+            effective_launcher="same_env",
+            available=False,
+            reason=f"Docker image metadata check failed: {label_error}",
+            docker_cli_path=docker_cli_path,
+            docker_daemon_reachable=True,
+            docker_image_present=True,
+        )
+
+    if image_label != image_fingerprint:
+        if auto_build_image:
+            logger.info(
+                "Docker worker image is stale; attempting automatic rebuild",
+                image=image_name,
+            )
+            build_result, build_error = _build_worker_image(
+                docker_cli_path,
+                image_name,
+                image_fingerprint=image_fingerprint,
+                project_root=project_root,
+            )
+            if build_error is None and build_result is not None and build_result.returncode == 0:
+                logger.info("Docker worker image rebuilt successfully", image=image_name)
+                return WorkerLauncherStatus(
+                    configured_launcher="docker",
+                    effective_launcher="docker",
+                    available=True,
+                    reason=(
+                        f"Docker worker image '{image_name}' was rebuilt automatically because "
+                        "worker build inputs changed."
+                    ),
+                    docker_cli_path=docker_cli_path,
+                    docker_daemon_reachable=True,
+                    docker_image_present=True,
+                )
+
+            detail = build_error
+            if detail is None and build_result is not None:
+                detail = (build_result.stderr or build_result.stdout or "").strip() or "docker build failed."
+            return WorkerLauncherStatus(
+                configured_launcher="docker",
+                effective_launcher="same_env",
+                available=False,
+                reason=(
+                    f"Docker image '{image_name}' is stale and automatic rebuild failed: {detail} "
+                    f"Run 'uv run octopal build-worker-image --tag {image_name}'."
+                ),
+                docker_cli_path=docker_cli_path,
+                docker_daemon_reachable=True,
+                docker_image_present=True,
+            )
+
+        return WorkerLauncherStatus(
+            configured_launcher="docker",
+            effective_launcher="same_env",
+            available=False,
+            reason=(
+                f"Docker image '{image_name}' is stale because worker build inputs changed. "
+                f"Build it with 'uv run octopal build-worker-image --tag {image_name}'."
+            ),
+            docker_cli_path=docker_cli_path,
+            docker_daemon_reachable=True,
+            docker_image_present=True,
+        )
+
     return WorkerLauncherStatus(
         configured_launcher="docker",
         effective_launcher="docker",
@@ -190,10 +284,69 @@ def _run_docker_command(
         return None, str(exc)
 
 
+def _read_image_label(
+    docker_cli_path: str,
+    image_name: str,
+    label_name: str,
+) -> tuple[str | None, str | None]:
+    result, error = _run_docker_command(
+        [
+            docker_cli_path,
+            "image",
+            "inspect",
+            image_name,
+            "--format",
+            "{{ json .Config.Labels }}",
+        ],
+        timeout=5,
+    )
+    if error is not None:
+        return None, error
+    if result is None or result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip() if result is not None else ""
+        return None, detail or "docker image inspect failed."
+    raw = (result.stdout or "").strip() or "null"
+    try:
+        labels = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return None, f"invalid docker image labels payload: {exc}"
+    if not isinstance(labels, dict):
+        return None, None
+    value = labels.get(label_name)
+    return str(value).strip() if value is not None else None, None
+
+
+def _compute_worker_image_fingerprint(project_root: Path) -> str:
+    digest = hashlib.sha256()
+    for rel_path in _iter_worker_image_inputs(project_root):
+        full_path = project_root / rel_path
+        digest.update(rel_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(full_path.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _iter_worker_image_inputs(project_root: Path) -> list[str]:
+    inputs = ["docker/Dockerfile", "pyproject.toml", "README.md"]
+    src_root = project_root / "src"
+    if src_root.exists():
+        for path in sorted(src_root.rglob("*")):
+            if not path.is_file():
+                continue
+            if "__pycache__" in path.parts:
+                continue
+            inputs.append(path.relative_to(project_root).as_posix())
+    return inputs
+
+
 def _build_worker_image(
-    docker_cli_path: str, image_name: str
+    docker_cli_path: str,
+    image_name: str,
+    *,
+    image_fingerprint: str,
+    project_root: Path,
 ) -> tuple[subprocess.CompletedProcess[str] | None, str | None]:
-    project_root = Path(__file__).resolve().parents[4]
     dockerfile = project_root / "docker" / "Dockerfile"
     if not dockerfile.exists():
         return None, f"Dockerfile not found: {dockerfile}"
@@ -205,6 +358,8 @@ def _build_worker_image(
             "worker",
             "-t",
             image_name,
+            "--label",
+            f"{_WORKER_IMAGE_FINGERPRINT_LABEL}={image_fingerprint}",
             "-f",
             str(dockerfile),
             str(project_root),

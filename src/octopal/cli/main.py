@@ -1696,6 +1696,12 @@ def build_worker_image(tag: str = "octopal-worker:latest") -> None:
     if not dockerfile.exists():
         console.print(f"[red]Dockerfile not found: {dockerfile}[/red]")
         raise typer.Exit(code=1)
+    from octopal.runtime.workers.launcher_factory import (
+        _WORKER_IMAGE_FINGERPRINT_LABEL,
+        _compute_worker_image_fingerprint,
+    )
+
+    image_fingerprint = _compute_worker_image_fingerprint(project_root)
     cmd = [
         "docker",
         "build",
@@ -1703,6 +1709,8 @@ def build_worker_image(tag: str = "octopal-worker:latest") -> None:
         "worker",
         "-t",
         tag,
+        "--label",
+        f"{_WORKER_IMAGE_FINGERPRINT_LABEL}={image_fingerprint}",
         "-f",
         str(dockerfile),
         str(project_root),
