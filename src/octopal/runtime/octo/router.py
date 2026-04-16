@@ -7,6 +7,7 @@ import os
 import re
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -109,11 +110,34 @@ _WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES = {
     "get_worker_output_path",
     "manage_canon",
 }
+_DURABLE_WORKSPACE_ROOTS = ("reports", "artifacts")
+_LEGACY_WORKER_ARTIFACT_KEYS = ("report_path", "output_path", "path", "file")
 _TEXTUAL_TOOL_NAME_RE = re.compile(r"^(?:mcp__[\w-]+__)?[a-z][a-z0-9_]{1,63}$", re.IGNORECASE)
 _TEXTUAL_TOOL_PREVIEW_RE = re.compile(
     r"^(?P<tool>(?:mcp__[\w-]+__)?[a-z][a-z0-9_]{1,63})(?P<rest>(?:,\s*[a-z_][a-z0-9_ -]{0,31}:\s*[^,\n]{1,200})+)$",
     re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True)
+class _WorkerArtifactSummary:
+    durable_paths: list[str]
+    scratch_paths: list[str]
+    primary_report_path: str | None
+    unsafe_legacy_paths: list[str]
+
+    @property
+    def has_user_visible_artifact(self) -> bool:
+        return bool(self.primary_report_path or self.durable_paths)
+
+    def to_payload(self) -> dict[str, Any]:
+        return {
+            "durable_paths": list(self.durable_paths),
+            "scratch_paths": list(self.scratch_paths),
+            "primary_report_path": self.primary_report_path,
+            "unsafe_legacy_paths": list(self.unsafe_legacy_paths),
+            "has_user_visible_artifact": self.has_user_visible_artifact,
+        }
 
 
 def _is_vision_tool_compatibility_error(exc: Exception) -> bool:
@@ -655,6 +679,10 @@ async def route_worker_results_back_to_octo(
         "Interpretation rules:\n"
         "- Each `summary` is internal worker/runtime text and is not user-facing by default.\n"
         "- Never forward transport/debug/auth/orchestration text to the user.\n"
+        "- Only `artifact_summary.durable_paths` and `artifact_summary.primary_report_path` are safe "
+        "to mention as file outputs for the user.\n"
+        "- Treat raw `output.report_path`, `output.output_path`, `output.path`, `output.file`, and "
+        "`output.files` as internal unless the artifact summary marks them durable.\n"
         "- If you answer the user, write exactly one clean Octo response in plain language.\n"
         "- Synthesize across the payloads once; do not emit multiple overlapping summaries.\n"
         "- Do not start, stop, schedule, or orchestrate workers from this path.\n"
@@ -727,11 +755,94 @@ def _normalize_worker_result_entry(
     return str(worker_id or "").strip(), task_text, result
 
 
+def _normalize_worker_artifact_path(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    raw = value.strip().replace("\\", "/")
+    if not raw or "\x00" in raw:
+        return None
+    while raw.startswith("./"):
+        raw = raw[2:]
+    return raw.strip() or None
+
+
+def _extract_worker_artifact_paths(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    paths: list[str] = []
+    for item in value:
+        normalized = _normalize_worker_artifact_path(item)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        paths.append(normalized)
+    return paths
+
+
+def _is_durable_workspace_artifact_path(path: str) -> bool:
+    normalized = _normalize_worker_artifact_path(path)
+    if not normalized:
+        return False
+
+    workspace_root = Path(os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")).resolve()
+    candidate = Path(normalized)
+    if candidate.is_absolute():
+        try:
+            relative = candidate.resolve(strict=False).relative_to(workspace_root)
+        except ValueError:
+            return False
+        parts = relative.parts
+    else:
+        parts = tuple(part for part in Path(normalized).parts if part not in ("", "."))
+
+    return bool(parts) and parts[0] in _DURABLE_WORKSPACE_ROOTS
+
+
+def _summarize_worker_artifacts(result: WorkerResult) -> _WorkerArtifactSummary:
+    output = result.output if isinstance(result.output, dict) else {}
+    durable_paths = [
+        path
+        for path in _extract_worker_artifact_paths(output.get("durable_paths"))
+        if _is_durable_workspace_artifact_path(path)
+    ]
+    scratch_paths = _extract_worker_artifact_paths(output.get("scratch_paths"))
+
+    report_path = _normalize_worker_artifact_path(output.get("report_path"))
+    primary_report_path: str | None = None
+    if report_path and (
+        report_path in durable_paths
+        or (Path(report_path).is_absolute() and _is_durable_workspace_artifact_path(report_path))
+    ):
+        primary_report_path = report_path
+        if report_path not in durable_paths:
+            durable_paths.append(report_path)
+    elif durable_paths:
+        primary_report_path = durable_paths[0]
+
+    unsafe_legacy_paths: list[str] = []
+    for key in _LEGACY_WORKER_ARTIFACT_KEYS:
+        normalized = _normalize_worker_artifact_path(output.get(key))
+        if normalized and normalized not in durable_paths and normalized not in unsafe_legacy_paths:
+            unsafe_legacy_paths.append(normalized)
+    for item in _extract_worker_artifact_paths(output.get("files")):
+        if item not in durable_paths and item not in unsafe_legacy_paths:
+            unsafe_legacy_paths.append(item)
+
+    return _WorkerArtifactSummary(
+        durable_paths=durable_paths,
+        scratch_paths=scratch_paths,
+        primary_report_path=primary_report_path,
+        unsafe_legacy_paths=unsafe_legacy_paths,
+    )
+
+
 def _build_worker_result_payload(worker_id: str, task_text: str, result: WorkerResult) -> dict[str, Any]:
     output_summary = result.output
     output_truncated = False
     output_preview_text = ""
     available_keys: list[str] = []
+    artifact_summary = _summarize_worker_artifacts(result)
 
     if isinstance(result.output, dict):
         available_keys = list(result.output.keys())
@@ -752,6 +863,7 @@ def _build_worker_result_payload(worker_id: str, task_text: str, result: WorkerR
         "output_preview_text": output_preview_text,
         "output_truncated": output_truncated,
         "available_keys": available_keys,
+        "artifact_summary": artifact_summary.to_payload(),
         "questions": result.questions,
         "knowledge_proposals": [p.model_dump() for p in result.knowledge_proposals],
         "tools_used": result.tools_used,
@@ -770,6 +882,8 @@ def should_force_worker_followup(result: WorkerResult) -> bool:
     if not summary:
         return False
 
+    artifact_summary = _summarize_worker_artifacts(result)
+
     if len(summary) >= 160:
         return True
 
@@ -779,21 +893,12 @@ def should_force_worker_followup(result: WorkerResult) -> bool:
     if len(result.tools_used or []) >= 2:
         return True
 
+    if artifact_summary.has_user_visible_artifact:
+        return True
+
     output = result.output
     if isinstance(output, dict):
-        interesting_keys = {
-            "path",
-            "file",
-            "files",
-            "report",
-            "report_path",
-            "output_path",
-            "results",
-            "items",
-            "jobs",
-            "posts",
-            "articles",
-        }
+        interesting_keys = {"report", "results", "items", "jobs", "posts", "articles"}
         if interesting_keys.intersection(output.keys()):
             return True
 
@@ -818,16 +923,11 @@ def build_forced_worker_followup(result: WorkerResult) -> str:
 
 
 def _build_generic_worker_completion_message(result: WorkerResult) -> str:
-    output = result.output if isinstance(result.output, dict) else {}
-    for key in ("report_path", "output_path", "path", "file"):
-        value = output.get(key)
-        if isinstance(value, str) and value.strip():
-            return f"Task finished. Output is ready in `{value.strip()}`."
-    files = output.get("files")
-    if isinstance(files, list):
-        visible_files = [str(item).strip() for item in files if str(item).strip()]
-        if visible_files:
-            return f"Task finished. Created {len(visible_files)} file(s)."
+    artifact_summary = _summarize_worker_artifacts(result)
+    if artifact_summary.primary_report_path:
+        return f"Task finished. Output is ready in `{artifact_summary.primary_report_path}`."
+    if len(artifact_summary.durable_paths) >= 2:
+        return f"Task finished. Created {len(artifact_summary.durable_paths)} durable file(s)."
     if result.questions:
         return "Task finished. I need your input on the next step."
     return "Task finished."

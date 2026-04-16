@@ -85,7 +85,10 @@ def test_extract_heartbeat_user_visible_message_requires_explicit_wrapper():
 def test_resolve_worker_followup_delivery_uses_deferred_mode_when_suppressed():
     decision = resolve_worker_followup_delivery(
         "Подготовила итог по расписанию.",
-        result=WorkerResult(summary="Prepared report.", output={"report_path": "research/report.md"}),
+        result=WorkerResult(
+            summary="Prepared report.",
+            output={"report_path": "reports/report.md", "durable_paths": ["reports/report.md"]},
+        ),
         pending_closure=False,
         suppress_followup=True,
         should_force=False,
@@ -98,7 +101,10 @@ def test_resolve_worker_followup_delivery_uses_deferred_mode_when_suppressed():
 def test_resolve_worker_followup_delivery_honors_scheduled_notify_never():
     decision = resolve_worker_followup_delivery(
         "Подготовила сводку.",
-        result=WorkerResult(summary="Prepared report.", output={"report_path": "research/report.md"}),
+        result=WorkerResult(
+            summary="Prepared report.",
+            output={"report_path": "reports/report.md", "durable_paths": ["reports/report.md"]},
+        ),
         pending_closure=False,
         suppress_followup=False,
         should_force=True,
@@ -112,7 +118,10 @@ def test_resolve_worker_followup_delivery_honors_scheduled_notify_never():
 def test_resolve_worker_followup_delivery_honors_scheduled_notify_always():
     decision = resolve_worker_followup_delivery(
         "NO_USER_RESPONSE",
-        result=WorkerResult(summary="Prepared report.", output={"report_path": "research/report.md"}),
+        result=WorkerResult(
+            summary="Prepared report.",
+            output={"report_path": "reports/report.md", "durable_paths": ["reports/report.md"]},
+        ),
         pending_closure=False,
         suppress_followup=False,
         should_force=False,
@@ -121,17 +130,20 @@ def test_resolve_worker_followup_delivery_honors_scheduled_notify_always():
     )
     assert decision.mode == DeliveryMode.IMMEDIATE
     assert decision.reason == "scheduled_notify_always"
-    assert "research/report.md" in decision.text
+    assert "reports/report.md" in decision.text
 
 
 def test_force_worker_followup_for_substantive_results():
     result = WorkerResult(
         summary="Created research/jobs/2026-03-10.md with seven ranked AI/ML roles across Canada and USA, including salary ranges and fit notes for each company.",
-        output={"report_path": "research/jobs/2026-03-10.md"},
+        output={
+            "report_path": "reports/jobs/2026-03-10.md",
+            "durable_paths": ["reports/jobs/2026-03-10.md"],
+        },
     )
     assert should_force_worker_followup(result) is True
     text = build_forced_worker_followup(result)
-    assert "research/jobs/2026-03-10.md" in text
+    assert "reports/jobs/2026-03-10.md" in text
     assert should_send_worker_followup(text) is True
 
 
@@ -140,12 +152,32 @@ def test_do_not_force_worker_followup_for_tiny_internal_results():
     assert should_force_worker_followup(result) is False
 
 
+def test_do_not_force_worker_followup_for_non_durable_legacy_path() -> None:
+    result = WorkerResult(
+        summary="Prepared local notes.",
+        output={"report_path": "research/candidates.md"},
+    )
+    assert should_force_worker_followup(result) is False
+    assert build_forced_worker_followup(result) == ""
+
+
 def test_forced_worker_followup_uses_generic_message_when_only_internal_summary_exists():
     result = WorkerResult(
         summary="Successfully sent DM response to Atlas2 in OpenBotCity",
         output={"report_path": "research/candidates.md"},
     )
-    assert build_forced_worker_followup(result) == "Task finished. Output is ready in `research/candidates.md`."
+    assert build_forced_worker_followup(result) == ""
+
+
+def test_forced_worker_followup_uses_durable_report_path_only() -> None:
+    result = WorkerResult(
+        summary="Successfully prepared the final candidate packet.",
+        output={
+            "report_path": "reports/candidates.md",
+            "durable_paths": ["reports/candidates.md"],
+        },
+    )
+    assert build_forced_worker_followup(result) == "Task finished. Output is ready in `reports/candidates.md`."
 
 
 def test_forced_worker_followup_drops_empty_generic_completion():
@@ -166,7 +198,10 @@ def test_forced_worker_followup_batch_uses_meaningful_result_summary():
             task_text="Task A",
             result=WorkerResult(
                 summary="Created research/jobs/2026-03-10.md with seven ranked AI/ML roles.",
-                output={"report_path": "research/jobs/2026-03-10.md"},
+                output={
+                    "report_path": "reports/jobs/2026-03-10.md",
+                    "durable_paths": ["reports/jobs/2026-03-10.md"],
+                },
             ),
         ),
         octo_core._PendingWorkerFollowupItem(
@@ -182,7 +217,7 @@ def test_forced_worker_followup_batch_uses_meaningful_result_summary():
     text = _build_forced_worker_followup_batch(items)
 
     assert text.startswith("Completed 2 worker tasks:")
-    assert "research/jobs/2026-03-10.md" in text
+    assert "reports/jobs/2026-03-10.md" in text
     assert "Moltbook activity report" in text
     assert "The results are ready." not in text
 
