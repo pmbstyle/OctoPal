@@ -171,7 +171,19 @@ def test_worker_followup_route_skips_planner_and_uses_narrow_tools(monkeypatch) 
         response = await route_worker_results_back_to_octo(
             octo,
             123,
-            [("worker-1", "summarize findings", WorkerResult(summary="done", output={"report_path": "reports/out.md"}))],
+            [
+                (
+                    "worker-1",
+                    "summarize findings",
+                    WorkerResult(
+                        summary="done",
+                        output={
+                            "report_path": "reports/out.md",
+                            "durable_paths": ["reports/out.md"],
+                        },
+                    ),
+                )
+            ],
         )
         assert response == "NO_USER_RESPONSE"
         assert len(octo.provider.tool_snapshots) == 1
@@ -189,6 +201,7 @@ def test_build_worker_result_payload_keeps_preview_text_for_large_output() -> No
             summary="done",
             output={
                 "report_path": "reports/out.md",
+                "durable_paths": ["reports/out.md"],
                 "results": [{"body": "x" * 2000, "idx": idx} for idx in range(80)],
             },
         ),
@@ -196,10 +209,12 @@ def test_build_worker_result_payload_keeps_preview_text_for_large_output() -> No
 
     assert payload["worker_id"] == "worker-1"
     assert payload["output_truncated"] is True
-    assert payload["output"] == {"available_keys": ["report_path", "results"]}
+    assert payload["output"] == {"available_keys": ["report_path", "durable_paths", "results"]}
     assert payload["output_preview_text"]
     assert "report_path" in payload["output_preview_text"]
     assert "results" in payload["output_preview_text"]
+    assert payload["artifact_summary"]["primary_report_path"] == "reports/out.md"
+    assert payload["artifact_summary"]["durable_paths"] == ["reports/out.md"]
 
 
 def test_catalog_result_expands_active_tool_specs() -> None:
