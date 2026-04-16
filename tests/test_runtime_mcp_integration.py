@@ -113,6 +113,55 @@ def test_runtime_allows_worker_manage_templates(tmp_path: Path) -> None:
     assert spec.effective_permissions == ["worker_manage"]
 
 
+def test_runtime_allows_spawn_children_permission_alias(tmp_path: Path) -> None:
+    template = WorkerTemplateRecord(
+        id="research_coordinator",
+        name="Research Coordinator",
+        description="Test worker",
+        system_prompt="Coordinate child workers",
+        available_tools=["start_child_worker", "get_worker_result"],
+        required_permissions=["spawn_children", "network"],
+        model=None,
+        max_thinking_steps=3,
+        default_timeout_seconds=30,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    class _Store:
+        def get_worker_template(self, worker_id: str):
+            return template
+
+    class _Policy:
+        def grant_capabilities(self, capabilities):
+            from octopal.runtime.policy.engine import PolicyEngine
+
+            return PolicyEngine().grant_capabilities(capabilities)
+
+    runtime = WorkerRuntime(
+        store=_Store(),
+        policy=_Policy(),
+        workspace_dir=tmp_path,
+        launcher=object(),
+        mcp_manager=None,
+        settings=Settings(),
+    )
+
+    captured: dict[str, object] = {}
+
+    async def _fake_run(spec, approval_requester=None):
+        captured["spec"] = spec
+        return WorkerResult(summary="ok")
+
+    runtime.run = _fake_run  # type: ignore[method-assign]
+
+    result = asyncio.run(runtime.run_task(TaskRequest(worker_id="research_coordinator", task="hello")))
+
+    assert result.status == "completed"
+    spec = captured["spec"]
+    assert spec.effective_permissions == ["worker_manage", "network"]
+
+
 def test_runtime_persists_preflight_failure_for_worker_status(tmp_path: Path) -> None:
     template = WorkerTemplateRecord(
         id="research_coordinator",

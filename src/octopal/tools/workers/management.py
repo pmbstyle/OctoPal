@@ -18,6 +18,9 @@ _WORKER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 _MAX_PARALLEL_BATCH = 10
 _WORKER_BLOCKED_TOOL_NAMES = {"send_file_to_user"}
+_WORKER_PERMISSION_ALIASES = {
+    "spawn_children": "worker_manage",
+}
 _ALLOWED_PATHS_GUIDANCE = (
     "Workers always keep their own private scratch workspace. "
     "Use allowed_paths only when the worker needs files from Octo's main workspace, "
@@ -1533,8 +1536,8 @@ def _validate_child_spawn_policy(
             f"'{parent_template_id}'."
         )
 
-    parent_permissions = set(_normalize_str_list(parent_ctx.get("effective_permissions", [])))
-    child_permissions = set(_normalize_str_list(getattr(child_template, "required_permissions", [])))
+    parent_permissions = set(_normalize_worker_permissions(parent_ctx.get("effective_permissions", [])))
+    child_permissions = set(_normalize_worker_permissions(getattr(child_template, "required_permissions", [])))
     if not child_permissions.issubset(parent_permissions):
         missing = sorted(child_permissions - parent_permissions)
         return (
@@ -1587,6 +1590,19 @@ def _normalize_str_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _normalize_worker_permissions(value: object) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in _normalize_str_list(value):
+        lowered = item.lower()
+        canonical = _WORKER_PERMISSION_ALIASES.get(lowered, lowered)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        normalized.append(canonical)
+    return normalized
 
 
 def _normalize_tool_name_list(value: object) -> list[str]:
@@ -1644,7 +1660,7 @@ def _select_worker_template(
         return None
 
     required_tools = [t.lower() for t in (required_tools or [])]
-    required_permissions = [p.lower() for p in (required_permissions or [])]
+    required_permissions = _normalize_worker_permissions(required_permissions or [])
     task_tokens = _tokenize(task)
     if not task_tokens:
         task_tokens = {"task"}
@@ -1668,7 +1684,7 @@ def _select_worker_template(
             reasons.append(f"keyword_overlap={overlap}")
 
         available_tools = [str(t).lower() for t in getattr(template, "available_tools", [])]
-        permissions = [str(p).lower() for p in getattr(template, "required_permissions", [])]
+        permissions = _normalize_worker_permissions(getattr(template, "required_permissions", []))
 
         if required_tools:
             matched_tools = sum(1 for t in required_tools if t in available_tools)

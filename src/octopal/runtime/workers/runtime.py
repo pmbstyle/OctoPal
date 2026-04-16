@@ -36,6 +36,9 @@ from octopal.utils import utc_now
 
 logger = structlog.get_logger(__name__)
 _WORKER_BLOCKED_TOOL_NAMES = {"send_file_to_user"}
+_PERMISSION_ALIASES = {
+    "spawn_children": "worker_manage",
+}
 
 # Constants
 _MAX_RECOVERY_ATTEMPTS = 1
@@ -1338,7 +1341,15 @@ def _normalize_name_list(value: object) -> list[str]:
 
 
 def _normalize_permission_names(value: object) -> list[str]:
-    return _normalize_name_list(value)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in _normalize_name_list(value):
+        canonical = _PERMISSION_ALIASES.get(item, item)
+        if canonical in seen:
+            continue
+        seen.add(canonical)
+        normalized.append(canonical)
+    return normalized
 
 
 def _capability_types(capabilities: list[Any]) -> list[str]:
