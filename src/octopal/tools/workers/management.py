@@ -811,6 +811,8 @@ async def _start_worker_common(
         message = "Duplicate worker task detected in this turn; skipped starting a new worker."
     else:
         message = f"Worker start returned status={status}."
+    followup_required = status in {"started", "skipped_duplicate"} and bool(launched_worker_id or run_id)
+    next_best_action = "wait_for_worker_progress" if followup_required else "continue_current_plan"
 
     return json.dumps({
         "status": status,
@@ -826,6 +828,8 @@ async def _start_worker_common(
         "router_reason": route_reason,
         "router_score": route_score,
         "message": message,
+        "followup_required": followup_required,
+        "next_best_action": next_best_action,
     }, ensure_ascii=False)
 
 
@@ -915,6 +919,7 @@ async def _tool_start_workers_parallel(args: dict[str, object], ctx: dict[str, o
     launches = await asyncio.gather(*[_launch(item, idx) for idx, item in enumerate(tasks)])
     started = sum(1 for item in launches if str(item.get("status")) in {"started", "skipped_duplicate"})
     failed = len(launches) - started
+    followup_required = started > 0
     return json.dumps(
         {
             "status": "ok" if failed == 0 else "partial",
@@ -922,6 +927,8 @@ async def _tool_start_workers_parallel(args: dict[str, object], ctx: dict[str, o
             "failed_count": failed,
             "max_parallel": max_parallel,
             "launches": launches,
+            "followup_required": followup_required,
+            "next_best_action": "wait_for_worker_progress" if followup_required else "continue_current_plan",
         },
         ensure_ascii=False,
     )
@@ -1296,7 +1303,7 @@ def _tool_worker_yield(args: dict[str, object], ctx: dict[str, object]) -> str:
     mode = "resume"
     message = "No active worker waiting is needed."
     if pending_workers:
-        next_best_action = "append_followup_required"
+        next_best_action = "wait_for_worker_progress"
         mode = "yield"
         message = f"Yield now. {len(pending_workers)} worker run(s) are still running."
     elif synthesize_recommended:

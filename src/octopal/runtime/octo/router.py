@@ -232,17 +232,6 @@ async def route_or_reply(
             facts=getattr(octo, "facts", None),
             reflection=getattr(octo, "reflection", None),
         )
-        if not internal_followup:
-            messages.append(
-                Message(
-                    role="system",
-                    content=(
-                        "If you are sending an interim update and you must return with a later result without waiting "
-                        "for another user message, append exactly FOLLOWUP_REQUIRED on its own final line. "
-                        "Do not use FOLLOWUP_REQUIRED for final/completed answers."
-                    ),
-                )
-            )
         _log_system_prompt(messages, "route")
 
         plan = await _build_plan(provider, messages, bool(octo_tools))
@@ -275,6 +264,7 @@ async def route_or_reply(
                     )
                 )
         return await _complete_route_with_tools(
+            octo=octo,
             provider=provider,
             messages=messages,
             tool_specs=octo_tools,
@@ -297,6 +287,7 @@ async def route_or_reply(
 
 async def _complete_route_with_tools(
     *,
+    octo: Any,
     provider: InferenceProvider,
     messages: list[Message | dict[str, Any]],
     tool_specs: list[ToolSpec],
@@ -319,6 +310,7 @@ async def _complete_route_with_tools(
         tool_loop_thresholds = _resolve_tool_loop_thresholds()
         max_attempts = 10
         vision_tool_fallback_used = False
+        structured_followup_required = False
 
         for _ in range(max_attempts):
             try:
@@ -472,6 +464,15 @@ async def _complete_route_with_tools(
 
                 for call in tool_calls:
                     tool_result, tool_meta = await _handle_octo_tool_call(call, active_tool_specs, ctx)
+                    if (
+                        not internal_followup
+                        and not structured_followup_required
+                        and _tool_result_requests_followup(call.get("function", {}).get("name"), tool_result)
+                    ):
+                        structured_followup_required = True
+                        marker = getattr(octo, "mark_structured_followup_required", None)
+                        if callable(marker):
+                            marker()
                     expanded_names: list[str] = []
                     if allow_tool_catalog_expansion and str(call.get("function", {}).get("name") or "") == "tool_catalog_search":
                         active_tool_specs, expanded_names = _expand_active_tool_specs_from_catalog_result(
@@ -731,6 +732,7 @@ async def route_worker_results_back_to_octo(
         )
         _log_system_prompt(messages, "worker_followup")
         reply_text = await _complete_route_with_tools(
+            octo=octo,
             provider=octo.provider,
             messages=messages,
             tool_specs=octo_tools,
@@ -1288,6 +1290,19 @@ def _record_octo_tool_call(
         critical_threshold=thresholds["critical"],
         global_breaker_threshold=thresholds["global_breaker"],
     )
+
+
+def _tool_result_requests_followup(tool_name: str | None, tool_result: Any) -> bool:
+    del tool_name
+    structured = tool_result
+    if isinstance(tool_result, str):
+        try:
+            structured = json.loads(tool_result)
+        except Exception:
+            return False
+    if not isinstance(structured, dict):
+        return False
+    return bool(structured.get("followup_required"))
 
 
 def _build_octo_tool_policy_summary(

@@ -97,7 +97,7 @@ def test_worker_yield_recommends_followup_when_runs_are_still_active() -> None:
     assert payload["status"] == "ok"
     assert payload["mode"] == "yield"
     assert payload["followup_required"] is True
-    assert payload["next_best_action"] == "append_followup_required"
+    assert payload["next_best_action"] == "wait_for_worker_progress"
     assert payload["pending_count"] == 2
     assert payload["completed_count"] == 0
     assert any("still in flight" in hint for hint in payload["hints"])

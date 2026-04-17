@@ -989,6 +989,7 @@ class Octo:
     _last_reply_norm_by_chat: dict[int, str] | None = None
     _last_user_visible_delivery_at_by_chat: dict[int, Any] | None = None
     _pending_conversational_closure_by_correlation: dict[str, Any] | None = None
+    _structured_followup_required_by_correlation: dict[str, Any] | None = None
     _suppressed_followups_by_correlation: dict[str, Any] | None = None
     _no_progress_turns_by_chat: dict[int, int] | None = None
     _progress_revision_by_chat: dict[int, int] | None = None
@@ -1032,6 +1033,8 @@ class Octo:
             self._last_user_visible_delivery_at_by_chat = {}
         if self._pending_conversational_closure_by_correlation is None:
             self._pending_conversational_closure_by_correlation = {}
+        if self._structured_followup_required_by_correlation is None:
+            self._structured_followup_required_by_correlation = {}
         if self._suppressed_followups_by_correlation is None:
             self._suppressed_followups_by_correlation = {}
         if self._active_user_turns_by_correlation is None:
@@ -1504,24 +1507,77 @@ class Octo:
         if not correlation_id:
             return False
         self._prune_pending_conversational_closures()
-        pending = self._pending_conversational_closure_by_correlation or {}
+        pending = self._pending_conversational_closure_by_correlation
+        if pending is None:
+            return False
         return correlation_id in pending
 
     def mark_pending_conversational_closure(self, correlation_id: str | None) -> None:
         if not correlation_id:
             return
         self._prune_pending_conversational_closures()
-        pending = self._pending_conversational_closure_by_correlation or {}
+        pending = self._pending_conversational_closure_by_correlation
+        if pending is None:
+            pending = {}
+            self._pending_conversational_closure_by_correlation = pending
         pending[correlation_id] = utc_now()
 
     def clear_pending_conversational_closure(self, correlation_id: str | None) -> None:
         if not correlation_id:
             return
-        pending = self._pending_conversational_closure_by_correlation or {}
+        pending = self._pending_conversational_closure_by_correlation
+        if pending is None:
+            return
         pending.pop(correlation_id, None)
 
+    def mark_structured_followup_required(self, correlation_id: str | None = None) -> None:
+        if not correlation_id:
+            correlation_id = str(correlation_id_var.get() or "").strip() or None
+        if not correlation_id:
+            return
+        self._prune_structured_followup_required()
+        hints = self._structured_followup_required_by_correlation
+        if hints is None:
+            hints = {}
+            self._structured_followup_required_by_correlation = hints
+        hints[correlation_id] = utc_now()
+
+    def consume_structured_followup_required(self, correlation_id: str | None) -> bool:
+        if not correlation_id:
+            return False
+        self._prune_structured_followup_required()
+        hints = self._structured_followup_required_by_correlation
+        if hints is None:
+            return False
+        return correlation_id in hints and bool(hints.pop(correlation_id, None))
+
+    def clear_structured_followup_required(self, correlation_id: str | None) -> None:
+        if not correlation_id:
+            return
+        hints = self._structured_followup_required_by_correlation
+        if hints is None:
+            return
+        hints.pop(correlation_id, None)
+
+    def _prune_structured_followup_required(self) -> None:
+        hints = self._structured_followup_required_by_correlation
+        if hints is None:
+            return
+        if not hints:
+            return
+        cutoff = utc_now() - timedelta(seconds=_PENDING_CONVERSATIONAL_CLOSURE_TTL_SECONDS)
+        expired = [
+            correlation_id
+            for correlation_id, created_at in hints.items()
+            if not created_at or created_at < cutoff
+        ]
+        for correlation_id in expired:
+            hints.pop(correlation_id, None)
+
     def _prune_pending_conversational_closures(self) -> None:
-        pending = self._pending_conversational_closure_by_correlation or {}
+        pending = self._pending_conversational_closure_by_correlation
+        if pending is None:
+            return
         if not pending:
             return
         cutoff = utc_now() - timedelta(seconds=_PENDING_CONVERSATIONAL_CLOSURE_TTL_SECONDS)
@@ -2114,7 +2170,7 @@ class Octo:
                     if not removed:
                         raise
             initial_reaction_emoji, _ = extract_reaction_and_strip(reply_text or "")
-            reply_text, wants_followup = _extract_followup_required_marker(reply_text)
+            wants_followup = self.consume_structured_followup_required(correlation_id)
             if not track_progress:
                 wants_followup = False
                 if background_delivery:
@@ -2204,6 +2260,7 @@ class Octo:
                     correlation_id,
                     only_if_created_during_active_turn=True,
                 )
+            self.clear_structured_followup_required(correlation_id)
             if correlation_token is not None:
                 correlation_id_var.reset(correlation_token)
 
@@ -2701,30 +2758,6 @@ def _is_progress_reply(current_norm: str, prior_norm: str) -> bool:
         "no update",
     )
     return not any(marker in current_norm for marker in stalled_markers)
-
-
-_FOLLOWUP_REQUIRED_MARKER = "FOLLOWUP_REQUIRED"
-_FOLLOWUP_REQUIRED_MARKER_NORMALIZED = "FOLLOWUPREQUIRED"
-
-
-def _extract_followup_required_marker(text: str) -> tuple[str, bool]:
-    emoji, cleaned_text = extract_reaction_and_strip(text or "")
-    value = normalize_plain_text(cleaned_text)
-    if not value:
-        if emoji:
-            return f"<react>{emoji}</react>", False
-        return value, False
-
-    trimmed = re.sub(r"[^\w]+$", "", value).strip()
-    normalized = re.sub(r"[\s_-]+", "", trimmed).upper()
-    if normalized.endswith(_FOLLOWUP_REQUIRED_MARKER_NORMALIZED):
-        cleaned = re.sub(r"(?is)(?:\n|\r|\s)*[*_`<>-]*FOLLOWUP[\s_-]*REQUIRED[*_`<>-]*\s*$", "", value).strip()
-        if emoji:
-            cleaned = f"<react>{emoji}</react> {cleaned}".strip()
-        return cleaned, True
-    if emoji:
-        value = f"<react>{emoji}</react> {value}".strip()
-    return value, False
 
 
 def _workspace_dir() -> Path:

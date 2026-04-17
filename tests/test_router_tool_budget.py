@@ -910,10 +910,110 @@ def test_route_can_expand_toolset_after_catalog_search(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_route_marks_structured_followup_requirement_from_tool_payload(monkeypatch) -> None:
+    worker_tool = ToolSpec(
+        name="start_worker",
+        description="Start a worker.",
+        parameters={"type": "object", "properties": {}, "additionalProperties": False},
+        permission="worker_manage",
+        handler=lambda args, ctx: (
+            '{"status":"started","worker_id":"run-1","run_id":"run-1",'
+            '"followup_required":true,"next_best_action":"wait_for_worker_progress"}'
+        ),
+    )
+
+    class DummyProvider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete(self, messages, **kwargs):
+            raise AssertionError("plain completion should not be used in this scenario")
+
+        async def complete_stream(self, messages, *, on_partial, **kwargs):
+            raise AssertionError("streaming should not be used in this scenario")
+
+        async def complete_with_tools(self, messages, *, tools, tool_choice="auto", **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {"name": "start_worker", "arguments": "{}"},
+                        }
+                    ],
+                }
+            return {"content": "Проверяю и вернусь с итогом.", "tool_calls": []}
+
+    class DummyMemory:
+        async def add_message(self, role, content, metadata=None):
+            return None
+
+    class DummyOcto:
+        store = object()
+        canon = object()
+        internal_progress_send = None
+        is_ws_active = False
+
+        def __init__(self) -> None:
+            self.followup_marked = 0
+
+        async def set_typing(self, chat_id: int, active: bool) -> None:
+            return None
+
+        async def set_thinking(self, active: bool) -> None:
+            return None
+
+        def peek_context_wakeup(self, chat_id: int) -> str:
+            return ""
+
+        def mark_structured_followup_required(self, correlation_id=None) -> None:
+            del correlation_id
+            self.followup_marked += 1
+
+    async def fake_build_octo_prompt(**kwargs):
+        return [Message(role="user", content=str(kwargs["user_text"]))]
+
+    async def fake_build_plan(provider, messages, has_tools):
+        return None
+
+    def fake_get_octo_tools(octo, chat_id):
+        return [worker_tool], {
+            "octo": octo,
+            "chat_id": chat_id,
+            "active_tool_specs": [worker_tool],
+            "all_tool_specs": [worker_tool],
+        }
+
+    import octopal.runtime.octo.router as router
+
+    monkeypatch.setattr(router, "build_octo_prompt", fake_build_octo_prompt)
+    monkeypatch.setattr(router, "_build_plan", fake_build_plan)
+    monkeypatch.setattr(router, "_get_octo_tools", fake_get_octo_tools)
+
+    async def scenario() -> None:
+        provider = DummyProvider()
+        octo = DummyOcto()
+        response = await route_or_reply(
+            octo,
+            provider,
+            DummyMemory(),
+            "check it",
+            123,
+            "",
+        )
+        assert response == "Проверяю и вернусь с итогом."
+        assert octo.followup_marked == 1
+
+    asyncio.run(scenario())
+
+
 def test_finalize_response_returns_no_user_response_when_non_followup_rewrite_still_bad() -> None:
     class DummyProvider:
         async def complete(self, messages, **kwargs):
-            return "FOLLOWUP_REQUIRED"
+            return "check_schedule"
 
     async def scenario() -> None:
         result = await _finalize_response(

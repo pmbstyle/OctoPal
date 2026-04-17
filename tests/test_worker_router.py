@@ -91,6 +91,8 @@ def test_start_worker_auto_routes_and_returns_router_metadata() -> None:
     result = asyncio.run(_scenario())
     assert result["router_used"] is True
     assert result["worker_template_id"] == "web_researcher"
+    assert result["followup_required"] is True
+    assert result["next_best_action"] == "wait_for_worker_progress"
     assert isinstance(result["router_reason"], str) and result["router_reason"]
 
 
@@ -133,6 +135,8 @@ def test_start_worker_passes_null_model_to_runtime() -> None:
 
     result = asyncio.run(_scenario())
     assert result["worker_template_id"] == "coder"
+    assert result["followup_required"] is True
+    assert result["next_best_action"] == "wait_for_worker_progress"
     assert octo.captured is not None
     assert octo.captured["model"] is None
 
@@ -219,5 +223,7 @@ def test_start_worker_allows_subset_tool_override() -> None:
 
     result = asyncio.run(_scenario())
     assert result["status"] == "started"
+    assert result["followup_required"] is True
+    assert result["next_best_action"] == "wait_for_worker_progress"
     assert octo.captured is not None
     assert octo.captured["tools"] == ["fs_read"]

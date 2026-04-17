@@ -11,7 +11,6 @@ from octopal.runtime.octo.core import (
     _build_worker_result_timeout_followup,
     _coerce_control_plane_reply,
     _enqueue_batched_worker_followup,
-    _extract_followup_required_marker,
     _merge_worker_followup_texts,
     _schedule_worker_followup_flush,
 )
@@ -222,20 +221,6 @@ def test_forced_worker_followup_batch_uses_meaningful_result_summary():
     assert "The results are ready." not in text
 
 
-def test_followup_required_marker_is_stripped_and_detected():
-    text, wants_followup = _extract_followup_required_marker(
-        "Проверю статус child worker и вернусь с итогом.\nFOLLOWUP_REQUIRED"
-    )
-    assert wants_followup is True
-    assert text == "Проверю статус child worker и вернусь с итогом."
-
-
-def test_followup_required_marker_is_not_set_for_normal_reply():
-    text, wants_followup = _extract_followup_required_marker("Готово, вот итог.")
-    assert wants_followup is False
-    assert text == "Готово, вот итог."
-
-
 def test_pending_conversational_closure_expires():
     octo = Octo(
         approvals=None,
@@ -250,6 +235,29 @@ def test_pending_conversational_closure_expires():
     octo._pending_conversational_closure_by_correlation[correlation_id] = (
         utc_now() - timedelta(seconds=4000)
     )
+    assert octo.has_pending_conversational_closure(correlation_id) is False
+
+
+def test_pending_conversational_closure_round_trip_works_with_empty_store():
+    octo = Octo(
+        approvals=None,
+        memory=None,
+        canon=None,
+        provider=None,
+        store=None,
+        policy=None,
+        runtime=None,
+    )
+    correlation_id = "corr-round-trip"
+
+    octo._pending_conversational_closure_by_correlation = {}
+
+    octo.mark_pending_conversational_closure(correlation_id)
+
+    assert octo.has_pending_conversational_closure(correlation_id) is True
+
+    octo.clear_pending_conversational_closure(correlation_id)
+
     assert octo.has_pending_conversational_closure(correlation_id) is False
 
 
@@ -904,7 +912,7 @@ async def test_worker_followup_created_during_active_turn_is_dropped_without_fol
 
 
 @pytest.mark.asyncio
-async def test_worker_followup_created_during_active_turn_flushes_after_followup_marker(monkeypatch):
+async def test_worker_followup_created_during_active_turn_flushes_after_structured_followup_hint(monkeypatch):
     monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
     octo_core._WORKER_FOLLOWUP_BATCHES.clear()
 
@@ -917,9 +925,10 @@ async def test_worker_followup_created_during_active_turn_flushes_after_followup
     async def _send(chat_id, text):
         sent_messages.append((chat_id, text))
 
-    async def _route_or_reply(*args, **kwargs):
+    async def _route_or_reply(octo, *args, **kwargs):
+        octo.mark_structured_followup_required("turn-test")
         await asyncio.sleep(0.02)
-        return "Жду результат воркера.\nFOLLOWUP_REQUIRED"
+        return "Жду результат воркера."
 
     async def _bootstrap_context(*args, **kwargs):
         return SimpleNamespace(content="", hash="", files=[])
@@ -955,7 +964,7 @@ async def test_worker_followup_created_during_active_turn_flushes_after_followup
 
 
 @pytest.mark.asyncio
-async def test_worker_followup_created_during_active_turn_is_dropped_even_with_followup_marker_when_work_already_finished(monkeypatch):
+async def test_worker_followup_created_during_active_turn_is_dropped_when_work_already_finished(monkeypatch):
     monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
     octo_core._WORKER_FOLLOWUP_BATCHES.clear()
 
@@ -968,9 +977,10 @@ async def test_worker_followup_created_during_active_turn_is_dropped_even_with_f
     async def _send(chat_id, text):
         sent_messages.append((chat_id, text))
 
-    async def _route_or_reply(*args, **kwargs):
+    async def _route_or_reply(octo, *args, **kwargs):
+        octo.mark_structured_followup_required("turn-test")
         await asyncio.sleep(0.02)
-        return "Жду результат воркера.\nFOLLOWUP_REQUIRED"
+        return "Жду результат воркера."
 
     async def _bootstrap_context(*args, **kwargs):
         return SimpleNamespace(content="", hash="", files=[])

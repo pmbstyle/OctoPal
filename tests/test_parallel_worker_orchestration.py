@@ -70,6 +70,8 @@ def test_start_workers_parallel_launches_multiple() -> None:
     result = asyncio.run(_scenario())
     assert result["status"] in {"ok", "partial"}
     assert result["started_count"] == 2
+    assert result["followup_required"] is True
+    assert result["next_best_action"] == "wait_for_worker_progress"
     assert len(result["launches"]) == 2
     assert all(item["worker_id"] for item in result["launches"])
 
@@ -115,6 +117,8 @@ def test_start_workers_parallel_forwards_allowed_paths_per_task() -> None:
 
     result = asyncio.run(_scenario())
     assert result["started_count"] == 2
+    assert result["followup_required"] is True
+    assert result["next_best_action"] == "wait_for_worker_progress"
     assert octo.launches[0]["allowed_paths"] is None
     assert octo.launches[1]["allowed_paths"] == ["src/parser.py"]
 
@@ -159,6 +163,8 @@ def test_start_workers_parallel_passes_null_model_to_runtime() -> None:
 
     result = asyncio.run(_scenario())
     assert result["started_count"] == 1
+    assert result["followup_required"] is True
+    assert result["next_best_action"] == "wait_for_worker_progress"
     assert octo.launches[0]["model"] is None
 
 
