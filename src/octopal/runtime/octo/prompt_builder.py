@@ -21,6 +21,15 @@ if TYPE_CHECKING:
 
 
 _OCTO_SYSTEM_PROMPT_CONTENT = ""
+_BOOTSTRAP_FILE_CHAR_BUDGETS = {
+    "AGENTS.md": 7000,
+    "USER.md": 1500,
+    "HEARTBEAT.md": 4500,
+    "MEMORY.md": 3500,
+    "experiments/README.md": 2000,
+}
+_DEFAULT_BOOTSTRAP_FILE_CHAR_BUDGET = 3000
+_DAILY_MEMORY_BOOTSTRAP_CHAR_BUDGET = 2200
 
 
 @dataclass
@@ -145,7 +154,8 @@ async def build_bootstrap_context_prompt(store: Store, chat_id: int) -> Bootstra
             if not path.exists():
                 continue
 
-            content = path.read_text(encoding="utf-8")
+            raw_content = path.read_text(encoding="utf-8")
+            content = _prepare_bootstrap_file_content(path.name, raw_content)
 
             file_entries.append((path.name, content))
 
@@ -153,16 +163,17 @@ async def build_bootstrap_context_prompt(store: Store, chat_id: int) -> Bootstra
             if not path.exists():
                 continue
 
-            content = path.read_text(encoding="utf-8")
+            raw_content = path.read_text(encoding="utf-8")
+            rel = path.relative_to(workspace).as_posix()
+            content = _prepare_bootstrap_file_content(rel, raw_content)
 
             if content.strip():
-                rel = path.relative_to(workspace).as_posix()
                 file_entries.append((rel, content))
 
         for path in memory_files:
-            content = path.read_text(encoding="utf-8")
-
             rel = path.relative_to(workspace).as_posix()
+            raw_content = path.read_text(encoding="utf-8")
+            content = _prepare_bootstrap_file_content(rel, raw_content)
 
             file_entries.append((rel, content))
 
@@ -211,6 +222,32 @@ async def build_bootstrap_context_prompt(store: Store, chat_id: int) -> Bootstra
         return BootstrapContext(content=content, hash=hash_value, files=files_with_sizes)
 
     return await asyncio.to_thread(_sync_logic)
+
+
+def _prepare_bootstrap_file_content(name: str, content: str) -> str:
+    normalized_name = str(name).strip().replace("\\", "/")
+    stripped = content.strip()
+    if not stripped:
+        return ""
+
+    max_chars = _bootstrap_file_char_budget(normalized_name)
+    if len(content) <= max_chars:
+        return content
+
+    excerpt_budget = max(512, max_chars - 160)
+    excerpt = _trim_middle(content, excerpt_budget)
+    return (
+        f"[bootstrap excerpt from {normalized_name}; source length={len(content)} chars. "
+        "Use fs_read for the full file if needed.]\n"
+        f"{excerpt}"
+    )
+
+
+def _bootstrap_file_char_budget(name: str) -> int:
+    normalized_name = str(name).strip().replace("\\", "/")
+    if normalized_name.startswith("memory/") and normalized_name.endswith(".md"):
+        return _DAILY_MEMORY_BOOTSTRAP_CHAR_BUDGET
+    return _BOOTSTRAP_FILE_CHAR_BUDGETS.get(normalized_name, _DEFAULT_BOOTSTRAP_FILE_CHAR_BUDGET)
 
 
 def _current_datetime_prompt() -> str:

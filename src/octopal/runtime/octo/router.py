@@ -45,6 +45,7 @@ _MAX_VERIFY_CONTEXT_CHARS = 20000
 _DEFAULT_MAX_TOOL_COUNT = 64
 _MIN_TOOL_COUNT_ON_OVERFLOW = 12
 _CATALOG_TOOL_EXPANSION_LIMIT = 12
+_DEFAULT_INITIAL_OCTO_TOOL_COUNT = 32
 _MANDATORY_OCTO_TOOL_NAMES = {
     "octo_context_health",
     "check_schedule",
@@ -105,6 +106,19 @@ _ALWAYS_INCLUDE_TOOL_NAMES = {
     "fs_write",
     "fs_move",
     "fs_delete",
+}
+_INITIAL_OCTO_TOOL_NAMES = _ALWAYS_INCLUDE_TOOL_NAMES | {
+    "manage_canon",
+    "search_canon",
+    "octo_opportunity_scan",
+    "octo_self_queue_list",
+    "octo_self_queue_take",
+    "octo_self_queue_update",
+    "octo_experiment_log",
+    "octo_memchain_status",
+    "octo_memchain_verify",
+    "gateway_status",
+    "mcp_discover",
 }
 _WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES = {
     "get_worker_output_path",
@@ -996,11 +1010,17 @@ def _get_octo_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, 
         list(resolution_report.available_tools),
         all_tools,
     )
-    max_tools = _env_int("OCTOPAL_OCTO_MAX_TOOL_COUNT", _DEFAULT_MAX_TOOL_COUNT, minimum=8)
-    tool_specs = _budget_tool_specs(tool_specs, max_count=max_tools)
+    tool_specs = _select_initial_octo_tool_specs(tool_specs)
     ctx["active_tool_specs"] = tool_specs
     ctx["tool_resolution_report"] = resolution_report
     ctx["all_tool_specs"] = all_tools
+    deferred_count = max(0, len(resolution_report.available_tools) - len(tool_specs))
+    if deferred_count:
+        logger.info(
+            "Octo deferred tool loading active",
+            active_tool_count=len(tool_specs),
+            deferred_tool_count=deferred_count,
+        )
     return tool_specs, ctx
 
 
@@ -1162,6 +1182,55 @@ def _budget_tool_specs(tool_specs: list[ToolSpec], *, max_count: int) -> list[To
                 break
 
     return selected
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _select_initial_octo_tool_specs(tool_specs: list[ToolSpec]) -> list[ToolSpec]:
+    """
+    Keep Octo's initial tool payload intentionally small.
+
+    The full registry remains available through tool_catalog_search and
+    subsequent expansion, but the first request should stay focused on the
+    operational core that Octo needs for orchestration.
+    """
+    max_tools = _env_int("OCTOPAL_OCTO_MAX_TOOL_COUNT", _DEFAULT_MAX_TOOL_COUNT, minimum=8)
+    if not _env_flag("OCTOPAL_OCTO_DEFER_TOOL_LOADING", True):
+        return _budget_tool_specs(tool_specs, max_count=max_tools)
+
+    prioritized = sorted(tool_specs, key=_tool_priority)
+    selected: list[ToolSpec] = []
+    selected_names: set[str] = set()
+
+    for spec in prioritized:
+        name = str(getattr(spec, "name", "") or "")
+        if name not in _INITIAL_OCTO_TOOL_NAMES:
+            continue
+        if name in selected_names:
+            continue
+        selected.append(spec)
+        selected_names.add(name)
+
+    if not selected:
+        return _budget_tool_specs(tool_specs, max_count=max_tools)
+
+    initial_limit = _env_int(
+        "OCTOPAL_OCTO_MAX_INITIAL_TOOL_COUNT",
+        max(_DEFAULT_INITIAL_OCTO_TOOL_COUNT, len(_ALWAYS_INCLUDE_TOOL_NAMES)),
+        minimum=8,
+    )
+    initial_limit = min(initial_limit, max_tools)
+    return _budget_tool_specs(selected, max_count=initial_limit)
 
 
 def _shrink_tool_specs_for_retry(tool_specs: list[ToolSpec]) -> list[ToolSpec]:

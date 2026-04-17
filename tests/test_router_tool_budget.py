@@ -9,6 +9,7 @@ from octopal.runtime.octo.router import (
     _expand_active_tool_specs_from_catalog_result,
     _finalize_response,
     _get_worker_followup_tools,
+    _get_octo_tools,
     _recover_textual_tool_call,
     _sanitize_messages_for_complete,
     _shrink_tool_specs_for_retry,
@@ -43,6 +44,43 @@ def test_shrink_retry_keeps_start_worker() -> None:
     shrunk = _shrink_tool_specs_for_retry(all_tools)
     names = {spec.name for spec in shrunk}
     assert "start_worker" in names
+
+
+def test_get_octo_tools_uses_small_core_and_defers_mcp_tools(monkeypatch) -> None:
+    import octopal.runtime.octo.router as router
+
+    class DummyOcto:
+        mcp_manager = None
+
+    def fake_get_tools(mcp_manager=None):
+        base = get_tools(mcp_manager=None)
+        mcp_tools = [
+            ToolSpec(
+                name=f"mcp_demo_tool_{index}",
+                description="demo mcp tool",
+                parameters={"type": "object", "properties": {}, "additionalProperties": False},
+                permission="mcp_exec",
+                handler=lambda _args, _ctx: {"ok": True},
+                is_async=True,
+            )
+            for index in range(12)
+        ]
+        return base + mcp_tools
+
+    monkeypatch.setattr(router, "get_tools", fake_get_tools)
+    monkeypatch.delenv("OCTOPAL_OCTO_DEFER_TOOL_LOADING", raising=False)
+    monkeypatch.delenv("OCTOPAL_OCTO_MAX_INITIAL_TOOL_COUNT", raising=False)
+
+    tool_specs, ctx = _get_octo_tools(DummyOcto(), 0)
+    names = {spec.name for spec in tool_specs}
+    all_names = {spec.name for spec in ctx["all_tool_specs"]}
+
+    assert "tool_catalog_search" in names
+    assert "start_worker" in names
+    assert "fs_read" in names
+    assert "mcp_demo_tool_0" not in names
+    assert "mcp_demo_tool_0" in all_names
+    assert len(tool_specs) < len(all_names)
 
 
 def test_worker_followup_tools_are_narrow(monkeypatch) -> None:
