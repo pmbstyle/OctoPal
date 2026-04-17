@@ -33,6 +33,41 @@ def test_render_tool_result_parses_json_strings_before_compacting() -> None:
     assert "__octopal_compaction__" in rendered.text
 
 
+def test_render_tool_result_preserves_raw_fs_read_json_text() -> None:
+    raw = '{\n  "id": "demo_worker",\n  "name": "Demo Worker"\n}'
+
+    rendered = render_tool_result_for_llm(raw, tool_name="fs_read")
+
+    assert rendered.was_compacted is False
+    assert rendered.text == raw.strip()
+    assert "__octopal_compaction__" not in rendered.text
+
+
+def test_render_tool_result_preserves_raw_manage_canon_text() -> None:
+    raw = '{"decision":"keep raw canon reads as text"}'
+
+    rendered = render_tool_result_for_llm(raw, tool_name="manage_canon")
+
+    assert rendered.was_compacted is False
+    assert rendered.text == raw
+    assert "__octopal_compaction__" not in rendered.text
+
+
+def test_render_tool_result_preserves_raw_drive_file_content_field() -> None:
+    payload = {
+        "ok": True,
+        "file": {"id": "123", "name": "settings.json"},
+        "content": '{"featureFlags":{"raw":true}}',
+        "text_length": 31,
+    }
+
+    rendered = render_tool_result_for_llm(payload, tool_name="drive_read_text_file")
+
+    assert rendered.was_compacted is False
+    assert '"content": "{\\"featureFlags\\":{\\"raw\\":true}}"' in rendered.text
+    assert "__octopal_compaction__" not in rendered.text
+
+
 def test_render_tool_result_preserves_larger_fetch_snippet_for_worker_tools() -> None:
     payload = {
         "ok": True,

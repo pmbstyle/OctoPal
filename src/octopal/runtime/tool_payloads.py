@@ -17,6 +17,14 @@ _CONTENT_HEAVY_TOOL_NAMES = {
     "markdown_new_fetch",
     "web_fetch",
 }
+_RAW_TEXT_TOOL_NAMES = {
+    "fs_read",
+    "manage_canon",
+    "search_canon",
+}
+_RAW_TEXT_FIELDS_BY_TOOL_NAME = {
+    "drive_read_text_file": {"content"},
+}
 _PATH_KEY_RE = re.compile(r"(?:^|_)(?:path|paths|file|files|url|urls)$", re.IGNORECASE)
 _MAX_PATH_HINTS = 6
 
@@ -56,7 +64,14 @@ def render_tool_result_for_llm(
     max_chars: int | None = None,
 ) -> RenderedToolResult:
     budget = _budget_for_tool(tool_name, max_chars=max_chars)
-    compacted, was_compacted = _compact_tool_value(result, depth=0, budget=budget)
+    if isinstance(result, str) and _should_preserve_raw_text(tool_name):
+        return _render_raw_text_result(result, max_chars=budget.max_chars)
+    compacted, was_compacted = _compact_tool_value(
+        result,
+        depth=0,
+        budget=budget,
+        raw_text_field_names=_raw_text_field_names_for_tool(tool_name),
+    )
     if isinstance(compacted, str):
         rendered = compacted.strip()
     else:
@@ -92,6 +107,33 @@ def _budget_for_tool(tool_name: str | None, *, max_chars: int | None) -> ToolRen
     )
 
 
+def _should_preserve_raw_text(tool_name: str | None) -> bool:
+    normalized_name = str(tool_name or "").strip().lower()
+    return normalized_name in _RAW_TEXT_TOOL_NAMES
+
+
+def _raw_text_field_names_for_tool(tool_name: str | None) -> frozenset[str]:
+    normalized_name = str(tool_name or "").strip().lower()
+    return frozenset(_RAW_TEXT_FIELDS_BY_TOOL_NAME.get(normalized_name, ()))
+
+
+def _render_raw_text_result(value: str, *, max_chars: int) -> RenderedToolResult:
+    compacted, was_compacted = _preserve_raw_text(value, max_chars=max_chars)
+    return RenderedToolResult(text=compacted, was_compacted=was_compacted)
+
+
+def _preserve_raw_text(value: str, *, max_chars: int) -> tuple[str, bool]:
+    final_text = value.strip()
+    if not final_text:
+        return "", False
+    if len(final_text) <= max_chars:
+        return final_text, False
+    omitted = len(final_text) - max_chars
+    truncated = final_text[: max(0, max_chars - 32)].rstrip()
+    suffix = f"... [truncated {omitted} chars]"
+    return f"{truncated}{suffix}", True
+
+
 def _build_summary_prefix(value: Any, *, was_compacted: bool) -> str:
     summary_parts: list[str] = []
 
@@ -116,17 +158,31 @@ def _build_summary_prefix(value: Any, *, was_compacted: bool) -> str:
     return "\n".join(summary_parts)
 
 
-def _compact_tool_value(value: Any, *, depth: int, budget: ToolRenderBudget) -> tuple[Any, bool]:
+def _compact_tool_value(
+    value: Any,
+    *,
+    depth: int,
+    budget: ToolRenderBudget,
+    raw_text_field_names: frozenset[str] = frozenset(),
+    parent_key: str | None = None,
+) -> tuple[Any, bool]:
     if depth >= budget.max_depth:
         return _depth_marker(value), True
 
     if isinstance(value, str):
+        if parent_key and parent_key.strip().lower() in raw_text_field_names:
+            return _preserve_raw_text(value, max_chars=budget.max_string_chars)
         stripped = value.strip()
         if not stripped:
             return "", False
         parsed = _parse_json_like_string(stripped)
         if parsed is not None:
-            compacted, _changed = _compact_tool_value(parsed, depth=depth + 1, budget=budget)
+            compacted, _changed = _compact_tool_value(
+                parsed,
+                depth=depth + 1,
+                budget=budget,
+                raw_text_field_names=raw_text_field_names,
+            )
             return compacted, True
         if len(stripped) <= budget.max_string_chars:
             return stripped, False
@@ -137,7 +193,13 @@ def _compact_tool_value(value: Any, *, depth: int, budget: ToolRenderBudget) -> 
         changed = False
         items = list(value.items())
         for key, raw_item in items[: budget.max_container_items]:
-            compacted_item, item_changed = _compact_tool_value(raw_item, depth=depth + 1, budget=budget)
+            compacted_item, item_changed = _compact_tool_value(
+                raw_item,
+                depth=depth + 1,
+                budget=budget,
+                raw_text_field_names=raw_text_field_names,
+                parent_key=str(key),
+            )
             compacted_items[str(key)] = compacted_item
             changed = changed or item_changed
         omitted = len(items) - len(compacted_items)
@@ -157,7 +219,13 @@ def _compact_tool_value(value: Any, *, depth: int, budget: ToolRenderBudget) -> 
         compacted_items: list[Any] = []
         changed = False
         for item in sequence[: budget.max_container_items]:
-            compacted_item, item_changed = _compact_tool_value(item, depth=depth + 1, budget=budget)
+            compacted_item, item_changed = _compact_tool_value(
+                item,
+                depth=depth + 1,
+                budget=budget,
+                raw_text_field_names=raw_text_field_names,
+                parent_key=parent_key,
+            )
             compacted_items.append(compacted_item)
             changed = changed or item_changed
         omitted = len(sequence) - len(compacted_items)
