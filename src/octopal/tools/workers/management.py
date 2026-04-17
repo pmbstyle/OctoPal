@@ -1655,14 +1655,6 @@ def _validate_child_spawn_policy(
             f"'{parent_template_id}'."
         )
 
-    parent_permissions = set(_normalize_worker_permissions(parent_ctx.get("effective_permissions", [])))
-    child_permissions = set(_normalize_worker_permissions(getattr(child_template, "required_permissions", [])))
-    if not child_permissions.issubset(parent_permissions):
-        missing = sorted(child_permissions - parent_permissions)
-        return (
-            "start_child_worker error: child template requests permissions not held by parent "
-            f"({', '.join(missing)})."
-        )
     return None
 
 

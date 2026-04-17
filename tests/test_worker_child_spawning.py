@@ -90,9 +90,42 @@ def test_start_child_worker_enforces_opt_in() -> None:
     assert "cannot spawn children" in result
 
 
-def test_start_child_worker_enforces_whitelist_and_permission_subset() -> None:
+def test_start_child_worker_allows_whitelisted_child_with_broader_permissions() -> None:
     templates = {
         "parent": _template("parent", perms=["network"], can_spawn=True, allowed_children=["child"]),
+        "child": _template("child", perms=["exec"]),
+    }
+
+    class _Octo:
+        def __init__(self) -> None:
+            self.store = _Store(templates)
+            self.last_launch = None
+
+        async def _start_worker_async(self, **kwargs):
+            self.last_launch = kwargs
+            return {
+                "status": "started",
+                "worker_id": "child-run-1",
+                "run_id": "child-run-1",
+            }
+
+    octo = _Octo()
+
+    async def _scenario() -> dict[str, object]:
+        payload = await _tool_start_child_worker(
+            {"worker_id": "child", "task": "fetch rss"},
+            {"octo": octo, "chat_id": 1, "worker": _caller_worker(effective_permissions=["network"])},
+        )
+        return json.loads(payload)
+
+    result = asyncio.run(_scenario())
+    assert result["status"] == "started"
+    assert octo.last_launch is not None
+
+
+def test_start_child_worker_still_enforces_whitelist() -> None:
+    templates = {
+        "parent": _template("parent", perms=["network"], can_spawn=True, allowed_children=["other-child"]),
         "child": _template("child", perms=["exec"]),
     }
 
@@ -110,7 +143,7 @@ def test_start_child_worker_enforces_whitelist_and_permission_subset() -> None:
         )
 
     result = asyncio.run(_scenario())
-    assert "requests permissions not held by parent" in result
+    assert "is not allowed by parent template" in result
 
 
 def test_start_child_worker_propagates_lineage_fields() -> None:
