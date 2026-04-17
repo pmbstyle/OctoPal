@@ -5,7 +5,7 @@ import json
 import os
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -69,6 +69,7 @@ class MCPManager:
         # Communication queues for disconnect signals
         self._stop_events: dict[str, asyncio.Event] = {}
         self._tools: dict[str, list[ToolSpec]] = {}
+        self._tool_schemas: dict[tuple[str, str], dict[str, Any]] = {}
         self._server_configs: dict[str, MCPServerConfig] = {}
         self._tool_failure_state: dict[tuple[str, str], dict[str, Any]] = {}
         self._reconnect_tasks: dict[str, asyncio.Task] = {}
@@ -265,11 +266,13 @@ class MCPManager:
                 safe_id = config.id.replace("-", "_")
                 safe_tool_name = tool.name.replace("-", "_")
                 mcp_tool_name = f"mcp_{safe_id}_{safe_tool_name}"
+                full_schema = tool.inputSchema if isinstance(tool.inputSchema, dict) else {}
+                self._tool_schemas[(config.id, mcp_tool_name)] = full_schema
 
                 spec = ToolSpec(
                     name=mcp_tool_name,
                     description=f"[MCP Tool from {config.name}] {tool.description}. Call this tool directly by using the name '{mcp_tool_name}' in your tool call block.",
-                    parameters=tool.inputSchema,
+                    parameters=_compact_mcp_input_schema(full_schema),
                     permission="mcp_exec",
                     handler=self._generate_handler(config.id, tool.name),
                     is_async=True,
@@ -299,6 +302,8 @@ class MCPManager:
             # Clean up
             self.sessions.pop(config.id, None)
             self._tools.pop(config.id, None)
+            for schema_key in [key for key in self._tool_schemas if key[0] == config.id]:
+                self._tool_schemas.pop(schema_key, None)
             self._tasks.pop(config.id, None)
             self._stop_events.pop(config.id, None)
 
@@ -526,6 +531,18 @@ class MCPManager:
             all_specs.extend(specs)
         return all_specs
 
+    def hydrate_tool_spec(self, spec: ToolSpec) -> ToolSpec:
+        server_id = str(getattr(spec, "server_id", "") or "").strip()
+        generated_name = str(getattr(spec, "name", "") or "").strip()
+        if not server_id or not generated_name:
+            return spec
+        full_schema = self._tool_schemas.get((server_id, generated_name))
+        if not isinstance(full_schema, dict) or not full_schema:
+            return spec
+        if spec.parameters == full_schema:
+            return spec
+        return replace(spec, parameters=full_schema)
+
     async def shutdown(self):
         self._shutdown_requested = True
         for task in list(self._reconnect_tasks.values()):
@@ -709,3 +726,69 @@ def _mcp_timeout_seconds(tool_name: str, args: dict[str, Any]) -> float:
     if any(hint in lowered for hint in _MCP_SLOW_TOOL_HINTS):
         return _MCP_SLOW_TIMEOUT_SECONDS
     return _MCP_DEFAULT_TIMEOUT_SECONDS
+
+
+def _compact_mcp_input_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(schema, dict):
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+
+    compact: dict[str, Any] = {
+        "type": str(schema.get("type", "object") or "object"),
+        "properties": {},
+        "additionalProperties": bool(schema.get("additionalProperties", False)),
+    }
+
+    description = _compact_schema_description(schema.get("description"))
+    if description:
+        compact["description"] = description
+
+    properties = schema.get("properties")
+    if isinstance(properties, dict):
+        compact_properties: dict[str, Any] = {}
+        for key, raw_value in properties.items():
+            value = raw_value if isinstance(raw_value, dict) else {}
+            compact_prop: dict[str, Any] = {}
+            prop_type = value.get("type")
+            if isinstance(prop_type, str) and prop_type.strip():
+                compact_prop["type"] = prop_type
+            elif isinstance(value.get("enum"), list):
+                compact_prop["type"] = "string"
+            else:
+                compact_prop["type"] = "object"
+
+            prop_description = _compact_schema_description(value.get("description"))
+            if prop_description:
+                compact_prop["description"] = prop_description
+
+            enum_values = value.get("enum")
+            if isinstance(enum_values, list):
+                compact_prop["enum"] = enum_values[:12]
+                omitted = len(enum_values) - len(compact_prop["enum"])
+                if omitted > 0:
+                    compact_prop["description"] = (
+                        (compact_prop.get("description", "") + " ").strip()
+                        + f"(plus {omitted} more enum values in full schema)"
+                    ).strip()
+
+            compact_properties[str(key)] = compact_prop
+        compact["properties"] = compact_properties
+
+    required = schema.get("required")
+    if isinstance(required, list):
+        compact["required"] = [str(item) for item in required if str(item).strip()]
+
+    return compact
+
+
+def _compact_schema_description(value: Any, *, max_chars: int = 180) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    trimmed = text[: max_chars - 20].rstrip()
+    return f"{trimmed}... [see full schema]"

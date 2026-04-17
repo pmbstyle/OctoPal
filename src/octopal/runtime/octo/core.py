@@ -2137,7 +2137,13 @@ class Octo:
             bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
             if bootstrap_context.files:
                 files_summary = ", ".join([f"{name} ({size} chars)" for name, size in bootstrap_context.files])
-                logger.debug("Octo bootstrap files", files=files_summary, hash=bootstrap_context.hash)
+                logger.debug(
+                    "Octo bootstrap files",
+                    files=files_summary,
+                    file_count=len(bootstrap_context.files),
+                    total_chars=len(bootstrap_context.content),
+                    hash=bootstrap_context.hash,
+                )
             route_kwargs: dict[str, Any] = {
                 "show_typing": show_typing,
                 "images": images,

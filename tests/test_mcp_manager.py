@@ -9,6 +9,7 @@ from octopal.infrastructure.mcp.manager import (
     _classify_mcp_call_error,
 )
 from octopal.runtime.tool_errors import MCPToolCallError
+from octopal.tools.registry import ToolSpec
 
 
 def test_mcp_manager_schedules_self_healing_reconnect(tmp_path, monkeypatch) -> None:
@@ -161,3 +162,47 @@ def test_call_tool_preserves_schema_mismatch_metadata(tmp_path) -> None:
         assert exc.tool_name == "get_thread"
     else:
         raise AssertionError("Expected structured MCP tool error")
+
+
+def test_mcp_manager_hydrates_full_schema_from_compact_registry_stub(tmp_path) -> None:
+    manager = MCPManager(tmp_path)
+    compact_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "description": "Search query"},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    full_schema = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": "Search query with extra guidance for remote MCP validation.",
+                "minLength": 3,
+            },
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    spec = ToolSpec(
+        name="mcp_demo_search",
+        description="demo",
+        parameters=compact_schema,
+        permission="mcp_exec",
+        handler=lambda _args, _ctx: {"ok": True},
+        is_async=True,
+        server_id="demo",
+        remote_tool_name="search",
+    )
+
+    manager._tools["demo"] = [spec]
+    manager._tool_schemas[("demo", "mcp_demo_search")] = full_schema
+
+    registry_spec = manager.get_all_tools()[0]
+    hydrated_spec = manager.hydrate_tool_spec(registry_spec)
+
+    assert registry_spec.parameters == compact_schema
+    assert hydrated_spec.parameters == full_schema

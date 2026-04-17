@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import date
 from pathlib import Path
 
 from octopal.cli.configure import _ensure_workspace_bootstrap
@@ -48,6 +49,21 @@ def test_bootstrap_context_includes_experiments_readme(tmp_path: Path, monkeypat
 
     assert 'file name="experiments/README.md"' in context.content
     assert "one active experiment at a time" in context.content
+
+
+def test_bootstrap_context_keeps_full_daily_memory_file(tmp_path: Path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    _ensure_workspace_bootstrap(workspace)
+    monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(workspace))
+
+    memory_payload = "very long memory entry\n" * 400
+    today_path = workspace / "memory" / f"{date.today().isoformat()}.md"
+    today_path.write_text(memory_payload, encoding="utf-8")
+
+    context = asyncio.run(build_bootstrap_context_prompt(store=None, chat_id=123))
+
+    assert memory_payload in context.content
+    assert "bootstrap excerpt from memory/" not in context.content
 
 
 def test_workspace_bootstrap_is_non_destructive(tmp_path: Path) -> None:

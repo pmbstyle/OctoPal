@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,6 +17,16 @@ _CONTENT_HEAVY_TOOL_NAMES = {
     "markdown_new_fetch",
     "web_fetch",
 }
+_RAW_TEXT_TOOL_NAMES = {
+    "fs_read",
+    "manage_canon",
+    "search_canon",
+}
+_RAW_TEXT_FIELDS_BY_TOOL_NAME = {
+    "drive_read_text_file": {"content"},
+}
+_PATH_KEY_RE = re.compile(r"(?:^|_)(?:path|paths|file|files|url|urls)$", re.IGNORECASE)
+_MAX_PATH_HINTS = 6
 
 
 @dataclass(frozen=True)
@@ -53,7 +64,14 @@ def render_tool_result_for_llm(
     max_chars: int | None = None,
 ) -> RenderedToolResult:
     budget = _budget_for_tool(tool_name, max_chars=max_chars)
-    compacted, was_compacted = _compact_tool_value(result, depth=0, budget=budget)
+    if isinstance(result, str) and _should_preserve_raw_text(tool_name):
+        return _render_raw_text_result(result, max_chars=budget.max_chars)
+    compacted, was_compacted = _compact_tool_value(
+        result,
+        depth=0,
+        budget=budget,
+        raw_text_field_names=_raw_text_field_names_for_tool(tool_name),
+    )
     if isinstance(compacted, str):
         rendered = compacted.strip()
     else:
@@ -62,6 +80,10 @@ def render_tool_result_for_llm(
     final_text = rendered.strip()
     if not final_text:
         return RenderedToolResult(text="", was_compacted=was_compacted)
+
+    summary_prefix = _build_summary_prefix(result, was_compacted=was_compacted)
+    if summary_prefix:
+        final_text = f"{summary_prefix}\n{final_text}"
 
     if len(final_text) <= budget.max_chars:
         return RenderedToolResult(text=final_text, was_compacted=was_compacted)
@@ -85,17 +107,82 @@ def _budget_for_tool(tool_name: str | None, *, max_chars: int | None) -> ToolRen
     )
 
 
-def _compact_tool_value(value: Any, *, depth: int, budget: ToolRenderBudget) -> tuple[Any, bool]:
+def _should_preserve_raw_text(tool_name: str | None) -> bool:
+    normalized_name = str(tool_name or "").strip().lower()
+    return normalized_name in _RAW_TEXT_TOOL_NAMES
+
+
+def _raw_text_field_names_for_tool(tool_name: str | None) -> frozenset[str]:
+    normalized_name = str(tool_name or "").strip().lower()
+    return frozenset(_RAW_TEXT_FIELDS_BY_TOOL_NAME.get(normalized_name, ()))
+
+
+def _render_raw_text_result(value: str, *, max_chars: int) -> RenderedToolResult:
+    compacted, was_compacted = _preserve_raw_text(value, max_chars=max_chars)
+    return RenderedToolResult(text=compacted, was_compacted=was_compacted)
+
+
+def _preserve_raw_text(value: str, *, max_chars: int) -> tuple[str, bool]:
+    final_text = value.strip()
+    if not final_text:
+        return "", False
+    if len(final_text) <= max_chars:
+        return final_text, False
+    omitted = len(final_text) - max_chars
+    truncated = final_text[: max(0, max_chars - 32)].rstrip()
+    suffix = f"... [truncated {omitted} chars]"
+    return f"{truncated}{suffix}", True
+
+
+def _build_summary_prefix(value: Any, *, was_compacted: bool) -> str:
+    summary_parts: list[str] = []
+
+    if isinstance(value, dict):
+        keys = [str(key) for key in value.keys()]
+        preview_keys = ", ".join(keys[:10]) if keys else "(none)"
+        summary_parts.append(
+            f"[tool_result_summary type=dict keys={len(keys)} top_keys={preview_keys}]"
+        )
+    elif isinstance(value, list):
+        summary_parts.append(f"[tool_result_summary type=list items={len(value)}]")
+    elif isinstance(value, tuple):
+        summary_parts.append(f"[tool_result_summary type=tuple items={len(value)}]")
+
+    path_hints = _collect_path_hints(value)
+    if path_hints:
+        summary_parts.append("[tool_result_paths " + ", ".join(path_hints) + "]")
+
+    if was_compacted and summary_parts:
+        summary_parts.append("[tool_result_compacted=true]")
+
+    return "\n".join(summary_parts)
+
+
+def _compact_tool_value(
+    value: Any,
+    *,
+    depth: int,
+    budget: ToolRenderBudget,
+    raw_text_field_names: frozenset[str] = frozenset(),
+    parent_key: str | None = None,
+) -> tuple[Any, bool]:
     if depth >= budget.max_depth:
         return _depth_marker(value), True
 
     if isinstance(value, str):
+        if parent_key and parent_key.strip().lower() in raw_text_field_names:
+            return _preserve_raw_text(value, max_chars=budget.max_string_chars)
         stripped = value.strip()
         if not stripped:
             return "", False
         parsed = _parse_json_like_string(stripped)
         if parsed is not None:
-            compacted, _changed = _compact_tool_value(parsed, depth=depth + 1, budget=budget)
+            compacted, _changed = _compact_tool_value(
+                parsed,
+                depth=depth + 1,
+                budget=budget,
+                raw_text_field_names=raw_text_field_names,
+            )
             return compacted, True
         if len(stripped) <= budget.max_string_chars:
             return stripped, False
@@ -106,7 +193,13 @@ def _compact_tool_value(value: Any, *, depth: int, budget: ToolRenderBudget) -> 
         changed = False
         items = list(value.items())
         for key, raw_item in items[: budget.max_container_items]:
-            compacted_item, item_changed = _compact_tool_value(raw_item, depth=depth + 1, budget=budget)
+            compacted_item, item_changed = _compact_tool_value(
+                raw_item,
+                depth=depth + 1,
+                budget=budget,
+                raw_text_field_names=raw_text_field_names,
+                parent_key=str(key),
+            )
             compacted_items[str(key)] = compacted_item
             changed = changed or item_changed
         omitted = len(items) - len(compacted_items)
@@ -126,7 +219,13 @@ def _compact_tool_value(value: Any, *, depth: int, budget: ToolRenderBudget) -> 
         compacted_items: list[Any] = []
         changed = False
         for item in sequence[: budget.max_container_items]:
-            compacted_item, item_changed = _compact_tool_value(item, depth=depth + 1, budget=budget)
+            compacted_item, item_changed = _compact_tool_value(
+                item,
+                depth=depth + 1,
+                budget=budget,
+                raw_text_field_names=raw_text_field_names,
+                parent_key=parent_key,
+            )
             compacted_items.append(compacted_item)
             changed = changed or item_changed
         omitted = len(sequence) - len(compacted_items)
@@ -147,6 +246,45 @@ def _parse_json_like_string(value: str) -> Any | None:
         return json.loads(value)
     except Exception:
         return None
+
+
+def _collect_path_hints(value: Any) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _walk(current: Any, parent_key: str | None = None, depth: int = 0) -> None:
+        if len(found) >= _MAX_PATH_HINTS or depth > 3:
+            return
+        if isinstance(current, dict):
+            for key, item in current.items():
+                _walk(item, str(key), depth + 1)
+            return
+        if isinstance(current, list | tuple | set):
+            for item in list(current)[:_MAX_PATH_HINTS]:
+                _walk(item, parent_key, depth + 1)
+            return
+        if not isinstance(current, str):
+            return
+        candidate = current.strip()
+        if not candidate or candidate in seen:
+            return
+        if _looks_like_path_hint(candidate, parent_key=parent_key):
+            seen.add(candidate)
+            found.append(candidate)
+
+    _walk(value)
+    return found
+
+
+def _looks_like_path_hint(value: str, *, parent_key: str | None) -> bool:
+    key = str(parent_key or "").strip()
+    if key and _PATH_KEY_RE.search(key):
+        return True
+    if value.startswith(("http://", "https://", "/", "./", "../")):
+        return True
+    if "\\" in value or "/" in value:
+        return True
+    return bool(re.search(r"\.[A-Za-z0-9]{1,8}$", value))
 
 
 def _truncate_string(value: str, *, max_chars: int) -> str:

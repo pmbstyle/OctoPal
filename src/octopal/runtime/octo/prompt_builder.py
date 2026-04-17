@@ -146,23 +146,21 @@ async def build_bootstrap_context_prompt(store: Store, chat_id: int) -> Bootstra
                 continue
 
             content = path.read_text(encoding="utf-8")
-
             file_entries.append((path.name, content))
 
         for path in optional_files:
             if not path.exists():
                 continue
 
+            rel = path.relative_to(workspace).as_posix()
             content = path.read_text(encoding="utf-8")
 
             if content.strip():
-                rel = path.relative_to(workspace).as_posix()
                 file_entries.append((rel, content))
 
         for path in memory_files:
-            content = path.read_text(encoding="utf-8")
-
             rel = path.relative_to(workspace).as_posix()
+            content = path.read_text(encoding="utf-8")
 
             file_entries.append((rel, content))
 

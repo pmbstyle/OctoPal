@@ -45,6 +45,8 @@ _MAX_VERIFY_CONTEXT_CHARS = 20000
 _DEFAULT_MAX_TOOL_COUNT = 64
 _MIN_TOOL_COUNT_ON_OVERFLOW = 12
 _CATALOG_TOOL_EXPANSION_LIMIT = 12
+_CATALOG_MCP_TOOL_EXPANSION_LIMIT = 1
+_DEFAULT_INITIAL_OCTO_TOOL_COUNT = 32
 _MANDATORY_OCTO_TOOL_NAMES = {
     "octo_context_health",
     "check_schedule",
@@ -105,6 +107,19 @@ _ALWAYS_INCLUDE_TOOL_NAMES = {
     "fs_write",
     "fs_move",
     "fs_delete",
+}
+_INITIAL_OCTO_TOOL_NAMES = _ALWAYS_INCLUDE_TOOL_NAMES | {
+    "manage_canon",
+    "search_canon",
+    "octo_opportunity_scan",
+    "octo_self_queue_list",
+    "octo_self_queue_take",
+    "octo_self_queue_update",
+    "octo_experiment_log",
+    "octo_memchain_status",
+    "octo_memchain_verify",
+    "gateway_status",
+    "mcp_discover",
 }
 _WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES = {
     "get_worker_output_path",
@@ -212,7 +227,15 @@ async def route_or_reply(
         await _ensure_mcp_connected_for_routing(octo)
 
         octo_tools, ctx = _get_octo_tools(octo, chat_id)
-        logger.info("Octo tools fetched: count=%d", len(octo_tools))
+        resolution_report = ctx.get("tool_resolution_report")
+        available_count = len(getattr(resolution_report, "available_tools", ()) or ())
+        deferred_count = max(0, available_count - len(octo_tools))
+        logger.info(
+            "Octo tools fetched",
+            active_tool_count=len(octo_tools),
+            available_tool_count=available_count,
+            deferred_tool_count=deferred_count,
+        )
         tool_policy_summary = _build_octo_tool_policy_summary(
             octo_tools,
             ctx.get("tool_resolution_report"),
@@ -492,7 +515,18 @@ async def _complete_route_with_tools(
                                     ),
                                 )
                             )
-                    tool_result_text = render_tool_result_for_llm(tool_result).text
+                    tool_name = str(call.get("function", {}).get("name") or "")
+                    rendered_tool_result = render_tool_result_for_llm(
+                        tool_result,
+                        tool_name=tool_name,
+                    )
+                    tool_result_text = rendered_tool_result.text
+                    if rendered_tool_result.was_compacted:
+                        logger.debug(
+                            "Octo tool result compacted",
+                            tool_name=tool_name,
+                            rendered_chars=len(tool_result_text),
+                        )
                     loop_state = _record_octo_tool_call(
                         tool_call_history,
                         call=call,
@@ -978,9 +1012,10 @@ def _get_octo_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, 
     ctx = {
         "base_dir": Path(os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")).resolve(),
         "octo": octo,
-        "chat_id": chat_id
+        "chat_id": chat_id,
+        "mcp_manager": getattr(octo, "mcp_manager", None),
     }
-    mcp_manager = getattr(octo, "mcp_manager", None)
+    mcp_manager = ctx["mcp_manager"]
     policy_steps = [
         ToolPolicyPipelineStep(
             label="octo.raw_fetch_denylist",
@@ -998,11 +1033,17 @@ def _get_octo_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, 
         list(resolution_report.available_tools),
         all_tools,
     )
-    max_tools = _env_int("OCTOPAL_OCTO_MAX_TOOL_COUNT", _DEFAULT_MAX_TOOL_COUNT, minimum=8)
-    tool_specs = _budget_tool_specs(tool_specs, max_count=max_tools)
+    tool_specs = _select_initial_octo_tool_specs(tool_specs)
     ctx["active_tool_specs"] = tool_specs
     ctx["tool_resolution_report"] = resolution_report
     ctx["all_tool_specs"] = all_tools
+    deferred_count = max(0, len(resolution_report.available_tools) - len(tool_specs))
+    if deferred_count:
+        logger.info(
+            "Octo deferred tool loading active",
+            active_tool_count=len(tool_specs),
+            deferred_tool_count=deferred_count,
+        )
     return tool_specs, ctx
 
 
@@ -1166,6 +1207,55 @@ def _budget_tool_specs(tool_specs: list[ToolSpec], *, max_count: int) -> list[To
     return selected
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _select_initial_octo_tool_specs(tool_specs: list[ToolSpec]) -> list[ToolSpec]:
+    """
+    Keep Octo's initial tool payload intentionally small.
+
+    The full registry remains available through tool_catalog_search and
+    subsequent expansion, but the first request should stay focused on the
+    operational core that Octo needs for orchestration.
+    """
+    max_tools = _env_int("OCTOPAL_OCTO_MAX_TOOL_COUNT", _DEFAULT_MAX_TOOL_COUNT, minimum=8)
+    if not _env_flag("OCTOPAL_OCTO_DEFER_TOOL_LOADING", True):
+        return _budget_tool_specs(tool_specs, max_count=max_tools)
+
+    prioritized = sorted(tool_specs, key=_tool_priority)
+    selected: list[ToolSpec] = []
+    selected_names: set[str] = set()
+
+    for spec in prioritized:
+        name = str(getattr(spec, "name", "") or "")
+        if name not in _INITIAL_OCTO_TOOL_NAMES:
+            continue
+        if name in selected_names:
+            continue
+        selected.append(spec)
+        selected_names.add(name)
+
+    if not selected:
+        return _budget_tool_specs(tool_specs, max_count=max_tools)
+
+    initial_limit = _env_int(
+        "OCTOPAL_OCTO_MAX_INITIAL_TOOL_COUNT",
+        max(_DEFAULT_INITIAL_OCTO_TOOL_COUNT, len(_ALWAYS_INCLUDE_TOOL_NAMES)),
+        minimum=8,
+    )
+    initial_limit = min(initial_limit, max_tools)
+    return _budget_tool_specs(selected, max_count=initial_limit)
+
+
 def _shrink_tool_specs_for_retry(tool_specs: list[ToolSpec]) -> list[ToolSpec]:
     if len(tool_specs) <= _MIN_TOOL_COUNT_ON_OVERFLOW:
         return tool_specs
@@ -1190,6 +1280,7 @@ def _expand_active_tool_specs_from_catalog_result(
     results = payload.get("results") if isinstance(payload, dict) else None
     if not isinstance(results, list) or not results:
         return active_tool_specs, []
+    query = _normalize_catalog_query(payload.get("query")) if isinstance(payload, dict) else ""
 
     all_specs = list(ctx.get("all_tool_specs") or [])
     by_name = {str(getattr(spec, "name", "") or ""): spec for spec in all_specs}
@@ -1197,6 +1288,7 @@ def _expand_active_tool_specs_from_catalog_result(
     selected_names = {str(getattr(spec, "name", "") or "") for spec in selected}
 
     expanded_names: list[str] = []
+    mcp_added = 0
     for item in results:
         if len(expanded_names) >= _CATALOG_TOOL_EXPANSION_LIMIT:
             break
@@ -1210,6 +1302,14 @@ def _expand_active_tool_specs_from_catalog_result(
         spec = by_name.get(name)
         if spec is None:
             continue
+        is_mcp = _is_mcp_catalog_item(item, spec)
+        if is_mcp:
+            if mcp_added >= _CATALOG_MCP_TOOL_EXPANSION_LIMIT:
+                continue
+            if not _should_expand_mcp_catalog_item(item, spec=spec, query=query):
+                continue
+            mcp_added += 1
+            spec = _hydrate_mcp_tool_spec_for_activation(spec, ctx)
         selected.append(spec)
         selected_names.add(name)
         expanded_names.append(name)
@@ -1217,6 +1317,70 @@ def _expand_active_tool_specs_from_catalog_result(
     if expanded_names:
         ctx["active_tool_specs"] = selected
     return selected, expanded_names
+
+
+def _normalize_catalog_query(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return re.sub(r"\s+", " ", normalized)
+
+
+def _is_mcp_catalog_item(item: dict[str, Any], spec: ToolSpec) -> bool:
+    if bool(item.get("is_mcp")):
+        return True
+    if str(item.get("owner", "") or "").strip().lower() == "mcp":
+        return True
+    metadata = getattr(spec, "metadata", None)
+    if str(getattr(metadata, "owner", "") or "").strip().lower() == "mcp":
+        return True
+    if str(getattr(metadata, "category", "") or "").strip().lower() == "mcp":
+        return True
+    return str(getattr(spec, "name", "") or "").strip().lower().startswith("mcp_")
+
+
+def _should_expand_mcp_catalog_item(
+    item: dict[str, Any],
+    *,
+    spec: ToolSpec,
+    query: str,
+) -> bool:
+    if not query:
+        return False
+
+    name = str(item.get("name", "") or getattr(spec, "name", "") or "").strip().lower()
+    remote_name = str(item.get("remote_name", "") or getattr(spec, "remote_tool_name", "") or "").strip().lower()
+    server_id = str(item.get("server_id", "") or getattr(spec, "server_id", "") or "").strip().lower()
+    description = str(item.get("description", "") or getattr(spec, "description", "") or "").strip().lower()
+    query_terms = tuple(term for term in re.split(r"[\s_:/-]+", query) if term)
+    content_haystacks = tuple(part for part in (name, remote_name, description) if part)
+
+    if query in {name, remote_name}:
+        return True
+    if remote_name and query.endswith(remote_name):
+        return True
+    if server_id and query.startswith(f"{server_id} "):
+        query_terms = tuple(term for term in query_terms if term != server_id)
+    non_server_terms = tuple(term for term in query_terms if term and term != server_id)
+    if not non_server_terms:
+        return False
+    if all(any(term in haystack for haystack in content_haystacks) for term in non_server_terms):
+        return True
+    return False
+
+
+def _hydrate_mcp_tool_spec_for_activation(spec: ToolSpec, ctx: dict[str, object]) -> ToolSpec:
+    manager = ctx.get("mcp_manager")
+    if manager is None:
+        octo = ctx.get("octo")
+        manager = getattr(octo, "mcp_manager", None) if octo is not None else None
+    hydrate = getattr(manager, "hydrate_tool_spec", None)
+    if not callable(hydrate):
+        return spec
+    try:
+        hydrated = hydrate(spec)
+    except Exception:
+        logger.warning("Failed to hydrate MCP tool spec for activation", tool_name=spec.name, exc_info=True)
+        return spec
+    return hydrated if isinstance(hydrated, ToolSpec) else spec
 
 
 async def _handle_octo_tool_call(

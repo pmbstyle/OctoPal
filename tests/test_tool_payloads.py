@@ -17,6 +17,7 @@ def test_render_tool_result_compacts_large_nested_payload() -> None:
 
     assert rendered.was_compacted is True
     assert len(rendered.text) <= 32000
+    assert "[tool_result_summary type=dict" in rendered.text
     assert '"status": "ok"' in rendered.text
     assert "__octopal_compaction__" in rendered.text
     assert "truncated" in rendered.text
@@ -30,6 +31,41 @@ def test_render_tool_result_parses_json_strings_before_compacting() -> None:
     assert rendered.was_compacted is True
     assert rendered.text.startswith("{")
     assert "__octopal_compaction__" in rendered.text
+
+
+def test_render_tool_result_preserves_raw_fs_read_json_text() -> None:
+    raw = '{\n  "id": "demo_worker",\n  "name": "Demo Worker"\n}'
+
+    rendered = render_tool_result_for_llm(raw, tool_name="fs_read")
+
+    assert rendered.was_compacted is False
+    assert rendered.text == raw.strip()
+    assert "__octopal_compaction__" not in rendered.text
+
+
+def test_render_tool_result_preserves_raw_manage_canon_text() -> None:
+    raw = '{"decision":"keep raw canon reads as text"}'
+
+    rendered = render_tool_result_for_llm(raw, tool_name="manage_canon")
+
+    assert rendered.was_compacted is False
+    assert rendered.text == raw
+    assert "__octopal_compaction__" not in rendered.text
+
+
+def test_render_tool_result_preserves_raw_drive_file_content_field() -> None:
+    payload = {
+        "ok": True,
+        "file": {"id": "123", "name": "settings.json"},
+        "content": '{"featureFlags":{"raw":true}}',
+        "text_length": 31,
+    }
+
+    rendered = render_tool_result_for_llm(payload, tool_name="drive_read_text_file")
+
+    assert rendered.was_compacted is False
+    assert '"content": "{\\"featureFlags\\":{\\"raw\\":true}}"' in rendered.text
+    assert "__octopal_compaction__" not in rendered.text
 
 
 def test_render_tool_result_preserves_larger_fetch_snippet_for_worker_tools() -> None:
@@ -159,6 +195,20 @@ def test_route_compacts_tool_messages_before_next_tool_round(monkeypatch) -> Non
         assert provider.tool_calls == 2
         assert provider.seen_tool_messages
         assert len(provider.seen_tool_messages[0]["content"]) <= 32000
+        assert "[tool_result_summary type=dict" in provider.seen_tool_messages[0]["content"]
         assert "compacted" in provider.seen_tool_messages[0]["content"]
 
     asyncio.run(scenario())
+
+
+def test_render_tool_result_includes_path_hints_for_compacted_payload() -> None:
+    payload = {
+        "status": "ok",
+        "report_path": "reports/out.md",
+        "items": [{"id": idx, "body": "x" * 1200} for idx in range(90)],
+    }
+
+    rendered = render_tool_result_for_llm(payload)
+
+    assert rendered.was_compacted is True
+    assert "[tool_result_paths reports/out.md]" in rendered.text

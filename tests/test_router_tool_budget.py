@@ -9,6 +9,7 @@ from octopal.runtime.octo.router import (
     _expand_active_tool_specs_from_catalog_result,
     _finalize_response,
     _get_worker_followup_tools,
+    _get_octo_tools,
     _recover_textual_tool_call,
     _sanitize_messages_for_complete,
     _shrink_tool_specs_for_retry,
@@ -43,6 +44,43 @@ def test_shrink_retry_keeps_start_worker() -> None:
     shrunk = _shrink_tool_specs_for_retry(all_tools)
     names = {spec.name for spec in shrunk}
     assert "start_worker" in names
+
+
+def test_get_octo_tools_uses_small_core_and_defers_mcp_tools(monkeypatch) -> None:
+    import octopal.runtime.octo.router as router
+
+    class DummyOcto:
+        mcp_manager = None
+
+    def fake_get_tools(mcp_manager=None):
+        base = get_tools(mcp_manager=None)
+        mcp_tools = [
+            ToolSpec(
+                name=f"mcp_demo_tool_{index}",
+                description="demo mcp tool",
+                parameters={"type": "object", "properties": {}, "additionalProperties": False},
+                permission="mcp_exec",
+                handler=lambda _args, _ctx: {"ok": True},
+                is_async=True,
+            )
+            for index in range(12)
+        ]
+        return base + mcp_tools
+
+    monkeypatch.setattr(router, "get_tools", fake_get_tools)
+    monkeypatch.delenv("OCTOPAL_OCTO_DEFER_TOOL_LOADING", raising=False)
+    monkeypatch.delenv("OCTOPAL_OCTO_MAX_INITIAL_TOOL_COUNT", raising=False)
+
+    tool_specs, ctx = _get_octo_tools(DummyOcto(), 0)
+    names = {spec.name for spec in tool_specs}
+    all_names = {spec.name for spec in ctx["all_tool_specs"]}
+
+    assert "tool_catalog_search" in names
+    assert "start_worker" in names
+    assert "fs_read" in names
+    assert "mcp_demo_tool_0" not in names
+    assert "mcp_demo_tool_0" in all_names
+    assert len(tool_specs) < len(all_names)
 
 
 def test_worker_followup_tools_are_narrow(monkeypatch) -> None:
@@ -248,6 +286,190 @@ def test_catalog_result_expands_active_tool_specs() -> None:
 
     assert expanded == ["hidden_tool"]
     assert {spec.name for spec in updated} == {"tool_catalog_search", "hidden_tool"}
+
+
+def test_catalog_result_expands_only_exact_mcp_match() -> None:
+    active = [
+        ToolSpec(
+            name="tool_catalog_search",
+            description="catalog",
+            parameters={"type": "object", "properties": {}},
+            permission="self_control",
+            handler=lambda args, ctx: "{}",
+        )
+    ]
+    exact = ToolSpec(
+        name="mcp_drive_search_files",
+        description="Search Drive files",
+        parameters={"type": "object", "properties": {}},
+        permission="mcp_exec",
+        handler=lambda args, ctx: {"ok": True},
+        is_async=True,
+        server_id="drive",
+        remote_tool_name="search_files",
+    )
+    sibling = ToolSpec(
+        name="mcp_drive_list_files",
+        description="List Drive files",
+        parameters={"type": "object", "properties": {}},
+        permission="mcp_exec",
+        handler=lambda args, ctx: {"ok": True},
+        is_async=True,
+        server_id="drive",
+        remote_tool_name="list_files",
+    )
+
+    updated, expanded = _expand_active_tool_specs_from_catalog_result(
+        {
+            "query": "search_files",
+            "results": [
+                {
+                    "name": "mcp_drive_search_files",
+                    "active_now": False,
+                    "is_mcp": True,
+                    "server_id": "drive",
+                    "remote_name": "search_files",
+                    "owner": "mcp",
+                },
+                {
+                    "name": "mcp_drive_list_files",
+                    "active_now": False,
+                    "is_mcp": True,
+                    "server_id": "drive",
+                    "remote_name": "list_files",
+                    "owner": "mcp",
+                },
+            ]
+        },
+        active_tool_specs=active,
+        ctx={"all_tool_specs": active + [exact, sibling]},
+    )
+
+    assert expanded == ["mcp_drive_search_files"]
+    assert {spec.name for spec in updated} == {"tool_catalog_search", "mcp_drive_search_files"}
+
+
+def test_catalog_result_does_not_auto_expand_broad_mcp_search() -> None:
+    active = [
+        ToolSpec(
+            name="tool_catalog_search",
+            description="catalog",
+            parameters={"type": "object", "properties": {}},
+            permission="self_control",
+            handler=lambda args, ctx: "{}",
+        )
+    ]
+    broad_matches = [
+        ToolSpec(
+            name=f"mcp_gmail_tool_{index}",
+            description="gmail mcp tool",
+            parameters={"type": "object", "properties": {}},
+            permission="mcp_exec",
+            handler=lambda args, ctx: {"ok": True},
+            is_async=True,
+            server_id="gmail",
+            remote_tool_name=f"tool_{index}",
+        )
+        for index in range(3)
+    ]
+
+    updated, expanded = _expand_active_tool_specs_from_catalog_result(
+        {
+            "query": "gmail",
+            "results": [
+                {
+                    "name": spec.name,
+                    "active_now": False,
+                    "is_mcp": True,
+                    "server_id": "gmail",
+                    "remote_name": spec.remote_tool_name,
+                    "owner": "mcp",
+                    "description": spec.description,
+                }
+                for spec in broad_matches
+            ],
+        },
+        active_tool_specs=active,
+        ctx={"all_tool_specs": active + broad_matches},
+    )
+
+    assert expanded == []
+    assert {spec.name for spec in updated} == {"tool_catalog_search"}
+
+
+def test_catalog_result_hydrates_selected_mcp_tool_from_manager() -> None:
+    active = [
+        ToolSpec(
+            name="tool_catalog_search",
+            description="catalog",
+            parameters={"type": "object", "properties": {}},
+            permission="self_control",
+            handler=lambda args, ctx: "{}",
+        )
+    ]
+    compact_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    full_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string", "minLength": 3},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+    mcp_tool = ToolSpec(
+        name="mcp_drive_search_files",
+        description="Search Drive files",
+        parameters=compact_schema,
+        permission="mcp_exec",
+        handler=lambda args, ctx: {"ok": True},
+        is_async=True,
+        server_id="drive",
+        remote_tool_name="search_files",
+    )
+
+    class _MCPManager:
+        def hydrate_tool_spec(self, spec):
+            return ToolSpec(
+                name=spec.name,
+                description=spec.description,
+                parameters=full_schema,
+                permission=spec.permission,
+                handler=spec.handler,
+                is_async=spec.is_async,
+                server_id=spec.server_id,
+                remote_tool_name=spec.remote_tool_name,
+                metadata=spec.metadata,
+            )
+
+    updated, expanded = _expand_active_tool_specs_from_catalog_result(
+        {
+            "query": "search_files",
+            "results": [
+                {
+                    "name": "mcp_drive_search_files",
+                    "active_now": False,
+                    "is_mcp": True,
+                    "server_id": "drive",
+                    "remote_name": "search_files",
+                    "owner": "mcp",
+                }
+            ],
+        },
+        active_tool_specs=active,
+        ctx={"all_tool_specs": active + [mcp_tool], "mcp_manager": _MCPManager()},
+    )
+
+    assert expanded == ["mcp_drive_search_files"]
+    selected = next(spec for spec in updated if spec.name == "mcp_drive_search_files")
+    assert selected.parameters == full_schema
 
 
 def test_route_falls_back_when_tool_run_ends_with_empty_response(monkeypatch) -> None:

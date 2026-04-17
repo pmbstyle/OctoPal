@@ -58,9 +58,12 @@ workers cannot access your system, secrets, or filesystem unless explicitly allo
 - Create and reuse worker templates, MCP server connections, and `SKILL.md`-based skills
 - Maintain persistent memory, canon, and user/system identity files
 - Monitor context health and trigger structured context resets when needed
+- Keep Octo prompts smaller with deferred tool loading and compact bootstrap context
 - Schedule recurring tasks and background routines
 - Expose a private gateway and dashboard for status, workers, and system visibility
 - A set of canonical memory files shapes the system environment
+
+See [docs/context_tool_loading.md](docs/context_tool_loading.md) for the current context and tool-loading strategy.
 
 
 ```
