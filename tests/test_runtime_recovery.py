@@ -191,7 +191,9 @@ def test_worker_mcp_call_restores_configured_session(tmp_path: Path) -> None:
             self.sessions["demo"] = object()
             return {"demo": "connected"}
 
-        async def call_tool(self, server_id: str, tool_name: str, args: dict, allow_name_fallback: bool = False):
+        async def call_tool(
+            self, server_id: str, tool_name: str, args: dict, allow_name_fallback: bool = False
+        ):
             class _Result:
                 content = ["ok"]
 
@@ -306,14 +308,20 @@ def test_stderr_loop_batches_traceback_into_single_log(tmp_path: Path) -> None:
 
 
 def test_worker_text_log_level_downgrades_retry_noise() -> None:
-    assert _classify_worker_text_log_level(
-        "LiteLLM rate limited (attempt 2/6). Retrying in 2.20s",
-        source="stderr",
-    ) == "info"
-    assert _classify_worker_text_log_level(
-        "Traceback (most recent call last):\nRuntimeError: boom",
-        source="stderr",
-    ) == "error"
+    assert (
+        _classify_worker_text_log_level(
+            "LiteLLM rate limited (attempt 2/6). Retrying in 2.20s",
+            source="stderr",
+        )
+        == "info"
+    )
+    assert (
+        _classify_worker_text_log_level(
+            "Traceback (most recent call last):\nRuntimeError: boom",
+            source="stderr",
+        )
+        == "error"
+    )
 
 
 def test_sanitize_task_text_redacts_embedded_secrets() -> None:
@@ -390,6 +398,34 @@ def test_runtime_waits_for_worker_exit_after_result(tmp_path: Path) -> None:
 
     assert result.summary == "ok"
     assert process.wait_calls >= 1
+
+
+def test_stop_worker_blocks_recovery_restart(tmp_path: Path) -> None:
+    store = _StoreStub()
+    launcher = _LauncherStub()
+    runtime = WorkerRuntime(
+        store=store,
+        policy=_PolicyStub(),
+        workspace_dir=tmp_path,
+        launcher=launcher,
+        mcp_manager=None,
+        settings=Settings(),
+    )
+
+    async def fake_read_loop(spec, process, approval_requester=None):
+        stopped = await runtime.stop_worker(spec.id)
+        assert stopped is True
+        raise RuntimeError("Worker exited without result")
+
+    runtime._read_loop = fake_read_loop  # type: ignore[method-assign]
+
+    result = asyncio.run(runtime.run(_spec()))
+
+    assert result.summary == "Worker stopped."
+    assert launcher.calls == 1
+    assert "stopped" in store.status_updates
+    assert store.result_summaries[-1] == "Worker stopped."
+    assert store.result_errors[-1] == "Worker stop requested."
 
 
 def test_wait_for_worker_exit_terminates_stuck_process(tmp_path: Path) -> None:

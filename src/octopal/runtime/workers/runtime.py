@@ -3,6 +3,7 @@ Simplified Worker Runtime
 
 Octo creates tasks -> Runtime looks up worker template -> Launches agent worker
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -69,6 +70,10 @@ _WORKER_ENV_SETTING_FIELDS = (
 )
 
 
+class _WorkerStopRequested(RuntimeError):
+    """Raised when a worker has been explicitly stopped by the runtime."""
+
+
 @dataclass
 class WorkerRuntime:
     store: Store
@@ -79,6 +84,7 @@ class WorkerRuntime:
     mcp_manager: MCPManager | None = None
     octo: Any | None = None
     _running: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
+    _stop_requests: set[str] = field(default_factory=set)
 
     async def run_task(
         self,
@@ -117,7 +123,10 @@ class WorkerRuntime:
                     "Permission denied for worker task: missing required permissions "
                     f"({', '.join(missing_permissions)})"
                 ),
-                output={"error": "missing_required_permissions", "permissions": missing_permissions},
+                output={
+                    "error": "missing_required_permissions",
+                    "permissions": missing_permissions,
+                },
             )
 
         try:
@@ -134,10 +143,14 @@ class WorkerRuntime:
                 summary=f"Worker tool validation failed: {exc}",
                 output={"error": "invalid_worker_tool_override", "detail": str(exc)},
             )
-        has_requested_mcp_tools = any(str(tool_name).startswith("mcp_") for tool_name in requested_tool_names)
+        has_requested_mcp_tools = any(
+            str(tool_name).startswith("mcp_") for tool_name in requested_tool_names
+        )
         if self.mcp_manager:
             try:
-                await self.mcp_manager.ensure_configured_servers_connected(None if has_requested_mcp_tools else [])
+                await self.mcp_manager.ensure_configured_servers_connected(
+                    None if has_requested_mcp_tools else []
+                )
             except Exception:
                 logger.warning(
                     "Failed to ensure configured MCP servers before worker launch",
@@ -148,6 +161,7 @@ class WorkerRuntime:
 
         # Get all tools to find MCP tool definitions
         from octopal.tools.tools import get_tools
+
         all_tools = get_tools(mcp_manager=self.mcp_manager)
         all_tools_by_name = {str(tool.name).strip().lower(): tool for tool in all_tools}
 
@@ -162,7 +176,10 @@ class WorkerRuntime:
                 template=template,
                 granted_capabilities=granted,
                 summary=f"Worker tool validation failed: {tool_validation_error}",
-                output={"error": "invalid_worker_tool_permissions", "detail": tool_validation_error},
+                output={
+                    "error": "invalid_worker_tool_permissions",
+                    "detail": tool_validation_error,
+                },
             )
 
         mcp_tools_data = []
@@ -397,6 +414,8 @@ class WorkerRuntime:
 
         try:
             while attempts < max_attempts:
+                if self._is_stop_requested(spec.id):
+                    raise _WorkerStopRequested(f"Worker {spec.id} stop requested before launch")
                 attempts += 1
                 process = await self.launcher.launch(
                     spec_path=str(spec_path.resolve()),
@@ -430,19 +449,35 @@ class WorkerRuntime:
                 stderr_task: asyncio.Task[None] | None = None
                 process_stderr = getattr(process, "stderr", None)
                 if process_stderr is not None:
-                    stderr_task = asyncio.create_task(self._read_stderr_loop(spec.id, process_stderr))
+                    stderr_task = asyncio.create_task(
+                        self._read_stderr_loop(spec.id, process_stderr)
+                    )
 
                 try:
+                    if self._is_stop_requested(spec.id):
+                        raise _WorkerStopRequested(
+                            f"Worker {spec.id} stop requested before read loop"
+                        )
                     result = await asyncio.wait_for(
                         self._read_loop(spec, process, approval_requester=approval_requester),
                         timeout=attempt_timeout,
                     )
+                    if self._is_stop_requested(spec.id):
+                        raise _WorkerStopRequested(
+                            f"Worker {spec.id} stop requested after read loop"
+                        )
                     await self._wait_for_worker_exit(spec.id, process)
                     break
+                except _WorkerStopRequested:
+                    last_error = _WorkerStopRequested(f"Worker {spec.id} stop requested")
+                    await self._safe_terminate_process(process)
+                    raise last_error from None
                 except Exception as exc:
                     last_error = exc
                     recoverable, reason = _classify_recoverable_error(exc)
                     await self._safe_terminate_process(process)
+                    if self._is_stop_requested(spec.id):
+                        raise _WorkerStopRequested(f"Worker {spec.id} stop requested") from None
                     if recoverable and attempts < max_attempts:
                         await self._append_audit(
                             "worker_recovery_attempt",
@@ -480,6 +515,27 @@ class WorkerRuntime:
                 data={"summary": result.summary, "attempts": attempts, "recovered": attempts > 1},
             )
             return result
+        except _WorkerStopRequested:
+            await asyncio.to_thread(self.store.update_worker_status, spec.id, "stopped")
+            await asyncio.to_thread(
+                self.store.update_worker_result,
+                spec.id,
+                summary="Worker stopped.",
+                error="Worker stop requested.",
+            )
+            await self._append_audit(
+                "worker_stopped",
+                level="warning",
+                correlation_id=spec.id,
+                data={
+                    "reason": "stop_requested",
+                    "attempts": attempts,
+                    "max_attempts": max_attempts,
+                },
+            )
+            return WorkerResult(
+                status="failed", summary="Worker stopped.", output={"stopped": True}
+            )
         except TimeoutError:
             await asyncio.to_thread(self.store.update_worker_status, spec.id, "failed")
             await asyncio.to_thread(
@@ -516,11 +572,13 @@ class WorkerRuntime:
                 raise RuntimeError(f"Worker failed after recovery attempts: {last_error}") from None
             raise
         finally:
+            self._stop_requests.discard(spec.id)
             if spec.lifecycle == "ephemeral":
                 await self._cleanup_worker_dir(worker_dir)
 
     async def stop_worker(self, worker_id: str) -> bool:
         """Stop a running worker."""
+        self._stop_requests.add(worker_id)
         process = self._running.get(worker_id)
         if not process:
             worker = await asyncio.to_thread(self.store.get_worker, worker_id)
@@ -540,15 +598,22 @@ class WorkerRuntime:
                 return True
             return False
         try:
-            process.kill()
+            await self._safe_terminate_process(process)
         except Exception:
             logger.exception("Failed to stop worker: %s", worker_id)
             return False
         await asyncio.to_thread(self.store.update_worker_status, worker_id, "stopped")
+        await asyncio.to_thread(
+            self.store.update_worker_result,
+            worker_id,
+            summary="Worker stopped.",
+            error="Worker stop requested.",
+        )
         await self._append_audit(
             "worker_stopped",
             level="warning",
             correlation_id=worker_id,
+            data={"reason": "explicit_stop"},
         )
         return True
 
@@ -558,6 +623,9 @@ class WorkerRuntime:
         if not process:
             return False
         return process.returncode is None
+
+    def _is_stop_requested(self, worker_id: str) -> bool:
+        return worker_id in self._stop_requests
 
     def _build_worker_env(self, spec: WorkerSpec) -> dict[str, str]:
         env = {
@@ -577,7 +645,9 @@ class WorkerRuntime:
 
         return env
 
-    async def _write_to_worker(self, process: asyncio.subprocess.Process, payload: dict[str, Any]) -> None:
+    async def _write_to_worker(
+        self, process: asyncio.subprocess.Process, payload: dict[str, Any]
+    ) -> None:
         """Write a JSON message to the worker's stdin."""
         if process.stdin is None:
             logger.error("Worker process has no stdin")
@@ -633,7 +703,11 @@ class WorkerRuntime:
                 if not self.octo:
                     await self._write_to_worker(
                         process,
-                        {"type": "octo_tool_result", "ok": False, "error": "Octo runtime bridge unavailable."},
+                        {
+                            "type": "octo_tool_result",
+                            "ok": False,
+                            "error": "Octo runtime bridge unavailable.",
+                        },
                     )
                     return None
 
@@ -650,7 +724,11 @@ class WorkerRuntime:
                     if spec_tool is None:
                         await self._write_to_worker(
                             process,
-                            {"type": "octo_tool_result", "ok": False, "error": f"Unknown octo tool: {tool_name}"},
+                            {
+                                "type": "octo_tool_result",
+                                "ok": False,
+                                "error": f"Unknown octo tool: {tool_name}",
+                            },
                         )
                         return None
                     local_tool_error = _validate_worker_local_tool_call(
@@ -697,11 +775,16 @@ class WorkerRuntime:
                     tool_name=tool_name,
                 )
                 if mcp_tool_error is not None:
-                    await self._write_to_worker(process, {"type": "error", "message": mcp_tool_error})
+                    await self._write_to_worker(
+                        process, {"type": "error", "message": mcp_tool_error}
+                    )
                     return None
 
                 if not self.mcp_manager:
-                    await self._write_to_worker(process, {"type": "error", "message": "MCP Manager not available in runtime."})
+                    await self._write_to_worker(
+                        process,
+                        {"type": "error", "message": "MCP Manager not available in runtime."},
+                    )
                     return None
 
                 session = self.mcp_manager.sessions.get(server_id)
@@ -718,11 +801,19 @@ class WorkerRuntime:
                         )
                     session = self.mcp_manager.sessions.get(server_id)
                 if not session:
-                    await self._write_to_worker(process, {"type": "error", "message": f"MCP session {server_id} not active."})
+                    await self._write_to_worker(
+                        process,
+                        {"type": "error", "message": f"MCP session {server_id} not active."},
+                    )
                     return None
 
                 try:
-                    logger.info("Executing MCP call for worker", worker_id=spec.id, server_id=server_id, tool=tool_name)
+                    logger.info(
+                        "Executing MCP call for worker",
+                        worker_id=spec.id,
+                        server_id=server_id,
+                        tool=tool_name,
+                    )
                     result = await self.mcp_manager.call_tool(
                         str(server_id),
                         str(tool_name),
@@ -730,11 +821,18 @@ class WorkerRuntime:
                         allow_name_fallback=True,
                     )
                     # Convert MCP content objects to something serializable
-                    content = [c.model_dump() if hasattr(c, "model_dump") else str(c) for c in result.content]
+                    content = [
+                        c.model_dump() if hasattr(c, "model_dump") else str(c)
+                        for c in result.content
+                    ]
                     await self._write_to_worker(process, {"type": "mcp_result", "result": content})
                 except Exception as e:
                     logger.exception("Worker MCP call failed")
-                    payload = e.to_payload() if isinstance(e, ToolBridgeError) else {"type": "error", "message": str(e)}
+                    payload = (
+                        e.to_payload()
+                        if isinstance(e, ToolBridgeError)
+                        else {"type": "error", "message": str(e)}
+                    )
                     await self._write_to_worker(process, payload)
                 return None
             if msg_type == "intent_request":
@@ -862,14 +960,17 @@ class WorkerRuntime:
                                 payload_hash=permit.payload_hash,
                                 expires_at=permit.expires_at,
                                 created_at=utc_now(),
-                            )
+                            ),
                         )
                         response = {"type": "permit", "permit": permit.model_dump()}
 
                     # Send response back to worker
                     await self._write_to_worker(process, response)
                 except IntentValidationError as exc:
-                    error_resp = {"type": "permit_denied", "reason": f"Intent validation failed: {exc}"}
+                    error_resp = {
+                        "type": "permit_denied",
+                        "reason": f"Intent validation failed: {exc}",
+                    }
                     await self._write_to_worker(process, error_resp)
 
                 except Exception as exc:
@@ -922,7 +1023,9 @@ class WorkerRuntime:
                 break
             buffer += chunk
             if len(buffer) > max_buffer_bytes and b"\n" not in buffer:
-                logger.warning("Worker output buffer exceeded %s bytes without newline", max_buffer_bytes)
+                logger.warning(
+                    "Worker output buffer exceeded %s bytes without newline", max_buffer_bytes
+                )
                 await _handle_line(buffer)
                 buffer = b""
                 if consecutive_invalid_lines >= max_invalid_lines:
@@ -999,7 +1102,9 @@ class WorkerRuntime:
         except Exception:
             logger.debug("Failed to terminate worker process cleanly", exc_info=True)
 
-    async def _wait_for_worker_exit(self, worker_id: str, process: asyncio.subprocess.Process) -> None:
+    async def _wait_for_worker_exit(
+        self, worker_id: str, process: asyncio.subprocess.Process
+    ) -> None:
         if process.returncode is not None:
             return
 
@@ -1013,7 +1118,9 @@ class WorkerRuntime:
                 pid=process.pid,
             )
         except Exception:
-            logger.debug("Failed while waiting for worker process exit", worker_id=worker_id, exc_info=True)
+            logger.debug(
+                "Failed while waiting for worker process exit", worker_id=worker_id, exc_info=True
+            )
 
         await self._safe_terminate_process(process)
 
@@ -1054,7 +1161,11 @@ class WorkerRuntime:
             return
         level = _classify_worker_text_log_level(clean_text, source=source)
         if source == "stderr":
-            message = f"Worker stderr: id={worker_id} {clean_text}" if worker_id else f"Worker stderr: {clean_text}"
+            message = (
+                f"Worker stderr: id={worker_id} {clean_text}"
+                if worker_id
+                else f"Worker stderr: {clean_text}"
+            )
         elif level == "error":
             message = f"Worker output (error?): {clean_text}"
         elif level == "debug":
@@ -1101,9 +1212,6 @@ class WorkerRuntime:
                 _flush()
 
 
-
-
-
 def _safe_parse_json(line: bytes) -> dict[str, Any] | None:
     try:
         return json.loads(line.decode("utf-8"))
@@ -1137,7 +1245,9 @@ def _repair_worker_result_payload(raw_result: Any) -> dict[str, Any]:
 
     tools_used = raw_result.get("tools_used")
     if isinstance(tools_used, list):
-        repaired["tools_used"] = [str(item).strip() for item in tools_used if str(item).strip()][:200]
+        repaired["tools_used"] = [str(item).strip() for item in tools_used if str(item).strip()][
+            :200
+        ]
 
     thinking_steps = raw_result.get("thinking_steps")
     if isinstance(thinking_steps, int):
@@ -1177,7 +1287,9 @@ def _sanitize_worker_text(text: str) -> str:
 
 def _classify_worker_text_log_level(text: str, *, source: str) -> str:
     lowered = (text or "").lower()
-    if source == "stderr" and any(token in lowered for token in ("rate limited", "retrying in", "backing off")):
+    if source == "stderr" and any(
+        token in lowered for token in ("rate limited", "retrying in", "backing off")
+    ):
         return "info"
     if any(token in lowered for token in ("traceback", "exception", "critical")):
         return "error"
@@ -1226,22 +1338,29 @@ def _tool_env_from_settings(settings: Settings, tool_names: list[str]) -> dict[s
     if "web_search" in lowered_tools and brave_api_key:
         env["BRAVE_API_KEY"] = brave_api_key
 
-    if any(name in lowered_tools for name in {"web_fetch", "markdown_new_fetch"}) and firecrawl_api_key:
+    if (
+        any(name in lowered_tools for name in {"web_fetch", "markdown_new_fetch"})
+        and firecrawl_api_key
+    ):
         env["FIRECRAWL_API_KEY"] = firecrawl_api_key
 
     return env
 
 
-def _extract_mcp_tool_identity(tool_name: str, server_ids: list[str]) -> tuple[str | None, str | None]:
+def _extract_mcp_tool_identity(
+    tool_name: str, server_ids: list[str]
+) -> tuple[str | None, str | None]:
     """Best-effort extraction of MCP server and remote tool names from generated tool names."""
     if not tool_name.startswith("mcp_"):
         return None, None
     # Preferred path: longest matching normalized server id prefix.
-    normalized = sorted(((sid.replace("-", "_"), sid) for sid in server_ids), key=lambda x: len(x[0]), reverse=True)
+    normalized = sorted(
+        ((sid.replace("-", "_"), sid) for sid in server_ids), key=lambda x: len(x[0]), reverse=True
+    )
     for safe_id, original_id in normalized:
         prefix = f"mcp_{safe_id}_"
         if tool_name.startswith(prefix):
-            remote_safe_name = tool_name[len(prefix):]
+            remote_safe_name = tool_name[len(prefix) :]
             return original_id, remote_safe_name
 
     # Legacy fallback if server list is unavailable.

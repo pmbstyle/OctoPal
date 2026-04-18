@@ -7,6 +7,7 @@ Workers are pre-defined agents that:
 - Can reason and perform multi-step operations
 - Can ask Octo questions when needed
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -41,6 +42,7 @@ _MAX_TOOL_ITERS = 10
 _DEFAULT_TOOL_TIMEOUT_SECONDS = 60
 _DEFAULT_MAX_STEP_CAP = 30
 _MAX_EMPTY_TURNS = 3
+_CHILD_JOIN_BARRIER_POLL_SECONDS = 1.0
 _ORCHESTRATION_STALL_WARNING_THRESHOLD = 2
 _ORCHESTRATION_STALL_CRITICAL_THRESHOLD = 3
 _ORCHESTRATION_STALL_WARNING_MIN_ELAPSED_SECONDS = 15
@@ -123,6 +125,11 @@ _ORCHESTRATION_PROGRESS_TOOLS = {
     "synthesize_worker_results",
     "worker_yield",
 }
+_CHILD_SPAWN_TOOLS = {
+    "start_child_worker",
+    "start_workers_parallel",
+}
+
 
 def _parse_positive_int_env(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -162,7 +169,9 @@ def _extract_tool_progress_key(tool_name: str | None, tool_result: Any) -> str |
             return None
         if updated_at:
             return f"{worker_id}:{status}:{updated_at}"
-        summary = str(structured.get("summary") or structured.get("message") or structured.get("error") or "").strip()
+        summary = str(
+            structured.get("summary") or structured.get("message") or structured.get("error") or ""
+        ).strip()
         return f"{worker_id}:{status}:{summary}" if summary else f"{worker_id}:{status}"
     if normalized_tool == "worker_yield":
         pending_count = int(structured.get("pending_count") or 0)
@@ -297,6 +306,268 @@ def _resolve_orchestration_stall_thresholds() -> dict[str, int]:
     return {"warning_seconds": warning, "critical_seconds": critical}
 
 
+def _extract_spawned_worker_ids(tool_name: str | None, tool_result: Any) -> list[str]:
+    structured = _decode_structured_tool_result(tool_result)
+    if not isinstance(structured, dict):
+        return []
+
+    normalized_tool = str(tool_name or "").strip()
+    worker_ids: list[str] = []
+    if normalized_tool == "start_child_worker":
+        status = str(structured.get("status", "") or "").strip().lower()
+        worker_id = str(structured.get("run_id") or structured.get("worker_id") or "").strip()
+        if status == "started" and worker_id:
+            worker_ids.append(worker_id)
+    elif normalized_tool == "start_workers_parallel":
+        launches = structured.get("launches")
+        if isinstance(launches, list):
+            for item in launches:
+                if not isinstance(item, dict):
+                    continue
+                status = str(item.get("status", "") or "").strip().lower()
+                worker_id = str(item.get("run_id") or item.get("worker_id") or "").strip()
+                if status == "started" and worker_id:
+                    worker_ids.append(worker_id)
+    return worker_ids
+
+
+def _build_join_barrier_payload_from_results(
+    completed: list[dict[str, Any]],
+    failed: list[dict[str, Any]],
+    pending: list[dict[str, Any]],
+) -> dict[str, Any]:
+    synthesis_lines: list[str] = []
+    if completed:
+        synthesis_lines.append("Completed worker findings:")
+        for item in completed:
+            summary = str(item.get("summary") or "").strip() or "No summary"
+            synthesis_lines.append(f"- {item['worker_id']}: {summary}")
+    if failed:
+        synthesis_lines.append("Failed workers:")
+        for item in failed:
+            error = str(item.get("error") or item.get("message") or "Unknown error").strip()
+            synthesis_lines.append(f"- {item['worker_id']}: {error}")
+    if pending:
+        synthesis_lines.append("Pending workers:")
+        for item in pending:
+            status = str(item.get("status") or "running").strip() or "running"
+            synthesis_lines.append(f"- {item['worker_id']}: {status}")
+    if not synthesis_lines:
+        synthesis_lines.append("No child worker results were collected.")
+
+    status = "completed" if not pending and not failed else "partial"
+    if pending and not completed and not failed:
+        status = "running"
+
+    return {
+        "status": status,
+        "can_synthesize": bool(completed) and not pending,
+        "next_best_action": (
+            "synthesize_ready_results" if completed and not pending else "wait_for_worker_progress"
+        ),
+        "followup_required": bool(completed or failed or pending),
+        "completed_count": len(completed),
+        "failed_count": len(failed),
+        "pending_count": len(pending),
+        "missing_count": 0,
+        "ready_results": completed,
+        "failed_results": failed,
+        "pending_results": pending,
+        "missing_results": [],
+        "synthesis": "\n".join(synthesis_lines),
+    }
+
+
+async def _execute_join_barrier_tool(
+    *,
+    tool_name: str,
+    tool_input: dict[str, Any],
+    worker: Worker,
+    workspace_root: Path,
+    worker_dir: Path,
+    tool_map: dict[str, Any],
+    spec_timeout_seconds: int,
+    loop_start: float,
+    telemetry: dict[str, Any],
+    tools_used: list[str],
+) -> tuple[Any, dict[str, Any]]:
+    elapsed = asyncio.get_running_loop().time() - loop_start
+    remaining_budget = max(1, spec_timeout_seconds - int(elapsed))
+    tool_timeout = min(_DEFAULT_TOOL_TIMEOUT_SECONDS, remaining_budget)
+    tool_start = time.perf_counter()
+    tool_result, tool_meta = await _execute_tool(
+        tool_name,
+        tool_input,
+        workspace_root,
+        worker_dir,
+        worker,
+        tool_map,
+        timeout_seconds=tool_timeout,
+    )
+    telemetry["tool_calls"] += 1
+    telemetry["tool_latency_ms_total"] += int((time.perf_counter() - tool_start) * 1000)
+    telemetry["tool_retries"] += int(tool_meta.get("retries", 0))
+    if tool_meta.get("timed_out"):
+        telemetry["tool_timeouts"] += 1
+    if tool_meta.get("had_error"):
+        telemetry["tool_errors"] += 1
+    tools_used.append(tool_name)
+    return tool_result, tool_meta
+
+
+def _render_join_barrier_message(
+    *,
+    join_payload: dict[str, Any],
+    worker_ids: list[str],
+) -> str:
+    rendered = render_tool_result_for_llm(join_payload, tool_name="synthesize_worker_results")
+    intro = (
+        "Runtime join barrier note: the child workers started in the immediately "
+        "preceding tool-call batch have been joined before your next reasoning step."
+    )
+    if int(join_payload.get("pending_count") or 0) > 0:
+        intro = (
+            "Runtime join barrier note: waiting hit the current time budget before every "
+            "child worker finished. Use the latest joined state below and avoid duplicate polling."
+        )
+    return "\n".join(
+        [
+            intro,
+            f"Joined worker ids: {', '.join(worker_ids)}",
+            rendered.text,
+            "Do not re-poll these worker ids in this round unless you are starting a new retry.",
+        ]
+    )
+
+
+async def _join_spawned_child_batch(
+    *,
+    worker: Worker,
+    worker_ids: list[str],
+    workspace_root: Path,
+    worker_dir: Path,
+    tool_map: dict[str, Any],
+    spec_timeout_seconds: int,
+    loop_start: float,
+    telemetry: dict[str, Any],
+    tools_used: list[str],
+) -> dict[str, Any] | None:
+    joined_worker_ids = list(
+        dict.fromkeys(str(worker_id).strip() for worker_id in worker_ids if str(worker_id).strip())
+    )
+    if not joined_worker_ids:
+        return None
+
+    if "synthesize_worker_results" in tool_map:
+        await worker.log(
+            "info",
+            f"Join barrier engaged for {len(joined_worker_ids)} child worker(s): {', '.join(joined_worker_ids)}",
+        )
+        while True:
+            payload, tool_meta = await _execute_join_barrier_tool(
+                tool_name="synthesize_worker_results",
+                tool_input={"worker_ids": joined_worker_ids},
+                worker=worker,
+                workspace_root=workspace_root,
+                worker_dir=worker_dir,
+                tool_map=tool_map,
+                spec_timeout_seconds=spec_timeout_seconds,
+                loop_start=loop_start,
+                telemetry=telemetry,
+                tools_used=tools_used,
+            )
+            if tool_meta.get("had_error"):
+                return None
+            structured = _decode_structured_tool_result(payload)
+            if not isinstance(structured, dict):
+                return None
+            pending_count = int(structured.get("pending_count") or 0)
+            if pending_count <= 0:
+                return structured
+            elapsed = asyncio.get_running_loop().time() - loop_start
+            remaining_budget = max(0, spec_timeout_seconds - int(elapsed))
+            if remaining_budget <= 1:
+                await worker.log(
+                    "warning",
+                    (
+                        "Join barrier ran out of local time budget before all child workers "
+                        f"finished ({pending_count} still pending)."
+                    ),
+                )
+                return structured
+            await asyncio.sleep(min(_CHILD_JOIN_BARRIER_POLL_SECONDS, float(remaining_budget)))
+
+    if "get_worker_result" not in tool_map:
+        await worker.log(
+            "warning",
+            (
+                "Child workers were spawned, but no result-collection tool is available "
+                "for an automatic join barrier."
+            ),
+        )
+        return None
+
+    pending_worker_ids = list(joined_worker_ids)
+    completed: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    await worker.log(
+        "info",
+        f"Join barrier engaged for {len(joined_worker_ids)} child worker(s): {', '.join(joined_worker_ids)}",
+    )
+    while pending_worker_ids:
+        next_pending: list[str] = []
+        for worker_id in pending_worker_ids:
+            payload, tool_meta = await _execute_join_barrier_tool(
+                tool_name="get_worker_result",
+                tool_input={"worker_id": worker_id},
+                worker=worker,
+                workspace_root=workspace_root,
+                worker_dir=worker_dir,
+                tool_map=tool_map,
+                spec_timeout_seconds=spec_timeout_seconds,
+                loop_start=loop_start,
+                telemetry=telemetry,
+                tools_used=tools_used,
+            )
+            if tool_meta.get("had_error"):
+                next_pending.append(worker_id)
+                continue
+            structured = _decode_structured_tool_result(payload)
+            if not isinstance(structured, dict):
+                next_pending.append(worker_id)
+                continue
+            status = str(structured.get("status", "") or "").strip().lower()
+            if status == "completed":
+                completed.append(structured)
+            elif status in {"failed", "stopped", "not_found"}:
+                failed.append(structured)
+            else:
+                next_pending.append(worker_id)
+
+        pending_worker_ids = next_pending
+        if not pending_worker_ids:
+            break
+
+        elapsed = asyncio.get_running_loop().time() - loop_start
+        remaining_budget = max(0, spec_timeout_seconds - int(elapsed))
+        if remaining_budget <= 1:
+            await worker.log(
+                "warning",
+                (
+                    "Join barrier ran out of local time budget before all child workers "
+                    f"finished ({len(pending_worker_ids)} still pending)."
+                ),
+            )
+            break
+        await asyncio.sleep(min(_CHILD_JOIN_BARRIER_POLL_SECONDS, float(remaining_budget)))
+
+    return _build_join_barrier_payload_from_results(
+        completed=completed,
+        failed=failed,
+        pending=[{"worker_id": worker_id, "status": "running"} for worker_id in pending_worker_ids],
+    )
+
+
 def _detect_orchestration_stall(
     history: list[dict[str, Any]],
     *,
@@ -394,7 +665,9 @@ async def run_agent_worker(spec_path: str) -> None:
         cleanup_background_sessions()
 
 
-async def execute_agent_task(worker: Worker, workspace_root: Path, worker_dir: Path) -> WorkerResult:
+async def execute_agent_task(
+    worker: Worker, workspace_root: Path, worker_dir: Path
+) -> WorkerResult:
     """Execute the agent's task with tools."""
     spec = worker.spec
 
@@ -415,13 +688,14 @@ async def execute_agent_task(worker: Worker, workspace_root: Path, worker_dir: P
             ToolPolicyPipelineStep(
                 label="worker.available_tools",
                 policy=ToolPolicy(allow=list(spec.available_tools or [])),
-            )
+            ),
         ],
     )
     filtered_tools = _with_octo_tool_proxies(filtered_tools, worker)
 
     # Add MCP tools from spec
     from octopal.tools.registry import ToolSpec
+
     for mcp_tool_data in spec.mcp_tools:
         # Generate a proxy handler for this MCP tool.
         identity = _extract_mcp_identity(mcp_tool_data)
@@ -447,9 +721,7 @@ async def execute_agent_task(worker: Worker, workspace_root: Path, worker_dir: P
         )
         filtered_tools.append(mcp_spec)
 
-    tool_descriptions = "\n".join(
-        f"- {t.name}: {t.description}" for t in filtered_tools
-    )
+    tool_descriptions = "\n".join(f"- {t.name}: {t.description}" for t in filtered_tools)
 
     system_prompt = f"""{spec.system_prompt}
 
@@ -488,7 +760,10 @@ Important:
 
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Task: {spec.task}\n\nInputs: {json.dumps(spec.inputs, indent=2)}"},
+        {
+            "role": "user",
+            "content": f"Task: {spec.task}\n\nInputs: {json.dumps(spec.inputs, indent=2)}",
+        },
     ]
 
     tools_used = []
@@ -496,7 +771,9 @@ Important:
     empty_turns = 0
     tool_map = {t.name: t for t in filtered_tools}
     loop_start = asyncio.get_running_loop().time()
-    effective_max_steps = _auto_tune_max_steps(spec.max_thinking_steps, spec.available_tools, spec.system_prompt)
+    effective_max_steps = _auto_tune_max_steps(
+        spec.max_thinking_steps, spec.available_tools, spec.system_prompt
+    )
     telemetry: dict[str, Any] = {
         "max_thinking_steps_configured": spec.max_thinking_steps,
         "max_thinking_steps_effective": effective_max_steps,
@@ -552,6 +829,7 @@ Important:
                 assistant_msg["content"] = content
             messages.append(assistant_msg)
             round_consumes_step = False
+            spawned_child_ids: list[str] = []
 
             # Process tool calls
             for tool_call in tool_calls:
@@ -594,7 +872,10 @@ Important:
                 else:
                     successful_tool_calls += 1
                 tools_used.append(tool_name)
-                args_hash = str(poll_window.get("args_hash") or _hash_tool_call(str(tool_name or ""), tool_input))
+                args_hash = str(
+                    poll_window.get("args_hash")
+                    or _hash_tool_call(str(tool_name or ""), tool_input)
+                )
                 result_hash = _hash_tool_outcome(tool_result, tool_meta)
                 progress_key = _extract_tool_progress_key(tool_name, tool_result)
                 tool_call_history.append(
@@ -711,11 +992,33 @@ Important:
                 )
                 if rendered_tool_result.was_compacted:
                     telemetry["tool_result_truncations"] += 1
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call_id,
-                    "content": rendered_tool_result.text,
-                })
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": rendered_tool_result.text,
+                    }
+                )
+                if str(tool_name or "") in _CHILD_SPAWN_TOOLS:
+                    spawned_child_ids.extend(_extract_spawned_worker_ids(tool_name, tool_result))
+            if spawned_child_ids:
+                join_payload = await _join_spawned_child_batch(
+                    worker=worker,
+                    worker_ids=spawned_child_ids,
+                    workspace_root=workspace_root,
+                    worker_dir=worker_dir,
+                    tool_map=tool_map,
+                    spec_timeout_seconds=spec.timeout_seconds,
+                    loop_start=loop_start,
+                    telemetry=telemetry,
+                    tools_used=tools_used,
+                )
+                if isinstance(join_payload, dict):
+                    rendered_join_message = _render_join_barrier_message(
+                        join_payload=join_payload,
+                        worker_ids=list(dict.fromkeys(spawned_child_ids)),
+                    )
+                    messages.append({"role": "user", "content": rendered_join_message})
             if round_consumes_step:
                 thinking_steps += 1
             empty_turns = 0
@@ -729,8 +1032,13 @@ Important:
             if result_block is not None:
                 cycle_steps = thinking_steps + 1
                 return WorkerResult(
-                    status=str(result_block.get("status", "completed")) if result_block.get("status") in {"completed", "failed"} else "completed",
-                    summary=str(result_block.get("summary", "Task completed")).strip() or "Task completed",
+                    status=(
+                        str(result_block.get("status", "completed"))
+                        if result_block.get("status") in {"completed", "failed"}
+                        else "completed"
+                    ),
+                    summary=str(result_block.get("summary", "Task completed")).strip()
+                    or "Task completed",
                     output=_attach_telemetry(result_block.get("output"), telemetry),
                     questions=result_block.get("questions", []),
                     knowledge_proposals=worker.knowledge_proposals,
@@ -857,7 +1165,9 @@ async def _execute_tool(
         legacy_worker = worker_dir
         legacy_tool_map = worker
         if not isinstance(legacy_worker, Worker) or not isinstance(legacy_tool_map, dict):
-            raise TypeError("_execute_tool expected either (workspace_root, worker_dir, worker, tool_map) or legacy (workspace_root, worker, tool_map)")
+            raise TypeError(
+                "_execute_tool expected either (workspace_root, worker_dir, worker, tool_map) or legacy (workspace_root, worker, tool_map)"
+            )
         worker_dir = workspace_root
         worker = legacy_worker
         tool_map = legacy_tool_map
@@ -921,7 +1231,9 @@ async def _execute_tool(
                     "had_error": True,
                     "error_type": "transient",
                 }
-                await worker.log("warning", _summarize_tool_finish(tool_name, error_result, error_meta))
+                await worker.log(
+                    "warning", _summarize_tool_finish(tool_name, error_result, error_meta)
+                )
                 return error_result, error_meta
             except Exception as exc:
                 await worker.log("error", f"Tool execution failed: {tool_name}: {exc}")
@@ -944,7 +1256,9 @@ async def _execute_tool(
                     "had_error": True,
                     **error_info,
                 }
-                await worker.log("warning", _summarize_tool_finish(tool_name, error_result, error_meta))
+                await worker.log(
+                    "warning", _summarize_tool_finish(tool_name, error_result, error_meta)
+                )
                 return error_result, error_meta
 
             if _result_has_error(result):
@@ -1036,7 +1350,12 @@ def _extract_mcp_identity(mcp_tool_data: dict[str, Any]) -> tuple[str, str] | No
     """Extract MCP server/tool identity from explicit metadata or legacy names."""
     server_id = mcp_tool_data.get("server_id")
     remote_tool_name = mcp_tool_data.get("remote_tool_name")
-    if isinstance(server_id, str) and server_id and isinstance(remote_tool_name, str) and remote_tool_name:
+    if (
+        isinstance(server_id, str)
+        and server_id
+        and isinstance(remote_tool_name, str)
+        and remote_tool_name
+    ):
         return server_id, remote_tool_name
 
     name = str(mcp_tool_data.get("name", ""))
@@ -1207,7 +1526,11 @@ def _is_tool_retryable(tool_name: str, tool: Any) -> bool:
     if permission in {"filesystem_write", "service_control", "deploy_control"}:
         return False
     read_like_prefixes = ("get_", "list_", "read_", "web_", "search_", "mcp_")
-    return tool_name.startswith(read_like_prefixes) or permission in {"network", "filesystem_read", "service_read"}
+    return tool_name.startswith(read_like_prefixes) or permission in {
+        "network",
+        "filesystem_read",
+        "service_read",
+    }
 
 
 def _auto_tune_max_steps(base_steps: int, available_tools: list[str], system_prompt: str) -> int:
@@ -1215,7 +1538,10 @@ def _auto_tune_max_steps(base_steps: int, available_tools: list[str], system_pro
     tool_set = set(available_tools)
     if any(name.startswith("mcp_") or "web" in name for name in tool_set):
         tuned += 3
-    if any(name in {"exec_run", "test_run", "docker_compose_control", "deploy_manager"} for name in tool_set):
+    if any(
+        name in {"exec_run", "test_run", "docker_compose_control", "deploy_manager"}
+        for name in tool_set
+    ):
         tuned += 2
     if "writer" in system_prompt.lower() and len(tool_set) <= 2:
         tuned -= 2
@@ -1260,13 +1586,17 @@ def _build_inference_unavailable_result(
     )
 
 
-def _summarize_tool_start(tool_name: str | None, tool_input: dict[str, Any], *, timeout_seconds: int | None) -> str:
+def _summarize_tool_start(
+    tool_name: str | None, tool_input: dict[str, Any], *, timeout_seconds: int | None
+) -> str:
     keys = sorted(str(key) for key in tool_input)
     return f"Tool start: {tool_name} timeout={timeout_seconds or 0}s input_keys={keys}"
 
 
 def _summarize_tool_finish(tool_name: str | None, result: Any, meta: dict[str, Any]) -> str:
-    error_text = _truncate_text(_extract_error_text(result), 240) if _result_has_error(result) else ""
+    error_text = (
+        _truncate_text(_extract_error_text(result), 240) if _result_has_error(result) else ""
+    )
     result_shape = _describe_tool_result_shape(result)
     parts = [
         f"Tool finish: {tool_name}",
@@ -1287,7 +1617,9 @@ def _summarize_tool_finish(tool_name: str | None, result: Any, meta: dict[str, A
 def _describe_tool_result_shape(result: Any) -> str:
     if isinstance(result, dict):
         keys = sorted(str(key) for key in result)[:8]
-        return f"dict(keys={keys}, chars={len(json.dumps(result, ensure_ascii=False, default=str))})"
+        return (
+            f"dict(keys={keys}, chars={len(json.dumps(result, ensure_ascii=False, default=str))})"
+        )
     if isinstance(result, list):
         return f"list(len={len(result)})"
     if isinstance(result, str):

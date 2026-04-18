@@ -254,7 +254,12 @@ def test_tool_call_hash_is_stable_for_key_order() -> None:
 
 def test_tool_progress_streak_counts_same_progress_key() -> None:
     history = [
-        {"tool_name": "get_worker_result", "args_hash": "a", "result_hash": "x", "progress_key": None},
+        {
+            "tool_name": "get_worker_result",
+            "args_hash": "a",
+            "result_hash": "x",
+            "progress_key": None,
+        },
         {
             "tool_name": "synthesize_worker_results",
             "args_hash": "b",
@@ -262,7 +267,12 @@ def test_tool_progress_streak_counts_same_progress_key() -> None:
             "progress_key": "sig-1",
             "observed_at": 100.0,
         },
-        {"tool_name": "get_worker_result", "args_hash": "c", "result_hash": "y", "progress_key": None},
+        {
+            "tool_name": "get_worker_result",
+            "args_hash": "c",
+            "result_hash": "y",
+            "progress_key": None,
+        },
         {
             "tool_name": "synthesize_worker_results",
             "args_hash": "b",
@@ -463,7 +473,10 @@ def test_detect_orchestration_stall_warns_and_breaks_on_repeated_no_progress() -
     warning = _detect_orchestration_stall(
         history,
         tool_name="synthesize_worker_results",
-        tool_result={"pending_count": 2, "pending_results": [{"worker_id": "w1", "runtime_seconds": 2}]},
+        tool_result={
+            "pending_count": 2,
+            "pending_results": [{"worker_id": "w1", "runtime_seconds": 2}],
+        },
         progress_key="sig-1",
     )
     assert warning is not None
@@ -482,7 +495,10 @@ def test_detect_orchestration_stall_warns_and_breaks_on_repeated_no_progress() -
     critical = _detect_orchestration_stall(
         history,
         tool_name="synthesize_worker_results",
-        tool_result={"pending_count": 2, "pending_results": [{"worker_id": "w1", "runtime_seconds": 2}]},
+        tool_result={
+            "pending_count": 2,
+            "pending_results": [{"worker_id": "w1", "runtime_seconds": 2}],
+        },
         progress_key="sig-1",
     )
     assert critical is not None
@@ -610,7 +626,9 @@ def test_resolve_tool_loop_thresholds_ignores_bad_values(monkeypatch) -> None:
     assert thresholds["global_breaker"] > thresholds["critical"]
 
 
-def test_execute_agent_task_counts_completed_cycles_not_raw_llm_calls(monkeypatch, tmp_path: Path) -> None:
+def test_execute_agent_task_counts_completed_cycles_not_raw_llm_calls(
+    monkeypatch, tmp_path: Path
+) -> None:
     worker = _dummy_worker()
 
     async def _noop_log(level: str, message: str) -> None:
@@ -618,7 +636,10 @@ def test_execute_agent_task_counts_completed_cycles_not_raw_llm_calls(monkeypatc
 
     monkeypatch.setattr(worker, "log", _noop_log)
     monkeypatch.setattr("octopal.runtime.workers.agent_worker.load_settings", lambda: object())
-    monkeypatch.setattr("octopal.runtime.workers.agent_worker.LiteLLMProvider", lambda settings, model=None, config=None: object())
+    monkeypatch.setattr(
+        "octopal.runtime.workers.agent_worker.LiteLLMProvider",
+        lambda settings, model=None, config=None: object(),
+    )
 
     tool = ToolSpec(
         name="echo",
@@ -638,7 +659,7 @@ def test_execute_agent_task_counts_completed_cycles_not_raw_llm_calls(monkeypatc
                 "tool_calls": [
                     {
                         "id": "call-1",
-                        "function": {"name": "echo", "arguments": "{\"value\": 1}"},
+                        "function": {"name": "echo", "arguments": '{"value": 1}'},
                     }
                 ]
             },
@@ -649,8 +670,22 @@ def test_execute_agent_task_counts_completed_cycles_not_raw_llm_calls(monkeypatc
     async def _fake_call_llm(provider, messages, tools):
         return next(responses)
 
-    async def _fake_execute_tool(tool_name, tool_input, workspace_root, worker_dir, worker_obj, tool_map, *, timeout_seconds=None):
-        return {"ok": True}, {"retries": 0, "timed_out": False, "had_error": False, "error_type": "none"}
+    async def _fake_execute_tool(
+        tool_name,
+        tool_input,
+        workspace_root,
+        worker_dir,
+        worker_obj,
+        tool_map,
+        *,
+        timeout_seconds=None,
+    ):
+        return {"ok": True}, {
+            "retries": 0,
+            "timed_out": False,
+            "had_error": False,
+            "error_type": "none",
+        }
 
     monkeypatch.setattr("octopal.runtime.workers.agent_worker._call_llm", _fake_call_llm)
     monkeypatch.setattr("octopal.runtime.workers.agent_worker._execute_tool", _fake_execute_tool)
@@ -670,7 +705,10 @@ def test_execute_agent_task_stops_after_repeated_empty_turns(monkeypatch, tmp_pa
 
     monkeypatch.setattr(worker, "log", _noop_log)
     monkeypatch.setattr("octopal.runtime.workers.agent_worker.load_settings", lambda: object())
-    monkeypatch.setattr("octopal.runtime.workers.agent_worker.LiteLLMProvider", lambda settings, model=None, config=None: object())
+    monkeypatch.setattr(
+        "octopal.runtime.workers.agent_worker.LiteLLMProvider",
+        lambda settings, model=None, config=None: object(),
+    )
     monkeypatch.setattr("octopal.runtime.workers.agent_worker.get_tools", lambda: [])
 
     async def _fake_call_llm(provider, messages, tools):
@@ -733,7 +771,16 @@ def test_execute_agent_task_does_not_charge_step_for_throttled_poll_round(
     async def _fake_call_llm(provider, messages, tools):
         return next(responses)
 
-    async def _fake_execute_tool(tool_name, tool_input, workspace_root, worker_dir, worker_obj, tool_map, *, timeout_seconds=None):
+    async def _fake_execute_tool(
+        tool_name,
+        tool_input,
+        workspace_root,
+        worker_dir,
+        worker_obj,
+        tool_map,
+        *,
+        timeout_seconds=None,
+    ):
         return {
             "worker_id": tool_input["worker_id"],
             "status": "running",
@@ -759,3 +806,156 @@ def test_execute_agent_task_does_not_charge_step_for_throttled_poll_round(
     assert result.summary == "done"
     assert result.thinking_steps == 1
     assert result.tools_used == ["get_worker_result"]
+
+
+def test_execute_agent_task_auto_joins_spawned_children_before_next_llm_turn(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    worker = Worker(
+        spec=WorkerSpec(
+            id="w-join",
+            task="coordinate child work",
+            inputs={},
+            system_prompt="s",
+            available_tools=["start_child_worker", "synthesize_worker_results"],
+            mcp_tools=[],
+            model=None,
+            granted_capabilities=[],
+            timeout_seconds=60,
+            max_thinking_steps=5,
+            run_id="r-join",
+            lifecycle="ephemeral",
+            correlation_id=None,
+        )
+    )
+    log_messages: list[str] = []
+    sleep_calls: list[float] = []
+
+    async def _fake_log(level: str, message: str) -> None:
+        log_messages.append(f"{level}:{message}")
+
+    async def _fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr(worker, "log", _fake_log)
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.load_settings", lambda: object())
+    monkeypatch.setattr(
+        "octopal.runtime.workers.agent_worker.LiteLLMProvider",
+        lambda settings, model=None, config=None: object(),
+    )
+
+    tools = [
+        ToolSpec(
+            name="start_child_worker",
+            description="spawn child",
+            parameters={"type": "object"},
+            permission="worker_manage",
+            handler=lambda args, ctx: {"status": "started"},
+            is_async=False,
+        ),
+        ToolSpec(
+            name="synthesize_worker_results",
+            description="join child results",
+            parameters={"type": "object"},
+            permission="worker_manage",
+            handler=lambda args, ctx: {"status": "completed"},
+            is_async=False,
+        ),
+    ]
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker.get_tools", lambda: tools)
+
+    call_state = {"llm_calls": 0, "join_calls": 0}
+    executed_tools: list[tuple[str | None, dict]] = []
+
+    async def _fake_call_llm(provider, messages, tools):
+        call_state["llm_calls"] += 1
+        if call_state["llm_calls"] == 1:
+            return {
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "function": {
+                            "name": "start_child_worker",
+                            "arguments": '{"worker_id":"coder","task":"do child task"}',
+                        },
+                    }
+                ]
+            }
+        join_notes = [
+            str(message.get("content") or "")
+            for message in messages
+            if message.get("role") == "user"
+            and "Runtime join barrier note" in str(message.get("content") or "")
+        ]
+        assert any("Runtime join barrier note" in note for note in join_notes)
+        assert any("child summary" in note for note in join_notes)
+        return {"content": '{"type":"result","summary":"done","output":{"joined":true}}'}
+
+    async def _fake_execute_tool(
+        tool_name,
+        tool_input,
+        workspace_root,
+        worker_dir,
+        worker_obj,
+        tool_map,
+        *,
+        timeout_seconds=None,
+    ):
+        executed_tools.append((tool_name, dict(tool_input)))
+        if tool_name == "start_child_worker":
+            return (
+                '{"status":"started","worker_id":"child-1","run_id":"child-1"}',
+                {"retries": 0, "timed_out": False, "had_error": False, "error_type": "none"},
+            )
+        if tool_name == "synthesize_worker_results":
+            call_state["join_calls"] += 1
+            if call_state["join_calls"] == 1:
+                return (
+                    {
+                        "status": "running",
+                        "pending_count": 1,
+                        "completed_count": 0,
+                        "failed_count": 0,
+                        "ready_results": [],
+                        "failed_results": [],
+                        "pending_results": [{"worker_id": "child-1", "status": "running"}],
+                        "synthesis": "Pending workers:\n- child-1: running",
+                    },
+                    {"retries": 0, "timed_out": False, "had_error": False, "error_type": "none"},
+                )
+            return (
+                {
+                    "status": "completed",
+                    "pending_count": 0,
+                    "completed_count": 1,
+                    "failed_count": 0,
+                    "ready_results": [
+                        {"worker_id": "child-1", "summary": "child summary", "output": {"ok": True}}
+                    ],
+                    "failed_results": [],
+                    "pending_results": [],
+                    "synthesis": "Completed worker findings:\n- child-1: child summary",
+                },
+                {"retries": 0, "timed_out": False, "had_error": False, "error_type": "none"},
+            )
+        raise AssertionError(f"Unexpected tool: {tool_name}")
+
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker._call_llm", _fake_call_llm)
+    monkeypatch.setattr("octopal.runtime.workers.agent_worker._execute_tool", _fake_execute_tool)
+
+    result = asyncio.run(execute_agent_task(worker, tmp_path, tmp_path))
+
+    assert result.summary == "done"
+    assert result.output is not None
+    assert result.output["joined"] is True
+    assert call_state["llm_calls"] == 2
+    assert call_state["join_calls"] == 2
+    assert [name for name, _ in executed_tools] == [
+        "start_child_worker",
+        "synthesize_worker_results",
+        "synthesize_worker_results",
+    ]
+    assert sleep_calls == [1.0]
+    assert any("Join barrier engaged" in message for message in log_messages)
