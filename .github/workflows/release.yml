@@ -38,7 +38,10 @@ jobs:
         run: |
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
             TAG="${{ github.event.inputs.tag }}"
-            git fetch --tags origin "${TAG}:${TAG}"
+            if ! git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+              echo "Tag ${TAG} does not exist on origin"
+              exit 1
+            fi
           else
             TAG="${GITHUB_REF_NAME}"
           fi
