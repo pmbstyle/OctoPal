@@ -182,6 +182,9 @@ function parseScheduledTask(task?: string | null): { meta: ScheduledTaskMeta | n
 
 function statusPill(status?: string): string {
   const v = String(status ?? "").toLowerCase();
+  if (v === "waiting_for_children") {
+    return "bg-slate-200/8 text-slate-200 ring-1 ring-inset ring-white/12";
+  }
   if (v === "running" || v === "started" || v === "completed" || v === "ok") {
     return "bg-emerald-500/15 text-emerald-300 ring-1 ring-inset ring-emerald-400/30";
   }
@@ -196,6 +199,9 @@ function statusPill(status?: string): string {
 
 function tone(status?: string): string {
   const v = String(status ?? "").toLowerCase();
+  if (v === "waiting_for_children") {
+    return "text-slate-200";
+  }
   if (v === "completed" || v === "running" || v === "started") {
     return "text-emerald-300";
   }
@@ -207,6 +213,9 @@ function tone(status?: string): string {
 
 function workerRowTone(status?: string): string {
   const v = String(status ?? "").toLowerCase();
+  if (v === "waiting_for_children") {
+    return "bg-slate-200/[0.05]";
+  }
   if (v === "completed") {
     return "bg-emerald-500/[0.06]";
   }
