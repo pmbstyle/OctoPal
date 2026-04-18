@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 
+from octopal import __version__
 from octopal.cli.main import (
     _VERSION_CHECK_TTL_SECONDS,
     _get_latest_release_info,
@@ -93,14 +94,16 @@ def test_get_latest_release_info_refreshes_stale_cache(tmp_path, monkeypatch) ->
 def test_warns_when_new_release_is_available(tmp_path, monkeypatch) -> None:
     settings = _build_settings(tmp_path)
     printed: list[str] = []
+    remote_version = f"{__version__}.1"
+    remote_url = f"https://example.test/releases/tag/v{remote_version}"
 
     monkeypatch.setattr(
         "octopal.cli.main._get_latest_release_info",
-        lambda _settings: ("2026.04.15", "https://example.test/releases/tag/v2026.04.15"),
+        lambda _settings: (remote_version, remote_url),
     )
     monkeypatch.setattr("octopal.cli.main.console.print", lambda message="", *args, **kwargs: printed.append(str(message)))
 
     _maybe_warn_about_newer_release(settings)
 
     assert any("Update available:" in line for line in printed)
-    assert any("2026.04.15" in line for line in printed)
+    assert any(remote_version in line for line in printed)
