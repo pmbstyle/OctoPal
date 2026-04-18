@@ -373,6 +373,39 @@ def _render_resumed_child_batch_message(child_batch: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _record_joined_child_batch(
+    joined_results_by_id: dict[str, dict[str, Any]],
+    child_batch: dict[str, Any],
+) -> None:
+    for key in ("completed", "failed", "stopped", "missing"):
+        items = child_batch.get(key, [])
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            worker_id = str(item.get("worker_id") or "").strip()
+            if not worker_id:
+                continue
+            joined_results_by_id[worker_id] = dict(item)
+
+
+def _build_joined_child_guardrail_result(
+    *,
+    worker_id: str,
+    joined_result: dict[str, Any],
+) -> dict[str, Any]:
+    payload = dict(joined_result)
+    payload.setdefault("worker_id", worker_id)
+    payload["joined_via_runtime"] = True
+    payload["guardrail"] = "child_result_already_in_context"
+    payload["message"] = (
+        "Runtime already joined this child worker and injected the authoritative result into context. "
+        "Reuse that result instead of polling again unless you are starting a new retry."
+    )
+    return payload
+
+
 def _detect_orchestration_stall(
     history: list[dict[str, Any]],
     *,
@@ -597,6 +630,7 @@ Important:
     successful_tool_calls = 0
     tool_call_history: list[dict[str, Any]] = []
     tool_loop_thresholds = _resolve_tool_loop_thresholds()
+    joined_child_results_by_id: dict[str, dict[str, Any]] = {}
 
     while thinking_steps < effective_max_steps:
         llm_start = time.perf_counter()
@@ -653,29 +687,58 @@ Important:
                 )
                 step_exempt = bool(poll_window.get("step_exempt"))
 
-                # Execute tool
-                elapsed = asyncio.get_running_loop().time() - loop_start
-                remaining_budget = max(1, spec.timeout_seconds - int(elapsed))
-                tool_timeout = min(_DEFAULT_TOOL_TIMEOUT_SECONDS, remaining_budget)
-                tool_start = time.perf_counter()
-                tool_result, tool_meta = await _execute_tool(
-                    tool_name,
-                    tool_input,
-                    workspace_root,
-                    worker_dir,
-                    worker,
-                    tool_map,
-                    timeout_seconds=tool_timeout,
-                )
-                telemetry["tool_calls"] += 1
-                telemetry["tool_latency_ms_total"] += int((time.perf_counter() - tool_start) * 1000)
-                telemetry["tool_retries"] += int(tool_meta.get("retries", 0))
-                if tool_meta.get("timed_out"):
-                    telemetry["tool_timeouts"] += 1
-                if tool_meta.get("had_error"):
-                    telemetry["tool_errors"] += 1
+                normalized_tool_name = str(tool_name or "").strip()
+                joined_worker_id = ""
+                joined_result: dict[str, Any] | None = None
+                if normalized_tool_name == "get_worker_result":
+                    joined_worker_id = str(tool_input.get("worker_id") or "").strip()
+                    if joined_worker_id:
+                        joined_result = joined_child_results_by_id.get(joined_worker_id)
+
+                if joined_result is not None and joined_worker_id:
+                    tool_result = _build_joined_child_guardrail_result(
+                        worker_id=joined_worker_id,
+                        joined_result=joined_result,
+                    )
+                    tool_meta = {
+                        "retries": 0,
+                        "timed_out": False,
+                        "had_error": False,
+                        "error_type": "none",
+                        "guardrail": True,
+                    }
+                    step_exempt = True
+                    await worker.log(
+                        "info",
+                        (
+                            "Skipping redundant get_worker_result for already-joined child worker: "
+                            f"{joined_worker_id}"
+                        ),
+                    )
                 else:
-                    successful_tool_calls += 1
+                    # Execute tool
+                    elapsed = asyncio.get_running_loop().time() - loop_start
+                    remaining_budget = max(1, spec.timeout_seconds - int(elapsed))
+                    tool_timeout = min(_DEFAULT_TOOL_TIMEOUT_SECONDS, remaining_budget)
+                    tool_start = time.perf_counter()
+                    tool_result, tool_meta = await _execute_tool(
+                        tool_name,
+                        tool_input,
+                        workspace_root,
+                        worker_dir,
+                        worker,
+                        tool_map,
+                        timeout_seconds=tool_timeout,
+                    )
+                    telemetry["tool_calls"] += 1
+                    telemetry["tool_latency_ms_total"] += int((time.perf_counter() - tool_start) * 1000)
+                    telemetry["tool_retries"] += int(tool_meta.get("retries", 0))
+                    if tool_meta.get("timed_out"):
+                        telemetry["tool_timeouts"] += 1
+                    if tool_meta.get("had_error"):
+                        telemetry["tool_errors"] += 1
+                    else:
+                        successful_tool_calls += 1
                 tools_used.append(tool_name)
                 args_hash = str(
                     poll_window.get("args_hash")
@@ -836,6 +899,7 @@ Important:
                             "content": _render_resumed_child_batch_message(child_batch),
                         }
                     )
+                    _record_joined_child_batch(joined_child_results_by_id, child_batch)
             if round_consumes_step:
                 thinking_steps += 1
             empty_turns = 0
