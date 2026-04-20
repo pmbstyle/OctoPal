@@ -639,6 +639,20 @@ async def _complete_route_with_tools(
                         }
                     )
                     if loop_state is not None:
+                        current_trace_ctx = get_current_trace_context()
+                        trace_sink = getattr(octo, "trace_sink", None)
+                        if current_trace_ctx is not None and trace_sink is not None:
+                            await trace_sink.annotate(
+                                current_trace_ctx,
+                                name="octo.tool_loop_detected",
+                                metadata={
+                                    "detector": loop_state["detector"],
+                                    "level": loop_state["level"],
+                                    "count": loop_state["count"],
+                                    "message": loop_state["message"],
+                                    "tool_name": tool_name,
+                                },
+                            )
                         logger.warning(
                             "Octo tool loop detected",
                             detector=loop_state["detector"],
@@ -1559,6 +1573,16 @@ async def _handle_octo_tool_call(
         if blocked_payload is not None:
             tool_trace_status = "error"
             tool_trace_metadata["policy_blocked"] = True
+            if tool_trace_ctx is not None and trace_sink is not None:
+                await trace_sink.annotate(
+                    tool_trace_ctx,
+                    name="octo.policy_blocked",
+                    metadata={
+                        "tool_name": str(name or ""),
+                        "reason": str(blocked_payload.get("reason") or "blocked_by_policy"),
+                        "risk": str(blocked_payload.get("risk") or ""),
+                    },
+                )
             tool_trace_output = {
                 "result_preview": safe_preview(blocked_payload, limit=240),
                 "result_size": len(str(blocked_payload)),
