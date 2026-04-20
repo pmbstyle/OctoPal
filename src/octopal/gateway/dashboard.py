@@ -472,7 +472,7 @@ def register_dashboard_routes(app: FastAPI) -> None:
     @app.get("/api/dashboard/v2/workers", response_model=DashboardWorkersV2)
     async def dashboard_v2_workers(
         request: Request,
-        last: int = Query(8, ge=1, le=50),
+        last: int = Query(16, ge=1, le=50),
         window_minutes: int = Query(60, ge=1, le=1440),
         service: str = Query("all"),
         environment: str = Query("all"),

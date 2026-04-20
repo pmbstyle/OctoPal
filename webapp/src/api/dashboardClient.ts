@@ -154,6 +154,7 @@ export type DashboardQueryParams = {
   windowMinutes: 15 | 60 | 240 | 1440;
   service: "all" | "gateway" | "octo" | "telegram" | "exec_run" | "mcp" | "workers";
   environment: "all" | "local" | "dev" | "staging" | "prod";
+  last?: number;
   token?: string;
 };
 
@@ -164,6 +165,9 @@ function withQuery(path: string, params: DashboardQueryParams): string {
   query.set("window_minutes", String(params.windowMinutes));
   query.set("service", params.service);
   query.set("environment", params.environment);
+  if (params.last !== undefined) {
+    query.set("last", String(params.last));
+  }
   return `${path}?${query.toString()}`;
 }
 
