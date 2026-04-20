@@ -624,6 +624,69 @@ def _worker_followup_keywords(value: str) -> list[str]:
     return re.findall(r"\w+", value, flags=re.UNICODE)
 
 
+async def _start_background_trace_context(
+    trace_sink: TraceSink | None,
+    *,
+    name: str,
+    chat_id: int,
+    correlation_id: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> tuple[Any | None, Any | None, bool]:
+    if trace_sink is None:
+        return None, None, False
+    parent_trace_ctx = get_current_trace_context()
+    if parent_trace_ctx is not None:
+        trace_ctx = await trace_sink.start_span(
+            parent_trace_ctx,
+            name=name,
+            metadata=metadata,
+        )
+        return trace_ctx, bind_trace_context(trace_ctx), False
+    trace_id = f"{name.replace('.', '-')}-{uuid4().hex}"
+    root_trace_id = str(correlation_id or trace_id)
+    trace_ctx = await trace_sink.start_trace(
+        name=name,
+        trace_id=trace_id,
+        root_trace_id=root_trace_id,
+        session_id=f"chat:{chat_id}",
+        chat_id=chat_id,
+        metadata=metadata,
+    )
+    return trace_ctx, bind_trace_context(trace_ctx), True
+
+
+async def _finish_background_trace_context(
+    trace_sink: TraceSink | None,
+    trace_ctx: Any | None,
+    trace_token: Any | None,
+    *,
+    is_root_trace: bool,
+    status: str,
+    output: dict[str, Any] | None,
+    metadata: dict[str, Any] | None,
+) -> None:
+    try:
+        if trace_ctx is None or trace_sink is None:
+            return
+        if is_root_trace:
+            await trace_sink.finish_trace(
+                trace_ctx,
+                status=status,
+                output=output,
+                metadata=metadata,
+            )
+            return
+        await trace_sink.finish_span(
+            trace_ctx,
+            status=status,
+            output=output,
+            metadata=metadata,
+        )
+    finally:
+        if trace_token is not None:
+            reset_trace_context(trace_token)
+
+
 async def _send_worker_followup(
     octo: Octo,
     chat_id: int,
@@ -632,46 +695,123 @@ async def _send_worker_followup(
     *,
     batched_count: int = 1,
 ) -> None:
-    decision = resolve_user_delivery(text)
-    if not decision.user_visible:
-        logger.info("Internal worker follow-up skipped", chat_id=chat_id, reason=decision.reason)
-        return
-    if octo.internal_send:
-        await octo.internal_send(chat_id, decision.text)
-        octo.note_user_visible_delivery(chat_id, decision.text)
-        octo.clear_pending_conversational_closure(correlation_id)
-        logger.info(
-            "Internal worker follow-up sent",
-            chat_id=chat_id,
-            text_len=len(decision.text),
-            batched_count=batched_count,
-        )
-        await octo.memory.add_message(
-            "assistant",
-            decision.text,
+    trace_started_at_ms = now_ms()
+    trace_metadata: dict[str, Any] = {
+        "delivery_channel": "internal",
+        "delivery_source": "worker_followup",
+        "correlation_id": correlation_id,
+        "batched_count": batched_count,
+        "text_preview": safe_preview(text, limit=240),
+        "text_len": len(text or ""),
+    }
+    trace_ctx, trace_token, is_root_trace = await _start_background_trace_context(
+        octo.trace_sink,
+        name="channel.delivery",
+        chat_id=chat_id,
+        correlation_id=correlation_id,
+        metadata=trace_metadata,
+    )
+    trace_status = "ok"
+    trace_output: dict[str, Any] | None = None
+    try:
+        decision = resolve_user_delivery(text)
+        trace_metadata.update(
             {
-                "chat_id": chat_id,
-                "worker_followup": True,
-                "batched_count": batched_count,
-            },
+                "delivery_mode": decision.mode,
+                "user_visible": decision.user_visible,
+                "suppressed_reason": decision.reason,
+            }
         )
-    else:
+        if not decision.user_visible:
+            trace_output = {"status": "suppressed", "reason": decision.reason}
+            logger.info(
+                "Internal worker follow-up skipped", chat_id=chat_id, reason=decision.reason
+            )
+            return
+        if octo.internal_send:
+            await octo.internal_send(chat_id, decision.text)
+            octo.note_user_visible_delivery(chat_id, decision.text)
+            octo.clear_pending_conversational_closure(correlation_id)
+            trace_output = {
+                "status": "sent",
+                "message_len": len(decision.text),
+                "batched_count": batched_count,
+            }
+            logger.info(
+                "Internal worker follow-up sent",
+                chat_id=chat_id,
+                text_len=len(decision.text),
+                batched_count=batched_count,
+            )
+            await octo.memory.add_message(
+                "assistant",
+                decision.text,
+                {
+                    "chat_id": chat_id,
+                    "worker_followup": True,
+                    "batched_count": batched_count,
+                },
+            )
+            return
+        trace_status = "error"
+        trace_metadata["error_type"] = "no_sender_attached"
+        trace_output = {"status": "dropped", "reason": "no_sender_attached"}
         logger.info(
             "Worker follow-up produced but no sender attached",
             chat_id=chat_id,
             text_len=len(text),
             batched_count=batched_count,
         )
+    except Exception as exc:
+        trace_status = "error"
+        trace_metadata.update(summarize_exception(exc))
+        trace_output = {"status": "failed"}
+        raise
+    finally:
+        trace_metadata["duration_ms"] = round(now_ms() - trace_started_at_ms, 2)
+        await _finish_background_trace_context(
+            octo.trace_sink,
+            trace_ctx,
+            trace_token,
+            is_root_trace=is_root_trace,
+            status=trace_status,
+            output=trace_output,
+            metadata=trace_metadata,
+        )
 
 
 async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id: str) -> None:
+    trace_started_at_ms = now_ms()
+    trace_metadata: dict[str, Any] = {
+        "correlation_id": correlation_id,
+        "batch_window_seconds": _WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS,
+        "routing_timeout_seconds": _WORKER_RESULT_ROUTING_TIMEOUT_SECONDS,
+    }
+    trace_ctx, trace_token, is_root_trace = await _start_background_trace_context(
+        octo.trace_sink,
+        name="worker.followup",
+        chat_id=chat_id,
+        correlation_id=correlation_id,
+        metadata=trace_metadata,
+    )
+    trace_status = "ok"
+    trace_output: dict[str, Any] | None = None
     try:
         await asyncio.sleep(_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS)
         batch_key = (chat_id, correlation_id)
         batch = _WORKER_FOLLOWUP_BATCHES.pop(batch_key, None)
         if batch is None:
+            trace_output = {"status": "empty_batch"}
             return
         batched_count = len(batch.texts) + len(batch.items)
+        trace_metadata.update(
+            {
+                "batched_count": batched_count,
+                "text_count": len(batch.texts),
+                "worker_result_count": len(batch.items),
+                "created_during_active_turn": batch.created_during_active_turn,
+            }
+        )
         merged_texts = list(batch.texts)
 
         if batch.items:
@@ -685,6 +825,7 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
                     timeout=_WORKER_RESULT_ROUTING_TIMEOUT_SECONDS,
                 )
             except TimeoutError:
+                trace_metadata["routing_timed_out"] = True
                 logger.warning(
                     "Worker-result batch routing timed out",
                     chat_id=chat_id,
@@ -695,6 +836,14 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
             pending_closure = octo.has_pending_conversational_closure(correlation_id)
             synthetic_result = _build_worker_followup_batch_result(batch.items)
             notify_user = _combine_worker_followup_notify_policy(batch.items)
+            trace_metadata.update(
+                {
+                    "pending_closure": pending_closure,
+                    "notify_user_policy_resolved": notify_user,
+                    "synthetic_result_status": synthetic_result.status,
+                    "questions_count": len(synthetic_result.questions),
+                }
+            )
             delivery = resolve_worker_followup_delivery(
                 batched_text,
                 result=synthetic_result,
@@ -713,9 +862,11 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
                     batched_count=len(batch.items),
                 )
             if delivery.user_visible:
+                trace_metadata["delivery_reason"] = delivery.reason
                 merged_texts.append(delivery.text)
             else:
                 octo.clear_pending_conversational_closure(correlation_id)
+                trace_output = {"status": "suppressed", "reason": delivery.reason}
                 if not merged_texts:
                     logger.info(
                         "Internal worker follow-up skipped",
@@ -728,6 +879,7 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
         final_text = _merge_worker_followup_texts(merged_texts)
         if not final_text:
             octo.clear_pending_conversational_closure(correlation_id)
+            trace_output = {"status": "suppressed", "reason": "empty_batched_followup"}
             logger.info(
                 "Internal worker follow-up skipped",
                 chat_id=chat_id,
@@ -735,6 +887,12 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
                 batched_count=batched_count,
             )
             return
+        trace_output = {
+            "status": "ready_to_send",
+            "final_text_preview": safe_preview(final_text, limit=240),
+            "final_text_len": len(final_text),
+            "batched_count": batched_count,
+        }
         await _send_worker_followup(
             octo,
             chat_id,
@@ -743,9 +901,26 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
             batched_count=batched_count,
         )
     except asyncio.CancelledError:
+        trace_status = "error"
+        trace_metadata["error_type"] = "CancelledError"
+        trace_output = {"status": "cancelled"}
         raise
-    except Exception:
+    except Exception as exc:
+        trace_status = "error"
+        trace_metadata.update(summarize_exception(exc))
+        trace_output = {"status": "failed"}
         logger.exception("Failed to flush batched worker follow-up", chat_id=chat_id)
+    finally:
+        trace_metadata["duration_ms"] = round(now_ms() - trace_started_at_ms, 2)
+        await _finish_background_trace_context(
+            octo.trace_sink,
+            trace_ctx,
+            trace_token,
+            is_root_trace=is_root_trace,
+            status=trace_status,
+            output=trace_output,
+            metadata=trace_metadata,
+        )
 
 
 def _schedule_worker_followup_flush(octo: Octo, chat_id: int, correlation_id: str | None) -> None:
