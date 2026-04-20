@@ -1710,8 +1710,11 @@ def _validate_worker_mcp_tool_call(
 
     for mcp_tool in spec.mcp_tools:
         candidate_name = str(mcp_tool.get("name", "") or "").strip().lower()
+        candidate_remote_name = str(mcp_tool.get("remote_tool_name", "") or "").strip().lower()
         candidate_server = str(mcp_tool.get("server_id", "") or "").strip()
-        if candidate_name != requested_tool_name or candidate_server != requested_server:
+        if candidate_server != requested_server:
+            continue
+        if requested_tool_name not in {candidate_name, candidate_remote_name}:
             continue
         permission = str(mcp_tool.get("permission", "") or "").strip().lower()
         if permission and permission not in allowed_permissions:
