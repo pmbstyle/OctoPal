@@ -415,6 +415,7 @@ export function ControlCenterPage() {
             token: filters.token || undefined,
           }),
           fetchWorkers({
+            last: 16,
             windowMinutes: filters.windowMinutes,
             service: filters.service,
             environment: filters.environment,

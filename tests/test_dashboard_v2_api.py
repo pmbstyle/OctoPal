@@ -105,6 +105,41 @@ def test_dashboard_v2_workers_exposes_worker_result_details(tmp_path) -> None:
     assert recent[0]["output"] == {"report": {"status": "ok", "items": 3}}
 
 
+def test_dashboard_v2_workers_returns_16_recent_workers_by_default(tmp_path) -> None:
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="123:abc",
+        OCTOPAL_STATE_DIR=tmp_path / "state",
+        OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
+    )
+    app = build_app(settings)
+    store = SQLiteStore(settings)
+    now = utc_now()
+    for index in range(20):
+        created_at = now.replace(microsecond=index)
+        store.create_worker(
+            WorkerRecord(
+                id=f"worker-{index:02d}",
+                status="completed",
+                task=f"Task {index}",
+                granted_caps=[],
+                created_at=created_at,
+                updated_at=created_at,
+            )
+        )
+    app.state.dashboard_store = store
+    client = TestClient(app)
+
+    headers = {"x-octopal-token": settings.dashboard_token} if settings.dashboard_token else {}
+    response = client.get("/api/dashboard/v2/workers", headers=headers)
+    assert response.status_code == 200
+
+    payload = response.json()
+    recent = payload["workers"]["recent"]
+    assert len(recent) == 16
+    assert recent[0]["id"] == "worker-19"
+    assert recent[-1]["id"] == "worker-04"
+
+
 def test_dashboard_v2_uses_whatsapp_metrics_for_active_channel(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings(
         TELEGRAM_BOT_TOKEN="123:abc",
