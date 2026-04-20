@@ -19,6 +19,18 @@ from octopal.channels.telegram.approvals import ApprovalManager
 from octopal.infrastructure.connectors.manager import ConnectorManager
 from octopal.infrastructure.logging import correlation_id_var
 from octopal.infrastructure.mcp.manager import MCPManager
+from octopal.infrastructure.observability.base import (
+    TraceSink,
+    bind_trace_context,
+    now_ms,
+    reset_trace_context,
+)
+from octopal.infrastructure.observability.helpers import (
+    hash_payload,
+    safe_preview,
+    summarize_exception,
+)
+from octopal.infrastructure.observability.noop import NoopTraceSink
 from octopal.infrastructure.providers.base import InferenceProvider, Message
 from octopal.infrastructure.store.base import Store
 from octopal.infrastructure.store.models import AuditEvent
@@ -129,7 +141,11 @@ def _build_worker_result_batch_timeout_followup(items: list[_PendingWorkerFollow
 
 
 def _build_worker_followup_batch_result(items: list[_PendingWorkerFollowupItem]) -> WorkerResult:
-    summaries = [str(item.result.summary or "").strip() for item in items if str(item.result.summary or "").strip()]
+    summaries = [
+        str(item.result.summary or "").strip()
+        for item in items
+        if str(item.result.summary or "").strip()
+    ]
     questions: list[str] = []
     knowledge_proposals = []
     tools_used: list[str] = []
@@ -314,13 +330,17 @@ _RECENT_WORKER_TASK_TTL_SECONDS = float(
 
 _WATCH_THRESHOLDS = {
     "context_size_estimate": _env_int("OCTOPAL_CONTEXT_WATCH_SIZE", 150000, minimum=5000),
-    "repetition_score": _env_float("OCTOPAL_CONTEXT_WATCH_REPETITION", 0.65, minimum=0.0, maximum=1.0),
+    "repetition_score": _env_float(
+        "OCTOPAL_CONTEXT_WATCH_REPETITION", 0.65, minimum=0.0, maximum=1.0
+    ),
     "error_streak": _env_int("OCTOPAL_CONTEXT_WATCH_ERROR_STREAK", 3, minimum=1),
     "no_progress_turns": _env_int("OCTOPAL_CONTEXT_WATCH_NO_PROGRESS", 4, minimum=1),
 }
 _RESET_SOON_THRESHOLDS = {
     "context_size_estimate": _env_int("OCTOPAL_CONTEXT_RESET_SOON_SIZE", 250000, minimum=5000),
-    "repetition_score": _env_float("OCTOPAL_CONTEXT_RESET_SOON_REPETITION", 0.75, minimum=0.0, maximum=1.0),
+    "repetition_score": _env_float(
+        "OCTOPAL_CONTEXT_RESET_SOON_REPETITION", 0.75, minimum=0.0, maximum=1.0
+    ),
     "error_streak": _env_int("OCTOPAL_CONTEXT_RESET_SOON_ERROR_STREAK", 5, minimum=1),
     "no_progress_turns": _env_int("OCTOPAL_CONTEXT_RESET_SOON_NO_PROGRESS", 7, minimum=1),
 }
@@ -429,9 +449,7 @@ def _resolve_worker_timeout_seconds(
     word_count = len(re.findall(r"\w+", lowered_task))
     step_count = len(_TIMEOUT_STEP_PATTERN.findall(task or ""))
     network_bound = "network" in permissions or any(
-        marker in tool_name
-        for tool_name in effective_tools
-        for marker in _NETWORK_TOOL_MARKERS
+        marker in tool_name for tool_name in effective_tools for marker in _NETWORK_TOOL_MARKERS
     )
     context_hits = sum(1 for marker in _CONTEXT_HEAVY_TASK_MARKERS if marker in lowered_task)
     synthesis_hits = sum(1 for marker in _SYNTHESIS_HEAVY_TASK_MARKERS if marker in lowered_task)
@@ -683,7 +701,9 @@ async def _flush_worker_followup_batch(octo: Octo, chat_id: int, correlation_id:
                 suppress_followup=octo.should_suppress_turn_followups(correlation_id),
                 should_force=any(should_force_worker_followup(item.result) for item in batch.items),
                 notify_user=notify_user,
-                forced_text_factory=lambda _result: _build_forced_worker_followup_batch(batch.items),
+                forced_text_factory=lambda _result: _build_forced_worker_followup_batch(
+                    batch.items
+                ),
             )
             if delivery.reason == "forced_substantive_followup":
                 logger.info(
@@ -858,7 +878,7 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
                 await octo.memory.add_message(
                     "system",
                     f"Worker completed: {result.summary}",
-                    {"worker_result": True, "task": task_text, "chat_id": chat_id}
+                    {"worker_result": True, "task": task_text, "chat_id": chat_id},
                 )
             output_error = ""
             if isinstance(result.output, dict):
@@ -869,7 +889,7 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
                 await octo.memory.add_message(
                     "system",
                     f"Worker error: {output_error}",
-                    {"worker_result": True, "task": task_text, "chat_id": chat_id}
+                    {"worker_result": True, "task": task_text, "chat_id": chat_id},
                 )
             # System/internal chat (chat_id <= 0) should never emit user-facing follow-ups.
             if chat_id <= 0:
@@ -956,6 +976,7 @@ class Octo:
     scheduler: SchedulerService | None = None
     mcp_manager: MCPManager | None = None
     connector_manager: ConnectorManager | None = None
+    trace_sink: TraceSink | None = None
     internal_send: callable | None = None
     internal_send_file: callable | None = None
     internal_progress_send: callable | None = None
@@ -963,7 +984,9 @@ class Octo:
     internal_typing_control: callable | None = None
     _cleanup_task: asyncio.Task | None = None
     _metrics_task: asyncio.Task | None = None
-    _recent_tasks: dict[tuple[int, str, str], float] = None  # Track in-flight worker launches per chat/correlation scope
+    _recent_tasks: dict[tuple[int, str, str], float] = (
+        None  # Track in-flight worker launches per chat/correlation scope
+    )
     _approval_requesters: dict[int, Callable[[Any], Awaitable[bool]]] | None = None
     _thinking_count: int = 0
     _ws_active: bool = False
@@ -1001,6 +1024,8 @@ class Octo:
     _active_user_turns_by_correlation: dict[str, Any] | None = None
 
     def __post_init__(self):
+        if self.trace_sink is None:
+            self.trace_sink = NoopTraceSink()
         if self._recent_tasks is None:
             self._recent_tasks = {}
         if self._approval_requesters is None:
@@ -1211,7 +1236,9 @@ class Octo:
             try:
                 await self.internal_typing_control(chat_id, active)
             except Exception:
-                logger.debug("Failed to set typing status", chat_id=chat_id, active=active, exc_info=True)
+                logger.debug(
+                    "Failed to set typing status", chat_id=chat_id, active=active, exc_info=True
+                )
 
     async def _periodic_cleanup(self, interval_seconds: int):
         while True:
@@ -1275,12 +1302,7 @@ class Octo:
                 if self.mcp_manager:
                     mcp_status = self.mcp_manager.get_server_statuses()
 
-                update_component_gauges(
-                    "connectivity",
-                    {
-                        "mcp_servers": mcp_status
-                    }
-                )
+                update_component_gauges("connectivity", {"mcp_servers": mcp_status})
             except Exception:
                 logger.debug("Failed to publish periodic metrics", exc_info=True)
 
@@ -1372,7 +1394,9 @@ class Octo:
             if _is_active_worker_status(getattr(worker, "status", "")):
                 correlation_id = self._worker_correlation_by_run_id.get(run_id)
                 if correlation_id:
-                    self._active_workers_by_correlation.setdefault(correlation_id, set()).add(run_id)
+                    self._active_workers_by_correlation.setdefault(correlation_id, set()).add(
+                        run_id
+                    )
                 self._lineage_children_active.setdefault(lineage_id, set()).add(run_id)
 
         stale_reconciled = self._reconcile_startup_stale_workers(worker_by_id)
@@ -1405,7 +1429,9 @@ class Octo:
 
     def start_background_tasks(self, cleanup_interval_seconds: int = 3600):
         if self._cleanup_task is None or self._cleanup_task.done():
-            self._cleanup_task = asyncio.create_task(self._periodic_cleanup(cleanup_interval_seconds))
+            self._cleanup_task = asyncio.create_task(
+                self._periodic_cleanup(cleanup_interval_seconds)
+            )
             logger.info("Started periodic worker cleanup task")
         if self._metrics_task is None or self._metrics_task.done():
             self._metrics_task = asyncio.create_task(self._periodic_metrics_publish(10))
@@ -1456,6 +1482,7 @@ class Octo:
         if chat_ids and (bot or callable(original_send)):
             logger.info("Octo will send initialization message", count=len(chat_ids))
             logger.debug("Allowed chat_ids", chat_ids=chat_ids)
+
             async def send_to_allowed_chats(chat_id, text):
                 for target_chat_id in chat_ids:
                     try:
@@ -1467,9 +1494,12 @@ class Octo:
                         logger.debug("Sent initialization message", chat_id=target_chat_id)
                     except Exception as e:
                         logger.warning("Failed to send to chat_id", chat_id=target_chat_id, error=e)
+
             self.internal_send = send_to_allowed_chats
         else:
-            logger.warning("No allowed user channel recipients configured; octo will not send ready message.")
+            logger.warning(
+                "No allowed user channel recipients configured; octo will not send ready message."
+            )
             self.internal_send = None
         try:
             bootstrap_context = await build_bootstrap_context_prompt(self.store, system_chat_id)
@@ -1482,10 +1512,10 @@ class Octo:
                 bootstrap_context.content,
             )
             if should_suppress_user_delivery(result):
-                result = (
-                    "Octo is online. Initialization is complete and I am ready for your tasks."
-                )
-            logger.info("Octo wake up complete", result_preview=f"{result[:60]}..." if result else "empty")
+                result = "Octo is online. Initialization is complete and I am ready for your tasks."
+            logger.info(
+                "Octo wake up complete", result_preview=f"{result[:60]}..." if result else "empty"
+            )
 
             # Send the Octo's own response to allowed chats if configured.
             if result and self.internal_send and chat_ids:
@@ -1678,8 +1708,7 @@ class Octo:
             return True
         return (
             not self.has_active_user_turn(correlation_id)
-            and
-            not self.has_active_workers_for_correlation(correlation_id)
+            and not self.has_active_workers_for_correlation(correlation_id)
             and not self.has_pending_internal_results_for_correlation(correlation_id)
         )
 
@@ -1862,7 +1891,9 @@ class Octo:
 
         opportunities = opportunities[: max(1, min(limit, 5))]
         self._last_opportunities_by_chat[chat_id] = [dict(item) for item in opportunities]
-        await asyncio.to_thread(_persist_last_opportunities, _workspace_dir(), chat_id, opportunities)
+        await asyncio.to_thread(
+            _persist_last_opportunities, _workspace_dir(), chat_id, opportunities
+        )
         pending_count = sum(1 for item in queue if str(item.get("status", "pending")) == "pending")
         return {
             "status": "ok",
@@ -1873,7 +1904,9 @@ class Octo:
         }
 
     async def get_context_health_snapshot(self, chat_id: int) -> dict[str, Any]:
-        recent_entries_all = await asyncio.to_thread(self.store.list_memory_entries_by_chat, chat_id, 120)
+        recent_entries_all = await asyncio.to_thread(
+            self.store.list_memory_entries_by_chat, chat_id, 120
+        )
         recent_entries = [
             entry
             for entry in recent_entries_all
@@ -1884,7 +1917,9 @@ class Octo:
         repetition_score = _estimate_repetition_score(recent_entries)
         error_streak = _estimate_error_streak(recent_entries)
         no_progress_turns = int((self._no_progress_turns_by_chat or {}).get(chat_id, 0))
-        resets_since_progress = int((self._reset_streak_without_progress_by_chat or {}).get(chat_id, 0))
+        resets_since_progress = int(
+            (self._reset_streak_without_progress_by_chat or {}).get(chat_id, 0)
+        )
         overload_score = min(
             1.0,
             (context_size_estimate / float(_WATCH_THRESHOLDS["context_size_estimate"]))
@@ -1911,7 +1946,11 @@ class Octo:
             error_streak=error_streak,
             no_progress_turns=no_progress_turns,
         )
-        context_health = "RESET_SOON" if (severe or watch_escalation_streak >= 2) else ("WATCH" if watch_signal_count > 0 else "OK")
+        context_health = (
+            "RESET_SOON"
+            if (severe or watch_escalation_streak >= 2)
+            else ("WATCH" if watch_signal_count > 0 else "OK")
+        )
         snapshot = {
             "chat_id": chat_id,
             "entry_count": entry_count,
@@ -1954,7 +1993,9 @@ class Octo:
     def _register_progress(self, chat_id: int, reason: str) -> None:
         self._no_progress_turns_by_chat[chat_id] = 0
         self._reset_streak_without_progress_by_chat[chat_id] = 0
-        self._progress_revision_by_chat[chat_id] = int(self._progress_revision_by_chat.get(chat_id, 0)) + 1
+        self._progress_revision_by_chat[chat_id] = (
+            int(self._progress_revision_by_chat.get(chat_id, 0)) + 1
+        )
         logger.debug("Registered progress", chat_id=chat_id, reason=reason)
 
     async def request_context_reset(self, chat_id: int, args: dict[str, Any]) -> dict[str, Any]:
@@ -2031,7 +2072,9 @@ class Octo:
                     "summary": record.summary,
                 }
             except Exception:
-                logger.warning("Reflection record failed during context reset", chat_id=chat_id, exc_info=True)
+                logger.warning(
+                    "Reflection record failed during context reset", chat_id=chat_id, exc_info=True
+                )
         memchain_info: dict[str, Any] | None = None
         try:
             memchain_info = await asyncio.to_thread(
@@ -2041,7 +2084,9 @@ class Octo:
                 meta={"mode": mode, "chat_id": chat_id, "source": "octo_context_reset"},
             )
         except Exception as exc:
-            logger.warning("Memchain record failed during context reset", chat_id=chat_id, error=str(exc))
+            logger.warning(
+                "Memchain record failed during context reset", chat_id=chat_id, error=str(exc)
+            )
 
         deleted_entries = await asyncio.to_thread(
             self.store.delete_memory_entries_by_chat,
@@ -2054,7 +2099,9 @@ class Octo:
         self._last_reply_norm_by_chat.pop(chat_id, None)
         self._last_reset_progress_revision_by_chat[chat_id] = progress_rev
         self._reset_streak_without_progress_by_chat[chat_id] = proposed_streak
-        self._pending_wakeup_by_chat[chat_id] = _build_wakeup_message(handoff, file_info["handoff_md"])
+        self._pending_wakeup_by_chat[chat_id] = _build_wakeup_message(
+            handoff, file_info["handoff_md"]
+        )
         self._no_progress_turns_by_chat[chat_id] = 0
 
         await asyncio.to_thread(
@@ -2114,6 +2161,21 @@ class Octo:
             )
         correlation_token = None
         correlation_id = correlation_id_var.get()
+        trace_bind_token = None
+        trace_ctx = None
+        trace_started_at_ms = now_ms()
+        trace_status = "ok"
+        trace_output: dict[str, Any] | None = None
+        trace_metadata: dict[str, Any] = {
+            "channel": "ws" if is_ws else "telegram",
+            "message_kind": "heartbeat" if not track_progress else "user",
+            "text_len": len(text),
+            "has_images": bool(images),
+            "has_files": bool(saved_file_paths),
+            "persist_to_memory": persist_to_memory,
+            "track_progress": track_progress,
+            "background_delivery": background_delivery,
+        }
         wants_followup = False
         finalized_visible_reply = False
         if not correlation_id:
@@ -2121,6 +2183,21 @@ class Octo:
             correlation_token = correlation_id_var.set(correlation_id)
 
         try:
+            session_id = f"{'ws' if is_ws else 'chat'}:{chat_id}"
+            if self.trace_sink is not None:
+                trace_ctx = await self.trace_sink.start_trace(
+                    name="octo.turn",
+                    trace_id=correlation_id,
+                    root_trace_id=correlation_id,
+                    session_id=session_id,
+                    chat_id=chat_id,
+                    input={
+                        "text_preview": safe_preview(text, limit=160),
+                        "text_hash": hash_payload(text),
+                    },
+                    metadata=trace_metadata,
+                )
+                trace_bind_token = bind_trace_context(trace_ctx)
             self.mark_user_turn_active(correlation_id)
             if callable(approval_requester):
                 self._approval_requesters[chat_id] = approval_requester
@@ -2132,11 +2209,17 @@ class Octo:
                 await self.memory.add_message(
                     "user",
                     text,
-                    {"chat_id": chat_id, "has_images": bool(images), "heartbeat": not track_progress},
+                    {
+                        "chat_id": chat_id,
+                        "has_images": bool(images),
+                        "heartbeat": not track_progress,
+                    },
                 )
             bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
             if bootstrap_context.files:
-                files_summary = ", ".join([f"{name} ({size} chars)" for name, size in bootstrap_context.files])
+                files_summary = ", ".join(
+                    [f"{name} ({size} chars)" for name, size in bootstrap_context.files]
+                )
                 logger.debug(
                     "Octo bootstrap files",
                     files=files_summary,
@@ -2180,26 +2263,34 @@ class Octo:
             if not track_progress:
                 wants_followup = False
                 if background_delivery:
-                    reply_text = await _normalize_heartbeat_delivery_reply(self.provider, reply_text)
+                    reply_text = await _normalize_heartbeat_delivery_reply(
+                        self.provider, reply_text
+                    )
                 else:
                     reply_text = _coerce_control_plane_reply(reply_text)
             logger.info("Octo response ready")
             if persist_to_memory:
-                await self.memory.add_message("assistant", reply_text, {"chat_id": chat_id, "heartbeat": not track_progress})
+                await self.memory.add_message(
+                    "assistant", reply_text, {"chat_id": chat_id, "heartbeat": not track_progress}
+                )
             if track_progress:
                 reply_norm = _normalize_compact(reply_text)
                 prior_reply = self._last_reply_norm_by_chat.get(chat_id, "")
                 if _is_progress_reply(reply_norm, prior_reply):
                     self._register_progress(chat_id, "assistant_response")
                 else:
-                    self._no_progress_turns_by_chat[chat_id] = int(self._no_progress_turns_by_chat.get(chat_id, 0)) + 1
+                    self._no_progress_turns_by_chat[chat_id] = (
+                        int(self._no_progress_turns_by_chat.get(chat_id, 0)) + 1
+                    )
                 self._last_reply_norm_by_chat[chat_id] = reply_norm
             if wants_followup:
                 self.mark_pending_conversational_closure(correlation_id)
             try:
                 await self.get_context_health_snapshot(chat_id)
             except Exception:
-                logger.debug("Failed to refresh context health snapshot", chat_id=chat_id, exc_info=True)
+                logger.debug(
+                    "Failed to refresh context health snapshot", chat_id=chat_id, exc_info=True
+                )
             if include_wakeup:
                 self.clear_context_wakeup(chat_id)
             if bootstrap_context.hash:
@@ -2221,7 +2312,11 @@ class Octo:
                 await self.memory.add_message(
                     "assistant",
                     delivery.text,
-                    {"chat_id": chat_id, "background_delivery": True, "heartbeat": not track_progress},
+                    {
+                        "chat_id": chat_id,
+                        "background_delivery": True,
+                        "heartbeat": not track_progress,
+                    },
                 )
             if delivery.user_visible and track_progress:
                 self.note_user_visible_delivery(chat_id, delivery.text)
@@ -2232,6 +2327,12 @@ class Octo:
                         "Suppressing worker follow-ups after final in-turn reply",
                         chat_id=chat_id,
                     )
+            trace_output = {
+                "delivery_mode": delivery.mode,
+                "followup_required": delivery.followup_required,
+                "user_visible": delivery.user_visible,
+                "reaction": reaction_emoji,
+            }
             return OctoReply(
                 immediate=delivery.text,
                 followup=None,
@@ -2239,6 +2340,10 @@ class Octo:
                 reaction=reaction_emoji,
                 delivery_mode=delivery.mode,
             )
+        except Exception as exc:
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
+            raise
         finally:
             self.mark_user_turn_inactive(correlation_id)
             if track_progress and not finalized_visible_reply:
@@ -2254,10 +2359,9 @@ class Octo:
                         "Dropped worker follow-up after final in-turn reply",
                         chat_id=chat_id,
                     )
-            pending_followup_work = (
-                self.has_active_workers_for_correlation(correlation_id)
-                or self.has_pending_internal_results_for_correlation(correlation_id)
-            )
+            pending_followup_work = self.has_active_workers_for_correlation(
+                correlation_id
+            ) or self.has_pending_internal_results_for_correlation(correlation_id)
             if wants_followup and pending_followup_work and not finalized_visible_reply:
                 _schedule_worker_followup_flush(self, chat_id, correlation_id)
             else:
@@ -2267,6 +2371,29 @@ class Octo:
                     only_if_created_during_active_turn=True,
                 )
             self.clear_structured_followup_required(correlation_id)
+            if trace_ctx is not None and self.trace_sink is not None:
+                finish_meta = dict(trace_metadata)
+                finish_meta.update(
+                    {
+                        "duration_ms": round(now_ms() - trace_started_at_ms, 2),
+                        "wants_followup": wants_followup,
+                        "finalized_visible_reply": finalized_visible_reply,
+                        "active_workers_for_correlation": self.has_active_workers_for_correlation(
+                            correlation_id
+                        ),
+                        "pending_internal_results": self.has_pending_internal_results_for_correlation(
+                            correlation_id
+                        ),
+                    }
+                )
+                await self.trace_sink.finish_trace(
+                    trace_ctx,
+                    status=trace_status,
+                    output=trace_output,
+                    metadata=finish_meta,
+                )
+            if trace_bind_token is not None:
+                reset_trace_context(trace_bind_token)
             if correlation_token is not None:
                 correlation_id_var.reset(correlation_token)
 
@@ -2309,7 +2436,11 @@ class Octo:
             correlation_id=correlation_id,
             task_signature=task_signature,
         ):
-            logger.warning("Duplicate worker task detected, skipping", worker_id=worker_id, task_prefix=task[:50])
+            logger.warning(
+                "Duplicate worker task detected, skipping",
+                worker_id=worker_id,
+                task_prefix=task[:50],
+            )
             skipped_id = f"skipped-duplicate-{uuid4().hex[:8]}"
             await self._emit_progress(
                 chat_id,
@@ -2407,6 +2538,7 @@ class Octo:
 
             requester = self._approval_requesters.get(chat_id)
             if requester is None and getattr(self.approvals, "bot", None):
+
                 async def _telegram_requester(intent: ActionIntent) -> bool:
                     return await self.approvals.request_approval(chat_id, intent)
 
@@ -2433,10 +2565,15 @@ class Octo:
                     result = await self.runtime.run_task(task_request, approval_requester=requester)
                     worker_record = await asyncio.to_thread(self.store.get_worker, run_id)
                     worker_status = getattr(worker_record, "status", None)
-                    normalized_result_status = str(getattr(result, "status", "completed") or "completed").strip().lower()
+                    normalized_result_status = (
+                        str(getattr(result, "status", "completed") or "completed").strip().lower()
+                    )
                     if worker_status is None and normalized_result_status == "failed":
                         worker_status = "failed"
-                    failed = worker_status in {"failed", "stopped"} or normalized_result_status == "failed"
+                    failed = (
+                        worker_status in {"failed", "stopped"}
+                        or normalized_result_status == "failed"
+                    )
                     if scheduled_task_id and self.scheduler:
                         if not failed:
                             self.scheduler.mark_executed(scheduled_task_id)
@@ -2484,7 +2621,9 @@ class Octo:
                     )
                 except Exception as exc:
                     failed = True
-                    result = WorkerResult(summary=f"Worker error: {exc}", output={"error": str(exc)})
+                    result = WorkerResult(
+                        summary=f"Worker error: {exc}", output={"error": str(exc)}
+                    )
                     await self._emit_progress(
                         chat_id,
                         "failed",
@@ -2606,7 +2745,9 @@ class Octo:
         self._worker_depth[run_id] = spawn_depth
         if parent_worker_id:
             self._worker_children.setdefault(parent_worker_id, set()).add(run_id)
-            self._lineage_children_total[lineage_id] = int(self._lineage_children_total.get(lineage_id, 0)) + 1
+            self._lineage_children_total[lineage_id] = (
+                int(self._lineage_children_total.get(lineage_id, 0)) + 1
+            )
             active = self._lineage_children_active.setdefault(lineage_id, set())
             active.add(run_id)
 
@@ -2628,7 +2769,9 @@ class Octo:
             if not active:
                 self._lineage_children_active.pop(lineage_id, None)
 
-    async def _cleanup_orphan_children(self, *, parent_run_id: str, chat_id: int, reason: str) -> None:
+    async def _cleanup_orphan_children(
+        self, *, parent_run_id: str, chat_id: int, reason: str
+    ) -> None:
         child_ids = sorted(self._worker_children.get(parent_run_id, set()))
         if not child_ids:
             return
@@ -2819,7 +2962,9 @@ def _load_self_queue(workspace_dir: Path, chat_id: int) -> list[dict[str, Any]]:
     return items
 
 
-def _persist_last_opportunities(workspace_dir: Path, chat_id: int, opportunities: list[dict[str, Any]]) -> str:
+def _persist_last_opportunities(
+    workspace_dir: Path, chat_id: int, opportunities: list[dict[str, Any]]
+) -> str:
     memory_dir = workspace_dir / "memory"
     memory_dir.mkdir(parents=True, exist_ok=True)
     path = memory_dir / f"opportunities-{chat_id}.json"
@@ -2860,7 +3005,9 @@ def _persist_context_reset_files(workspace_dir: Path, handoff: dict[str, Any]) -
     audit_md_path = memory_dir / "context-audit.md"
     audit_jsonl_path = memory_dir / "context-audit.jsonl"
 
-    handoff_json_path.write_text(json.dumps(handoff, ensure_ascii=False, indent=2), encoding="utf-8")
+    handoff_json_path.write_text(
+        json.dumps(handoff, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     handoff_md_path.write_text(_render_handoff_markdown(handoff), encoding="utf-8")
     _append_context_audit_markdown(audit_md_path, handoff)
     with audit_jsonl_path.open("a", encoding="utf-8") as handle:

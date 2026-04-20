@@ -5,10 +5,20 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from typing import Any
 
 import httpx
 
 from octopal.infrastructure.config.settings import Settings
+from octopal.infrastructure.observability.base import (
+    TraceSink,
+    bind_trace_context,
+    get_current_trace_context,
+    now_ms,
+    reset_trace_context,
+)
+from octopal.infrastructure.observability.helpers import safe_preview, summarize_exception
+from octopal.infrastructure.observability.noop import NoopTraceSink
 from octopal.infrastructure.providers.base import Message
 
 logger = logging.getLogger(__name__)
@@ -19,8 +29,9 @@ _LOG_MAX_CHARS = 400
 class OpenRouterProvider:
     """OpenRouter-based inference provider."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, trace_sink: TraceSink | None = None) -> None:
         self._settings = settings
+        self._trace_sink = trace_sink or NoopTraceSink()
         self._api_key = settings.openrouter_api_key
         self._base_url = settings.openrouter_base_url.rstrip("/")
         self._model = settings.openrouter_model
@@ -33,6 +44,14 @@ class OpenRouterProvider:
 
         serialized_messages = [_serialize_message(m) for m in messages]
         payload_str = json.dumps({"messages": serialized_messages}, ensure_ascii=False)
+        trace_ctx, trace_token, trace_started_at_ms = await self._start_observability_span(
+            "complete",
+            messages=serialized_messages,
+            tools=None,
+        )
+        trace_status = "ok"
+        trace_output: dict[str, Any] | None = None
+        trace_metadata: dict[str, Any] = {}
 
         logger.debug(
             "OpenRouter request: model=%s, messages=%d, total_chars=%d",
@@ -65,14 +84,28 @@ class OpenRouterProvider:
                 data = response.json()
 
             content = _extract_content(data)
+            trace_output = {"output_chars": len(content)}
             logger.debug("OpenRouter response: %s", _truncate(content))
             return content
         except httpx.HTTPStatusError as exc:
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
             logger.exception("OpenRouter HTTP error: %s", exc.response.status_code)
             raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
         except Exception as exc:
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
             logger.exception("OpenRouter completion failed")
             raise RuntimeError(f"OpenRouter completion failed: {exc}") from exc
+        finally:
+            await self._finish_observability_span(
+                trace_ctx,
+                trace_token,
+                trace_started_at_ms,
+                status=trace_status,
+                output=trace_output,
+                metadata=trace_metadata,
+            )
 
     async def complete_stream(
         self,
@@ -108,6 +141,14 @@ class OpenRouterProvider:
             ensure_ascii=False,
         )
         tool_names = [t.get("function", {}).get("name") for t in tools]
+        trace_ctx, trace_token, trace_started_at_ms = await self._start_observability_span(
+            "complete_with_tools",
+            messages=serialized_messages,
+            tools=tools,
+        )
+        trace_status = "ok"
+        trace_output: dict[str, Any] | None = None
+        trace_metadata: dict[str, Any] = {"tool_choice": tool_choice}
 
         logger.debug(
             "OpenRouter request (tools): model=%s, messages=%d, tools=%s, total_chars=%d",
@@ -156,13 +197,83 @@ class OpenRouterProvider:
                         _truncate(json.dumps(tool_calls, ensure_ascii=False)),
                     )
 
+            trace_output = {
+                "output_chars": len(content),
+                "tool_call_count": len(tool_calls),
+                "tool_call_names": [tc.get("function", {}).get("name") for tc in tool_calls],
+            }
             return {"content": content, "tool_calls": tool_calls}
         except httpx.HTTPStatusError as exc:
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
             logger.exception("OpenRouter HTTP error: %s", exc.response.status_code)
             raise RuntimeError(f"OpenRouter request failed: {exc}") from exc
         except Exception as exc:
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
             logger.exception("OpenRouter completion with tools failed")
             raise RuntimeError(f"OpenRouter completion with tools failed: {exc}") from exc
+        finally:
+            await self._finish_observability_span(
+                trace_ctx,
+                trace_token,
+                trace_started_at_ms,
+                status=trace_status,
+                output=trace_output,
+                metadata=trace_metadata,
+            )
+
+    async def _start_observability_span(
+        self,
+        call_type: str,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> tuple[Any, Any, float | None]:
+        parent_ctx = get_current_trace_context()
+        if parent_ctx is None or self._trace_sink is None:
+            return None, None, None
+        metadata: dict[str, Any] = {
+            "provider_id": "openrouter",
+            "model": self._model,
+            "call_type": call_type,
+            "messages_count": len(messages),
+            "input_chars": sum(
+                len(json.dumps(message, ensure_ascii=False, default=str)) for message in messages
+            ),
+            "tool_count": len(tools or []),
+            "tool_names": [tool.get("function", {}).get("name") for tool in tools or []],
+        }
+        if self._settings.observability_capture_content:
+            metadata["input_preview"] = safe_preview(
+                messages, limit=self._settings.observability_preview_chars
+            )
+        span_ctx = await self._trace_sink.start_span(parent_ctx, name="llm.call", metadata=metadata)
+        token = bind_trace_context(span_ctx)
+        return span_ctx, token, now_ms()
+
+    async def _finish_observability_span(
+        self,
+        span_ctx: Any,
+        token: Any,
+        started_at_ms: float | None,
+        *,
+        status: str,
+        output: dict[str, Any] | None,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        if span_ctx is not None and self._trace_sink is not None:
+            finish_meta = dict(metadata or {})
+            if started_at_ms is not None:
+                finish_meta["duration_ms"] = round(now_ms() - started_at_ms, 2)
+            await self._trace_sink.finish_span(
+                span_ctx,
+                status=status,
+                output=output,
+                metadata=finish_meta,
+            )
+        if token is not None:
+            reset_trace_context(token)
 
 
 def _serialize_message(message: Message | dict) -> dict:

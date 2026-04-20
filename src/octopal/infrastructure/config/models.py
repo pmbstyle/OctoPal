@@ -81,6 +81,17 @@ class SearchConfig(BaseModel):
     firecrawl_api_key: str | None = None
 
 
+class ObservabilityConfig(BaseModel):
+    enabled: bool = False
+    backend: str = "noop"
+    capture_content: bool = False
+    preview_chars: int = 240
+    sample_rate: float = 1.0
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str | None = None
+
+
 class ConnectorCredentials(BaseModel):
     client_id: str | None = None
     client_secret: str | None = None
@@ -150,6 +161,7 @@ class OctopalConfig(BaseModel):
     workers: WorkerRuntimeConfig = Field(default_factory=WorkerRuntimeConfig)
     whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
     search: SearchConfig = Field(default_factory=SearchConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     connectors: ConnectorsConfig = Field(default_factory=ConnectorsConfig)
 
     log_level: str = "INFO"

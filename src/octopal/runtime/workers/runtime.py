@@ -25,6 +25,7 @@ import structlog
 from octopal.infrastructure.config.models import LLMConfig
 from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.mcp.manager import MCPManager
+from octopal.infrastructure.observability.base import TraceSink
 from octopal.infrastructure.store.base import Store
 from octopal.infrastructure.store.models import AuditEvent, WorkerRecord, WorkerTemplateRecord
 from octopal.runtime.housekeeping import remove_tree_with_retries
@@ -91,6 +92,7 @@ class WorkerRuntime:
     settings: Settings
     mcp_manager: MCPManager | None = None
     octo: Any | None = None
+    trace_sink: TraceSink | None = None
     _running: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
     _stop_requests: set[str] = field(default_factory=set)
 
@@ -671,7 +673,11 @@ class WorkerRuntime:
         process: asyncio.subprocess.Process,
         worker_ids: list[str],
     ) -> ChildBatchResume:
-        child_ids = list(dict.fromkeys(str(worker_id).strip() for worker_id in worker_ids if str(worker_id).strip()))
+        child_ids = list(
+            dict.fromkeys(
+                str(worker_id).strip() for worker_id in worker_ids if str(worker_id).strip()
+            )
+        )
         if not child_ids:
             return ChildBatchResume()
 
@@ -680,8 +686,7 @@ class WorkerRuntime:
             self.store.update_worker_result,
             spec.id,
             summary=(
-                f"Waiting for {len(child_ids)} child worker(s) to finish: "
-                + ", ".join(child_ids)
+                f"Waiting for {len(child_ids)} child worker(s) to finish: " + ", ".join(child_ids)
             ),
         )
         await self._append_audit(
@@ -694,7 +699,9 @@ class WorkerRuntime:
 
         while True:
             if self._is_stop_requested(spec.id):
-                raise _WorkerStopRequested(f"Worker {spec.id} stop requested while waiting for children")
+                raise _WorkerStopRequested(
+                    f"Worker {spec.id} stop requested while waiting for children"
+                )
             if process.returncode is not None:
                 raise RuntimeError("Parent worker exited while waiting for child workers")
 

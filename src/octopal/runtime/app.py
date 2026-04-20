@@ -5,6 +5,7 @@ import os
 from octopal.channels.telegram.approvals import ApprovalManager
 from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.mcp.manager import MCPManager
+from octopal.infrastructure.observability import build_trace_sink
 from octopal.infrastructure.providers.litellm_provider import LiteLLMProvider
 from octopal.infrastructure.providers.openai_embeddings import OpenAIEmbeddingsProvider
 from octopal.infrastructure.store.sqlite import SQLiteStore
@@ -25,7 +26,8 @@ def build_octo(settings: Settings) -> Octo:
     os.environ.setdefault("OCTOPAL_WORKSPACE_DIR", str(settings.workspace_dir))
     ensure_skills_layout(settings.workspace_dir)
 
-    provider = LiteLLMProvider(settings)
+    trace_sink = build_trace_sink(settings)
+    provider = LiteLLMProvider(settings, trace_sink=trace_sink)
     store = SQLiteStore(settings)
 
     from octopal.runtime.workers.templates import initialize_templates
@@ -42,6 +44,7 @@ def build_octo(settings: Settings) -> Octo:
         launcher=launcher,
         settings=settings,
         mcp_manager=mcp_manager,
+        trace_sink=trace_sink,
     )
     approvals = ApprovalManager(bot=None)
     embeddings = OpenAIEmbeddingsProvider(settings) if settings.openai_api_key else None
@@ -92,6 +95,7 @@ def build_octo(settings: Settings) -> Octo:
         scheduler=scheduler,
         mcp_manager=mcp_manager,
         connector_manager=connector_manager,
+        trace_sink=trace_sink,
     )
     runtime.octo = octo
     return octo

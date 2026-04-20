@@ -26,7 +26,9 @@ def test_load_settings_uses_user_channel_from_config_json(tmp_path, monkeypatch)
     assert settings.allowed_whatsapp_numbers == "+15551234567"
 
 
-def test_load_settings_defaults_to_empty_telegram_values_without_config_json(tmp_path, monkeypatch) -> None:
+def test_load_settings_defaults_to_empty_telegram_values_without_config_json(
+    tmp_path, monkeypatch
+) -> None:
     monkeypatch.chdir(tmp_path)
 
     settings = load_settings()
@@ -95,3 +97,35 @@ def test_load_settings_migrates_legacy_connector_settings_shape(tmp_path, monkey
     assert google.auth.authorized_services == ["gmail"]
     assert google.auth.refresh_token == "legacy-refresh-token"
     assert google.auth.access_token == "legacy-access-token"
+
+
+def test_load_settings_syncs_observability_config(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "observability": {
+                    "enabled": True,
+                    "backend": "langfuse",
+                    "capture_content": True,
+                    "preview_chars": 512,
+                    "sample_rate": 0.25,
+                    "langfuse_public_key": "pk-test",
+                    "langfuse_secret_key": "sk-test",
+                    "langfuse_host": "http://localhost:3000",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    settings = load_settings()
+
+    assert settings.observability_enabled is True
+    assert settings.observability_backend == "langfuse"
+    assert settings.observability_capture_content is True
+    assert settings.observability_preview_chars == 512
+    assert settings.observability_sample_rate == 0.25
+    assert settings.langfuse_public_key == "pk-test"
+    assert settings.langfuse_secret_key == "sk-test"
+    assert settings.langfuse_host == "http://localhost:3000"

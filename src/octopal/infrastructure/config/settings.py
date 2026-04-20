@@ -38,8 +38,12 @@ class Settings(BaseSettings):
     litellm_caching: bool = Field(False, alias="LITELLM_CACHING")
     litellm_max_concurrency: int = Field(2, alias="LITELLM_MAX_CONCURRENCY")
     litellm_rate_limit_max_retries: int = Field(6, alias="LITELLM_RATE_LIMIT_MAX_RETRIES")
-    litellm_rate_limit_base_delay_seconds: float = Field(1.0, alias="LITELLM_RATE_LIMIT_BASE_DELAY_SECONDS")
-    litellm_rate_limit_max_delay_seconds: float = Field(30.0, alias="LITELLM_RATE_LIMIT_MAX_DELAY_SECONDS")
+    litellm_rate_limit_base_delay_seconds: float = Field(
+        1.0, alias="LITELLM_RATE_LIMIT_BASE_DELAY_SECONDS"
+    )
+    litellm_rate_limit_max_delay_seconds: float = Field(
+        30.0, alias="LITELLM_RATE_LIMIT_MAX_DELAY_SECONDS"
+    )
 
     # OpenRouter Settings (used via LiteLLM with openrouter/ model prefix)
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
@@ -60,12 +64,20 @@ class Settings(BaseSettings):
 
     brave_api_key: str | None = Field(default=None, alias="BRAVE_API_KEY")
     firecrawl_api_key: str | None = Field(default=None, alias="FIRECRAWL_API_KEY")
+    observability_enabled: bool = Field(False, alias="OCTOPAL_OBSERVABILITY_ENABLED")
+    observability_backend: str = Field("noop", alias="OCTOPAL_OBSERVABILITY_BACKEND")
+    observability_capture_content: bool = Field(
+        False, alias="OCTOPAL_OBSERVABILITY_CAPTURE_CONTENT"
+    )
+    observability_preview_chars: int = Field(240, alias="OCTOPAL_OBSERVABILITY_PREVIEW_CHARS")
+    observability_sample_rate: float = Field(1.0, alias="OCTOPAL_OBSERVABILITY_SAMPLE_RATE")
+    langfuse_public_key: str | None = Field(default=None, alias="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: str | None = Field(default=None, alias="LANGFUSE_SECRET_KEY")
+    langfuse_host: str | None = Field(default=None, alias="LANGFUSE_HOST")
 
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     openai_base_url: str = Field("https://api.openai.com/v1", alias="OPENAI_BASE_URL")
-    openai_embed_model: str = Field(
-        "text-embedding-3-small", alias="OPENAI_EMBED_MODEL"
-    )
+    openai_embed_model: str = Field("text-embedding-3-small", alias="OPENAI_EMBED_MODEL")
 
     log_level: str = Field("INFO", alias="OCTOPAL_LOG_LEVEL")
     state_dir: Path = Field(Path("data"), alias="OCTOPAL_STATE_DIR")
@@ -253,6 +265,16 @@ def _sync_settings_from_config(settings: Settings, config: OctopalConfig) -> Non
     # Search
     updates["brave_api_key"] = config.search.brave_api_key
     updates["firecrawl_api_key"] = config.search.firecrawl_api_key
+
+    # Observability
+    updates["observability_enabled"] = config.observability.enabled
+    updates["observability_backend"] = config.observability.backend
+    updates["observability_capture_content"] = config.observability.capture_content
+    updates["observability_preview_chars"] = config.observability.preview_chars
+    updates["observability_sample_rate"] = config.observability.sample_rate
+    updates["langfuse_public_key"] = config.observability.langfuse_public_key
+    updates["langfuse_secret_key"] = config.observability.langfuse_secret_key
+    updates["langfuse_host"] = config.observability.langfuse_host
 
     # Common
     updates["log_level"] = config.log_level
