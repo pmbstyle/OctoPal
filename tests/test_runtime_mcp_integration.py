@@ -834,3 +834,29 @@ def test_runtime_mcp_bridge_guard_rejects_tool_not_in_spec() -> None:
 
     assert error is not None
     assert "is not allowed by this worker spec" in error
+
+
+def test_runtime_mcp_bridge_guard_allows_remote_tool_name_match() -> None:
+    spec = type(
+        "_Spec",
+        (),
+        {
+            "mcp_tools": [
+                {
+                    "name": "mcp_AgentMail_list_threads",
+                    "server_id": "AgentMail",
+                    "remote_tool_name": "list_threads",
+                    "permission": "mcp_exec",
+                }
+            ],
+            "effective_permissions": ["mcp_exec"],
+        },
+    )()
+
+    error = _validate_worker_mcp_tool_call(
+        spec=spec,
+        server_id="AgentMail",
+        tool_name="list_threads",
+    )
+
+    assert error is None
