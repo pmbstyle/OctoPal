@@ -19,7 +19,11 @@ from octopal.infrastructure.observability.base import (
     now_ms,
     reset_trace_context,
 )
-from octopal.infrastructure.observability.helpers import summarize_exception
+from octopal.infrastructure.observability.helpers import (
+    hash_payload,
+    safe_preview,
+    summarize_exception,
+)
 from octopal.infrastructure.providers.base import InferenceProvider, Message
 from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.octo.delivery import resolve_user_delivery
@@ -1502,36 +1506,88 @@ async def _handle_octo_tool_call(
     except Exception:
         args = {}
 
-    logger.debug("Octo tool call", tool_name=name, args=args)
-    for spec in tools:
-        if spec.name == name:
-            try:
-                if spec.is_async:
-                    import inspect
+    trace_sink = getattr(ctx.get("octo"), "trace_sink", None)
+    parent_trace_ctx = get_current_trace_context()
+    tool_trace_ctx = None
+    tool_trace_token = None
+    tool_started_at_ms = now_ms()
+    tool_trace_status = "ok"
+    tool_trace_output: dict[str, Any] | None = None
+    tool_trace_metadata: dict[str, Any] = {
+        "tool_name": str(name or ""),
+        "args_hash": hash_payload(args),
+        "args_preview": safe_preview(args, limit=240),
+    }
+    if trace_sink is not None and parent_trace_ctx is not None:
+        tool_trace_ctx = await trace_sink.start_span(
+            parent_trace_ctx,
+            name="octo.tool",
+            metadata=tool_trace_metadata,
+        )
+        tool_trace_token = bind_trace_context(tool_trace_ctx)
 
-                    result = spec.handler(args, ctx)
-                    if inspect.isawaitable(result):
-                        result = await result
-                else:
-                    result = await asyncio.to_thread(spec.handler, args, ctx)
-            except Exception as exc:
-                logger.exception("Octo tool execution failed", tool_name=name)
-                return {"error": f"Tool execution failed: {name}: {exc}"}, {
-                    "timed_out": False,
-                    "had_error": True,
+    try:
+        logger.debug("Octo tool call", tool_name=name, args=args)
+        for spec in tools:
+            if spec.name == name:
+                try:
+                    if spec.is_async:
+                        import inspect
+
+                        result = spec.handler(args, ctx)
+                        if inspect.isawaitable(result):
+                            result = await result
+                    else:
+                        result = await asyncio.to_thread(spec.handler, args, ctx)
+                except Exception as exc:
+                    tool_trace_status = "error"
+                    tool_trace_metadata.update(summarize_exception(exc))
+                    logger.exception("Octo tool execution failed", tool_name=name)
+                    return {"error": f"Tool execution failed: {name}: {exc}"}, {
+                        "timed_out": False,
+                        "had_error": True,
+                    }
+                tool_trace_output = {
+                    "result_preview": safe_preview(result, limit=240),
+                    "result_size": len(str(result)),
                 }
-            logger.debug(
-                "Octo tool result", tool_name=name, result_preview=f"{str(result)[:200]}..."
-            )
-            return result, {"timed_out": False, "had_error": False}
-    blocked_payload = _resolve_octo_policy_block(tool_name=str(name or ""), ctx=ctx)
-    if blocked_payload is not None:
-        return blocked_payload, {
-            "timed_out": False,
-            "had_error": True,
-            "error_type": "policy_block",
+                logger.debug(
+                    "Octo tool result", tool_name=name, result_preview=f"{str(result)[:200]}..."
+                )
+                return result, {"timed_out": False, "had_error": False}
+        blocked_payload = _resolve_octo_policy_block(tool_name=str(name or ""), ctx=ctx)
+        if blocked_payload is not None:
+            tool_trace_status = "error"
+            tool_trace_metadata["policy_blocked"] = True
+            tool_trace_output = {
+                "result_preview": safe_preview(blocked_payload, limit=240),
+                "result_size": len(str(blocked_payload)),
+            }
+            return blocked_payload, {
+                "timed_out": False,
+                "had_error": True,
+                "error_type": "policy_block",
+            }
+        tool_trace_status = "error"
+        tool_trace_metadata["error_type"] = "unknown_tool"
+        unknown_payload = {"error": f"Unknown tool: {name}"}
+        tool_trace_output = {
+            "result_preview": safe_preview(unknown_payload, limit=240),
+            "result_size": len(str(unknown_payload)),
         }
-    return {"error": f"Unknown tool: {name}"}, {"timed_out": False, "had_error": True}
+        return unknown_payload, {"timed_out": False, "had_error": True}
+    finally:
+        if tool_trace_ctx is not None and trace_sink is not None:
+            finish_meta = dict(tool_trace_metadata)
+            finish_meta["duration_ms"] = round(now_ms() - tool_started_at_ms, 2)
+            await trace_sink.finish_span(
+                tool_trace_ctx,
+                status=tool_trace_status,
+                output=tool_trace_output,
+                metadata=finish_meta,
+            )
+        if tool_trace_token is not None:
+            reset_trace_context(tool_trace_token)
 
 
 def _record_octo_tool_call(

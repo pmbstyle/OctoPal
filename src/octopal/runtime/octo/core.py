@@ -22,6 +22,7 @@ from octopal.infrastructure.mcp.manager import MCPManager
 from octopal.infrastructure.observability.base import (
     TraceSink,
     bind_trace_context,
+    get_current_trace_context,
     now_ms,
     reset_trace_context,
 )
@@ -2413,12 +2414,46 @@ class Octo:
         spawn_depth: int = 0,
         allowed_paths: list[str] | None = None,
     ) -> dict[str, Any]:
+        trace_sink = self.trace_sink
+        parent_trace_ctx = get_current_trace_context()
+        dispatch_trace_ctx = None
+        dispatch_started_at_ms = now_ms()
+        dispatch_trace_status = "ok"
+        dispatch_trace_output: dict[str, Any] | None = None
+        dispatch_trace_metadata: dict[str, Any] = {
+            "worker_template_id": worker_id,
+            "task_preview": safe_preview(task, limit=240),
+            "chat_id": chat_id,
+            "scheduled_task_id": scheduled_task_id,
+            "parent_worker_id": parent_worker_id,
+            "lineage_id": lineage_id,
+            "root_task_id": root_task_id,
+            "spawn_depth": spawn_depth,
+            "allowed_paths_count": len(allowed_paths or []),
+        }
+        if trace_sink is not None and parent_trace_ctx is not None:
+            dispatch_trace_ctx = await trace_sink.start_span(
+                parent_trace_ctx,
+                name="worker.dispatch",
+                metadata=dispatch_trace_metadata,
+            )
         if parent_worker_id:
             violation = self._check_child_spawn_limits(
                 lineage_id=lineage_id,
                 spawn_depth=spawn_depth,
             )
             if violation:
+                dispatch_trace_status = "error"
+                dispatch_trace_metadata["rejected_reason"] = violation
+                if dispatch_trace_ctx is not None and trace_sink is not None:
+                    finish_meta = dict(dispatch_trace_metadata)
+                    finish_meta["duration_ms"] = round(now_ms() - dispatch_started_at_ms, 2)
+                    await trace_sink.finish_span(
+                        dispatch_trace_ctx,
+                        status=dispatch_trace_status,
+                        output={"status": "rejected"},
+                        metadata=finish_meta,
+                    )
                 return {
                     "status": "rejected",
                     "reason": violation,
@@ -2448,6 +2483,19 @@ class Octo:
                 "Duplicate worker request detected; skipping duplicate launch.",
                 {"worker_template_id": worker_id},
             )
+            dispatch_trace_output = {
+                "status": "skipped_duplicate",
+                "run_id": skipped_id,
+            }
+            if dispatch_trace_ctx is not None and trace_sink is not None:
+                finish_meta = dict(dispatch_trace_metadata)
+                finish_meta["duration_ms"] = round(now_ms() - dispatch_started_at_ms, 2)
+                await trace_sink.finish_span(
+                    dispatch_trace_ctx,
+                    status=dispatch_trace_status,
+                    output=dispatch_trace_output,
+                    metadata=finish_meta,
+                )
             return {
                 "status": "skipped_duplicate",
                 "run_id": skipped_id,
@@ -2474,6 +2522,16 @@ class Octo:
                 task=task,
                 tools=tools,
                 scheduled_task_id=scheduled_task_id,
+            )
+            dispatch_trace_metadata.update(
+                {
+                    "run_id": run_id,
+                    "lineage_id": effective_lineage_id,
+                    "root_task_id": effective_root_task_id,
+                    "spawn_depth": effective_spawn_depth,
+                    "timeout_seconds": resolved_timeout_seconds,
+                    "timeout_source": timeout_meta.get("source"),
+                }
             )
             if scheduled_task_id and self.scheduler:
                 scheduled_task = self.scheduler.get_task(scheduled_task_id)
@@ -2545,7 +2603,13 @@ class Octo:
                 requester = _telegram_requester
 
             async def _runner() -> None:
+                nonlocal dispatch_trace_output, dispatch_trace_status
                 failed = False
+                runner_trace_token = (
+                    bind_trace_context(dispatch_trace_ctx)
+                    if dispatch_trace_ctx is not None
+                    else None
+                )
                 try:
                     await self._emit_progress(
                         chat_id,
@@ -2598,6 +2662,19 @@ class Octo:
                         progress_text = f"Worker {run_id} {normalized_status}."
                     else:
                         self._register_progress(chat_id, "worker_completed")
+                    dispatch_trace_output = {
+                        "status": progress_state,
+                        "worker_status": worker_status,
+                        "result_status": normalized_result_status,
+                        "summary_preview": safe_preview(
+                            getattr(result, "summary", None), limit=240
+                        ),
+                        "summary_len": len(str(getattr(result, "summary", "") or "")),
+                        "questions_count": len(getattr(result, "questions", []) or []),
+                        "tools_used": list(getattr(result, "tools_used", []) or []),
+                    }
+                    if failed:
+                        dispatch_trace_status = "error"
                     await self._emit_progress(
                         chat_id,
                         progress_state,
@@ -2624,6 +2701,15 @@ class Octo:
                     result = WorkerResult(
                         summary=f"Worker error: {exc}", output={"error": str(exc)}
                     )
+                    dispatch_trace_status = "error"
+                    dispatch_trace_metadata.update(summarize_exception(exc))
+                    dispatch_trace_output = {
+                        "status": "failed",
+                        "summary_preview": safe_preview(result.summary, limit=240),
+                        "summary_len": len(result.summary),
+                        "questions_count": 0,
+                        "tools_used": [],
+                    }
                     await self._emit_progress(
                         chat_id,
                         "failed",
@@ -2645,6 +2731,17 @@ class Octo:
                         correlation_id=correlation_id,
                         task_signature=task_signature,
                     )
+                    if dispatch_trace_ctx is not None and trace_sink is not None:
+                        finish_meta = dict(dispatch_trace_metadata)
+                        finish_meta["duration_ms"] = round(now_ms() - dispatch_started_at_ms, 2)
+                        await trace_sink.finish_span(
+                            dispatch_trace_ctx,
+                            status=dispatch_trace_status,
+                            output=dispatch_trace_output,
+                            metadata=finish_meta,
+                        )
+                    if runner_trace_token is not None:
+                        reset_trace_context(runner_trace_token)
                 if failed:
                     await self._cleanup_orphan_children(
                         parent_run_id=run_id,
@@ -2689,6 +2786,12 @@ class Octo:
                     "timeout_seconds": resolved_timeout_seconds,
                 },
             )
+            dispatch_trace_output = {
+                "status": "started",
+                "run_id": run_id,
+                "lineage_id": effective_lineage_id,
+                "timeout_seconds": resolved_timeout_seconds,
+            }
             return {
                 "status": "started",
                 "run_id": run_id,
@@ -2704,6 +2807,17 @@ class Octo:
                 correlation_id=correlation_id,
                 task_signature=task_signature,
             )
+            dispatch_trace_status = "error"
+            dispatch_trace_output = dispatch_trace_output or {"status": "failed"}
+            if dispatch_trace_ctx is not None and trace_sink is not None:
+                finish_meta = dict(dispatch_trace_metadata)
+                finish_meta["duration_ms"] = round(now_ms() - dispatch_started_at_ms, 2)
+                await trace_sink.finish_span(
+                    dispatch_trace_ctx,
+                    status=dispatch_trace_status,
+                    output=dispatch_trace_output,
+                    metadata=finish_meta,
+                )
             raise
 
     def _check_child_spawn_limits(self, *, lineage_id: str | None, spawn_depth: int) -> str | None:
