@@ -19,7 +19,7 @@ class LangfuseTraceSink:
         sample_rate: float,
         tracing_enabled: bool = True,
     ) -> None:
-        from langfuse.otel import Langfuse
+        from langfuse import Langfuse
 
         self._client = Langfuse(
             public_key=public_key,
@@ -94,6 +94,7 @@ class LangfuseTraceSink:
             name=name,
             metadata=payload,
             as_type=_observation_type_for_name(name),
+            parent_span_id=ctx.span_id,
         )
         return child
 
@@ -154,8 +155,15 @@ class LangfuseTraceSink:
         input: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
         as_type: str = "span",
+        parent_span_id: str | None = None,
     ) -> None:
-        cm = self._client.start_as_current_observation(
+        cm_factory = self._client.start_as_current_observation
+        if parent_span_id is not None:
+            parent_handle = self._active_handles.get(parent_span_id)
+            if parent_handle is not None:
+                _, parent_observation = parent_handle
+                cm_factory = parent_observation.start_as_current_observation
+        cm = cm_factory(
             name=name,
             as_type=as_type,
             input=input,
