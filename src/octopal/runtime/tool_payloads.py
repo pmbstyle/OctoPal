@@ -80,24 +80,6 @@ _EXACT_TOOL_BUDGET_OVERRIDES: dict[str, ToolRenderBudget] = {
     "browser_extract": _CONTENT_HEAVY_BUDGET,
     "markdown_new_fetch": _CONTENT_HEAVY_BUDGET,
     "web_fetch": _CONTENT_HEAVY_BUDGET,
-    "mcp_agentmail_get_thread": ToolRenderBudget(
-        max_chars=64_000,
-        max_container_items=96,
-        max_depth=_MAX_DEPTH,
-        max_string_chars=32_000,
-    ),
-    "mcp_agentmail_list_threads": ToolRenderBudget(
-        max_chars=64_000,
-        max_container_items=128,
-        max_depth=_MAX_DEPTH,
-        max_string_chars=24_000,
-    ),
-    "mcp_agentmail_get_attachment": ToolRenderBudget(
-        max_chars=64_000,
-        max_container_items=96,
-        max_depth=_MAX_DEPTH,
-        max_string_chars=40_000,
-    ),
 }
 
 
