@@ -38,6 +38,10 @@ from octopal.runtime.tool_loop import (
     _resolve_tool_loop_thresholds,
 )
 from octopal.runtime.tool_payloads import render_tool_result_for_llm
+from octopal.runtime.worker_result_payloads import (
+    ROUTE_WORKER_OUTPUT_CONTEXT_BUDGET,
+    summarize_worker_output_for_context,
+)
 from octopal.runtime.workers.contracts import WorkerResult
 from octopal.tools.diagnostics import ToolResolutionReport, resolve_tool_diagnostics
 from octopal.tools.registry import ToolPolicy, ToolPolicyPipelineStep, ToolSpec
@@ -986,31 +990,21 @@ def _summarize_worker_artifacts(result: WorkerResult) -> _WorkerArtifactSummary:
 def _build_worker_result_payload(
     worker_id: str, task_text: str, result: WorkerResult
 ) -> dict[str, Any]:
-    output_summary = result.output
-    output_truncated = False
-    output_preview_text = ""
-    available_keys: list[str] = []
     artifact_summary = _summarize_worker_artifacts(result)
-
-    if isinstance(result.output, dict):
-        available_keys = list(result.output.keys())
-        serialized_output = json.dumps(result.output, ensure_ascii=False, default=str)
-        if len(serialized_output) > 64000:
-            output_summary = {"available_keys": available_keys[:200]}
-            output_preview_text = render_tool_result_for_llm(
-                result.output,
-                max_chars=48000,
-            ).text
-            output_truncated = True
+    output_context = summarize_worker_output_for_context(
+        result.output,
+        budget=ROUTE_WORKER_OUTPUT_CONTEXT_BUDGET,
+    )
 
     payload = {
         "worker_id": worker_id,
         "task": task_text,
         "summary": result.summary,
-        "output": output_summary,
-        "output_preview_text": output_preview_text,
-        "output_truncated": output_truncated,
-        "available_keys": available_keys,
+        "output": output_context.output,
+        "output_preview_text": output_context.output_preview_text,
+        "output_truncated": output_context.output_truncated,
+        "available_keys": output_context.available_keys,
+        "output_chars": output_context.output_chars,
         "artifact_summary": artifact_summary.to_payload(),
         "questions": result.questions,
         "knowledge_proposals": [p.model_dump() for p in result.knowledge_proposals],

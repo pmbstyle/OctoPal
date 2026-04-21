@@ -33,6 +33,16 @@ def test_render_tool_result_parses_json_strings_before_compacting() -> None:
     assert "__octopal_compaction__" in rendered.text
 
 
+def test_render_tool_result_parses_small_json_string_without_counting_as_compacted() -> None:
+    raw = '{"returncode":0,"stdout":"ok","stderr":""}'
+
+    rendered = render_tool_result_for_llm(raw, tool_name="exec_run")
+
+    assert rendered.was_compacted is False
+    assert '"returncode": 0' in rendered.text
+    assert "__octopal_compaction__" not in rendered.text
+
+
 def test_render_tool_result_preserves_raw_fs_read_json_text() -> None:
     raw = '{\n  "id": "demo_worker",\n  "name": "Demo Worker"\n}'
 
@@ -93,6 +103,40 @@ def test_render_tool_result_default_budget_still_compacts_large_fetch_snippet() 
 
     assert rendered.was_compacted is True
     assert "truncated" in rendered.text
+
+
+def test_render_tool_result_preserves_larger_mcp_thread_payload() -> None:
+    payload = {
+        "thread_id": "thr_123",
+        "messages": [
+            {
+                "id": f"msg_{idx}",
+                "subject": "Forward Future",
+                "body": "x" * 1800,
+            }
+            for idx in range(12)
+        ],
+    }
+
+    rendered = render_tool_result_for_llm(payload, tool_name="mcp_agentmail_get_thread")
+
+    assert rendered.was_compacted is False
+    assert len(rendered.text) > 20_000
+    assert "truncated" not in rendered.text
+
+
+def test_render_tool_result_preserves_more_items_for_content_heavy_mcp_lists() -> None:
+    payload = {
+        "threads": [
+            {"id": f"thr_{idx}", "snippet": "hello world", "subject": f"Subject {idx}"}
+            for idx in range(60)
+        ]
+    }
+
+    rendered = render_tool_result_for_llm(payload, tool_name="mcp_agentmail_list_threads")
+
+    assert rendered.was_compacted is False
+    assert "more list items omitted" not in rendered.text
 
 
 def test_route_compacts_tool_messages_before_next_tool_round(monkeypatch) -> None:

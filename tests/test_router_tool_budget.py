@@ -249,6 +249,7 @@ def test_build_worker_result_payload_keeps_preview_text_for_large_output() -> No
     assert payload["output_truncated"] is True
     assert payload["output"] == {"available_keys": ["report_path", "durable_paths", "results"]}
     assert payload["output_preview_text"]
+    assert payload["output_chars"] > 64000
     assert "report_path" in payload["output_preview_text"]
     assert "results" in payload["output_preview_text"]
     assert payload["artifact_summary"]["primary_report_path"] == "reports/out.md"

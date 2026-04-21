@@ -284,3 +284,61 @@ def test_synthesize_worker_results_blocks_synthesis_when_nothing_completed() -> 
     assert result["followup_required"] is True
     assert result["completed_count"] == 0
     assert "Do not synthesize yet" in result["synthesis"]
+
+
+def test_synthesize_worker_results_compacts_large_child_outputs() -> None:
+    now = datetime.now(UTC)
+    large_output = {
+        "report_path": "reports/out.md",
+        "results": [{"idx": idx, "body": "x" * 1200} for idx in range(10)],
+        "_telemetry": {"tool_result_truncations": 3},
+    }
+    records = {
+        "w1": WorkerRecord(
+            id="w1",
+            status="completed",
+            task="one",
+            granted_caps=[],
+            created_at=now,
+            updated_at=now,
+            summary="Fetched web docs",
+            output=large_output,
+            error=None,
+            tools_used=[],
+        ),
+        "w2": WorkerRecord(
+            id="w2",
+            status="completed",
+            task="two",
+            granted_caps=[],
+            created_at=now,
+            updated_at=now,
+            summary="Summarized findings",
+            output=large_output,
+            error=None,
+            tools_used=[],
+        ),
+    }
+
+    class _Store:
+        def get_worker(self, worker_id: str):
+            return records.get(worker_id)
+
+    class _Octo:
+        store = _Store()
+
+    payload = _tool_synthesize_worker_results(
+        {"worker_ids": ["w1", "w2"]},
+        {"octo": _Octo()},
+    )
+    result = json.loads(payload)
+
+    assert result["status"] == "ready"
+    assert result["completed_count"] == 2
+    for item in result["ready_results"]:
+        assert item["output_truncated"] is True
+        assert item["output"] == {"available_keys": ["report_path", "results", "_telemetry"]}
+        assert item["output_preview_text"]
+        assert "report_path" in item["output_preview_text"]
+        assert "_telemetry" not in item["output_preview_text"]
+        assert item["output_chars"] > 6000

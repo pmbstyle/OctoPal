@@ -10,13 +10,34 @@ _MAX_RENDER_CHARS = 32_000
 _MAX_CONTAINER_ITEMS = 48
 _MAX_DEPTH = 8
 _MAX_STRING_CHARS = 16_000
-_CONTENT_HEAVY_MAX_RENDER_CHARS = 48_000
-_CONTENT_HEAVY_MAX_STRING_CHARS = 24_000
+_CONTENT_HEAVY_MAX_RENDER_CHARS = 64_000
+_CONTENT_HEAVY_MAX_CONTAINER_ITEMS = 96
+_CONTENT_HEAVY_MAX_STRING_CHARS = 32_000
 _CONTENT_HEAVY_TOOL_NAMES = {
     "browser_extract",
     "markdown_new_fetch",
     "web_fetch",
 }
+_CONTENT_HEAVY_TOOL_TOKENS = (
+    "fetch",
+    "extract",
+    "read",
+    "download",
+    "transcript",
+    "thread",
+    "message",
+    "comment",
+    "post",
+    "article",
+    "document",
+    "email",
+)
+_CONTENT_HEAVY_TOOL_ACTION_PREFIXES = (
+    "get_",
+    "list_",
+    "search_",
+    "batch_get_",
+)
 _RAW_TEXT_TOOL_NAMES = {
     "fs_read",
     "manage_canon",
@@ -51,10 +72,15 @@ _DEFAULT_BUDGET = ToolRenderBudget(
 )
 _CONTENT_HEAVY_BUDGET = ToolRenderBudget(
     max_chars=_CONTENT_HEAVY_MAX_RENDER_CHARS,
-    max_container_items=_MAX_CONTAINER_ITEMS,
+    max_container_items=_CONTENT_HEAVY_MAX_CONTAINER_ITEMS,
     max_depth=_MAX_DEPTH,
     max_string_chars=_CONTENT_HEAVY_MAX_STRING_CHARS,
 )
+_EXACT_TOOL_BUDGET_OVERRIDES: dict[str, ToolRenderBudget] = {
+    "browser_extract": _CONTENT_HEAVY_BUDGET,
+    "markdown_new_fetch": _CONTENT_HEAVY_BUDGET,
+    "web_fetch": _CONTENT_HEAVY_BUDGET,
+}
 
 
 def render_tool_result_for_llm(
@@ -96,7 +122,9 @@ def render_tool_result_for_llm(
 
 def _budget_for_tool(tool_name: str | None, *, max_chars: int | None) -> ToolRenderBudget:
     normalized_name = str(tool_name or "").strip().lower()
-    base_budget = _CONTENT_HEAVY_BUDGET if normalized_name in _CONTENT_HEAVY_TOOL_NAMES else _DEFAULT_BUDGET
+    base_budget = _EXACT_TOOL_BUDGET_OVERRIDES.get(normalized_name)
+    if base_budget is None:
+        base_budget = _CONTENT_HEAVY_BUDGET if _is_content_heavy_tool_name(normalized_name) else _DEFAULT_BUDGET
     if max_chars is None:
         return base_budget
     return ToolRenderBudget(
@@ -110,6 +138,24 @@ def _budget_for_tool(tool_name: str | None, *, max_chars: int | None) -> ToolRen
 def _should_preserve_raw_text(tool_name: str | None) -> bool:
     normalized_name = str(tool_name or "").strip().lower()
     return normalized_name in _RAW_TEXT_TOOL_NAMES
+
+
+def _is_content_heavy_tool_name(normalized_name: str) -> bool:
+    if not normalized_name:
+        return False
+    if normalized_name in _CONTENT_HEAVY_TOOL_NAMES:
+        return True
+
+    candidate = normalized_name
+    if candidate.startswith("mcp_"):
+        _, _, candidate = candidate.partition("_")
+        if "_" in candidate:
+            candidate = candidate.split("_", 1)[1]
+
+    if candidate.startswith(_CONTENT_HEAVY_TOOL_ACTION_PREFIXES):
+        return any(token in candidate for token in _CONTENT_HEAVY_TOOL_TOKENS)
+
+    return False
 
 
 def _raw_text_field_names_for_tool(tool_name: str | None) -> frozenset[str]:
@@ -177,13 +223,13 @@ def _compact_tool_value(
             return "", False
         parsed = _parse_json_like_string(stripped)
         if parsed is not None:
-            compacted, _changed = _compact_tool_value(
+            compacted, changed = _compact_tool_value(
                 parsed,
                 depth=depth + 1,
                 budget=budget,
                 raw_text_field_names=raw_text_field_names,
             )
-            return compacted, True
+            return compacted, changed
         if len(stripped) <= budget.max_string_chars:
             return stripped, False
         return _truncate_string(stripped, max_chars=budget.max_string_chars), True
