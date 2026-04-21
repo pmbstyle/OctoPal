@@ -61,7 +61,7 @@ _DEFAULT_MAX_TOOL_COUNT = 64
 _MIN_TOOL_COUNT_ON_OVERFLOW = 12
 _CATALOG_TOOL_EXPANSION_LIMIT = 12
 _CATALOG_MCP_TOOL_EXPANSION_LIMIT = 1
-_DEFAULT_INITIAL_OCTO_TOOL_COUNT = 32
+_DEFAULT_INITIAL_OCTO_TOOL_COUNT = 36
 _MANDATORY_OCTO_TOOL_NAMES = {
     "octo_context_health",
     "check_schedule",
@@ -82,6 +82,10 @@ _PRIORITY_TOOL_NAMES = {
     "octo_context_reset",
     "octo_context_health",
     "tool_catalog_search",
+    "octo_self_queue_add",
+    "octo_self_queue_list",
+    "octo_self_queue_take",
+    "octo_self_queue_update",
     "octo_experiment_log",
     "check_schedule",
     "start_worker",
@@ -127,6 +131,7 @@ _INITIAL_OCTO_TOOL_NAMES = _ALWAYS_INCLUDE_TOOL_NAMES | {
     "manage_canon",
     "search_canon",
     "octo_opportunity_scan",
+    "octo_self_queue_add",
     "octo_self_queue_list",
     "octo_self_queue_take",
     "octo_self_queue_update",

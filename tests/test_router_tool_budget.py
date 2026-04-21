@@ -78,6 +78,10 @@ def test_get_octo_tools_uses_small_core_and_defers_mcp_tools(monkeypatch) -> Non
     assert "tool_catalog_search" in names
     assert "start_worker" in names
     assert "fs_read" in names
+    assert "octo_self_queue_add" in names
+    assert "octo_self_queue_list" in names
+    assert "octo_self_queue_take" in names
+    assert "octo_self_queue_update" in names
     assert "mcp_demo_tool_0" not in names
     assert "mcp_demo_tool_0" in all_names
     assert len(tool_specs) < len(all_names)
