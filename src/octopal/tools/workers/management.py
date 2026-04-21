@@ -8,6 +8,10 @@ from datetime import timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from octopal.runtime.worker_result_payloads import (
+    SYNTHESIZE_WORKER_OUTPUT_CONTEXT_BUDGET,
+    summarize_worker_output_for_context,
+)
 from octopal.tools.registry import ToolSpec
 from octopal.utils import utc_now
 
@@ -959,10 +963,18 @@ def _tool_synthesize_worker_results(args: dict[str, object], ctx: dict[str, obje
         status = str(worker.status)
         if status == "completed":
             summary = str(worker.summary or "").strip()
+            output_context = summarize_worker_output_for_context(
+                worker.output,
+                budget=SYNTHESIZE_WORKER_OUTPUT_CONTEXT_BUDGET,
+            )
             item = {
                 "worker_id": wid,
                 "summary": summary,
-                "output": worker.output,
+                "output": output_context.output,
+                "output_truncated": output_context.output_truncated,
+                "output_preview_text": output_context.output_preview_text,
+                "available_keys": output_context.available_keys,
+                "output_chars": output_context.output_chars,
                 **_worker_timing_fields(worker),
             }
             completed.append(item)
