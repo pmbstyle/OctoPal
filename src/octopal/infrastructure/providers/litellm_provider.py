@@ -16,6 +16,15 @@ from litellm import acompletion
 
 from octopal.infrastructure.config.models import LLMConfig
 from octopal.infrastructure.config.settings import Settings
+from octopal.infrastructure.observability.base import (
+    TraceSink,
+    bind_trace_context,
+    get_current_trace_context,
+    now_ms,
+    reset_trace_context,
+)
+from octopal.infrastructure.observability.helpers import safe_preview, summarize_exception
+from octopal.infrastructure.observability.noop import NoopTraceSink
 from octopal.infrastructure.providers.base import Message
 from octopal.infrastructure.providers.profile_resolver import resolve_litellm_profile
 
@@ -38,9 +47,13 @@ class LiteLLMProvider:
         settings: Settings,
         model: str | None = None,
         config: LLMConfig | None = None,
+        trace_sink: TraceSink | None = None,
     ) -> None:
         self._settings = settings
-        self._profile = resolve_litellm_profile(settings, model_override=model, config_override=config)
+        self._trace_sink = trace_sink or NoopTraceSink()
+        self._profile = resolve_litellm_profile(
+            settings, model_override=model, config_override=config
+        )
         self._model = self._profile.model
         self._api_base = (self._profile.api_base or "").rstrip("/") or None
         self._api_key = self._profile.api_key
@@ -80,10 +93,16 @@ class LiteLLMProvider:
             logger.info("LiteLLM caching is enabled.")
 
         max_concurrency = max(1, int(settings.litellm_max_concurrency))
-        self._semaphore = self._semaphores_by_limit.setdefault(max_concurrency, asyncio.Semaphore(max_concurrency))
+        self._semaphore = self._semaphores_by_limit.setdefault(
+            max_concurrency, asyncio.Semaphore(max_concurrency)
+        )
         self._rate_limit_max_retries = max(0, int(settings.litellm_rate_limit_max_retries))
-        self._rate_limit_base_delay = max(0.1, float(settings.litellm_rate_limit_base_delay_seconds))
-        self._rate_limit_max_delay = max(self._rate_limit_base_delay, float(settings.litellm_rate_limit_max_delay_seconds))
+        self._rate_limit_base_delay = max(
+            0.1, float(settings.litellm_rate_limit_base_delay_seconds)
+        )
+        self._rate_limit_max_delay = max(
+            self._rate_limit_base_delay, float(settings.litellm_rate_limit_max_delay_seconds)
+        )
 
     @property
     def provider_id(self) -> str:
@@ -132,6 +151,14 @@ class LiteLLMProvider:
 
         serialized_messages = _normalize_plain_messages([_serialize_message(m) for m in messages])
         payload_str = json.dumps({"messages": serialized_messages}, ensure_ascii=False)
+        trace_ctx, trace_token, trace_started_at_ms = await self._start_observability_span(
+            "complete",
+            messages=serialized_messages,
+            tools=None,
+        )
+        trace_status = "ok"
+        trace_output: dict[str, Any] | None = None
+        trace_metadata: dict[str, Any] = {}
 
         logger.debug(
             "LiteLLM request: model=%s, messages=%d, total_chars=%d",
@@ -155,9 +182,23 @@ class LiteLLMProvider:
                 **request_kwargs,
             )
             content = _extract_content(response)
+            usage = _extract_usage(response)
+            trace_output = {
+                "output_chars": len(content),
+                "usage": usage,
+            }
+            trace_metadata.update(
+                {
+                    "finish_reason": _extract_finish_reason(response),
+                    "usage_input_tokens": usage.get("prompt_tokens"),
+                    "usage_output_tokens": usage.get("completion_tokens"),
+                }
+            )
             logger.debug("LiteLLM response: %s", _truncate(content))
             return content
         except Exception as exc:
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
             if _looks_like_illegal_messages_error(exc):
                 retry_messages = _build_strict_retry_messages(serialized_messages)
                 logger.warning(
@@ -169,6 +210,20 @@ class LiteLLMProvider:
                         **request_kwargs,
                     )
                     content = _extract_content(response)
+                    usage = _extract_usage(response)
+                    trace_status = "ok"
+                    trace_output = {
+                        "output_chars": len(content),
+                        "usage": usage,
+                    }
+                    trace_metadata.update(
+                        {
+                            "strict_retry": True,
+                            "finish_reason": _extract_finish_reason(response),
+                            "usage_input_tokens": usage.get("prompt_tokens"),
+                            "usage_output_tokens": usage.get("completion_tokens"),
+                        }
+                    )
                     logger.debug("LiteLLM response (strict retry): %s", _truncate(content))
                     return content
                 except Exception:
@@ -190,6 +245,15 @@ class LiteLLMProvider:
                 ) from exc
             logger.exception("LiteLLM completion failed")
             raise RuntimeError(f"LiteLLM completion failed: {exc}") from exc
+        finally:
+            await self._finish_observability_span(
+                trace_ctx,
+                trace_token,
+                trace_started_at_ms,
+                status=trace_status,
+                output=trace_output,
+                metadata=trace_metadata,
+            )
 
     async def complete_stream(
         self,
@@ -206,7 +270,17 @@ class LiteLLMProvider:
             )
 
         serialized_messages = _normalize_plain_messages([_serialize_message(m) for m in messages])
-        payload_str = json.dumps({"messages": serialized_messages, "stream": True}, ensure_ascii=False)
+        payload_str = json.dumps(
+            {"messages": serialized_messages, "stream": True}, ensure_ascii=False
+        )
+        trace_ctx, trace_token, trace_started_at_ms = await self._start_observability_span(
+            "complete_stream",
+            messages=serialized_messages,
+            tools=None,
+        )
+        trace_status = "ok"
+        trace_output: dict[str, Any] | None = None
+        trace_metadata: dict[str, Any] = {}
         logger.debug(
             "LiteLLM stream request: model=%s, messages=%d, total_chars=%d",
             self._model,
@@ -224,7 +298,9 @@ class LiteLLMProvider:
         )
         request_kwargs["stream"] = True
         try:
-            response = await self._acompletion_with_resilience(messages=serialized_messages, **request_kwargs)
+            response = await self._acompletion_with_resilience(
+                messages=serialized_messages, **request_kwargs
+            )
             if not hasattr(response, "__aiter__"):
                 # Provider did not return an async stream; gracefully fall back to non-stream.
                 text = _extract_content(response)
@@ -233,6 +309,7 @@ class LiteLLMProvider:
                         await on_partial(text)
                     except Exception:
                         logger.debug("LiteLLM partial callback failed", exc_info=True)
+                trace_output = {"output_chars": len(text)}
                 return text
 
             accumulated = ""
@@ -247,14 +324,26 @@ class LiteLLMProvider:
                     logger.debug("LiteLLM partial callback failed", exc_info=True)
 
             logger.debug("LiteLLM streamed response: %s", _truncate(accumulated))
+            trace_output = {"output_chars": len(accumulated)}
             return accumulated
         except Exception as exc:
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
             logger.error(
                 "LiteLLM stream payload shape on error: %s",
                 _summarize_messages(serialized_messages),
             )
             logger.exception("LiteLLM stream completion failed")
             raise RuntimeError(f"LiteLLM stream completion failed: {exc}") from exc
+        finally:
+            await self._finish_observability_span(
+                trace_ctx,
+                trace_token,
+                trace_started_at_ms,
+                status=trace_status,
+                output=trace_output,
+                metadata=trace_metadata,
+            )
 
     async def complete_with_tools(
         self,
@@ -274,10 +363,22 @@ class LiteLLMProvider:
         serialized_messages = [_serialize_message(m) for m in messages]
         normalized_tools = _sanitize_tools_for_provider(tools, self._profile.provider_id)
         payload_str = json.dumps(
-            {"messages": serialized_messages, "tools": normalized_tools, "tool_choice": tool_choice},
+            {
+                "messages": serialized_messages,
+                "tools": normalized_tools,
+                "tool_choice": tool_choice,
+            },
             ensure_ascii=False,
         )
         tool_names = [t.get("function", {}).get("name") for t in normalized_tools]
+        trace_ctx, trace_token, trace_started_at_ms = await self._start_observability_span(
+            "complete_with_tools",
+            messages=serialized_messages,
+            tools=normalized_tools,
+        )
+        trace_status = "ok"
+        trace_output: dict[str, Any] | None = None
+        trace_metadata: dict[str, Any] = {"tool_choice": tool_choice}
 
         logger.debug(
             "LiteLLM request (tools): model=%s, messages=%d, tools=%s, total_chars=%d",
@@ -301,11 +402,13 @@ class LiteLLMProvider:
                 request_kwargs,
                 provider_id=self._profile.provider_id,
             )
-            response, response_format_mode = await self._complete_with_tools_adaptive_response_format(
-                messages=serialized_messages,
-                tools=normalized_tools,
-                tool_choice=tool_choice,
-                request_kwargs=request_kwargs,
+            response, response_format_mode = (
+                await self._complete_with_tools_adaptive_response_format(
+                    messages=serialized_messages,
+                    tools=normalized_tools,
+                    tool_choice=tool_choice,
+                    request_kwargs=request_kwargs,
+                )
             )
 
             content = _extract_content(response)
@@ -331,8 +434,23 @@ class LiteLLMProvider:
                         _truncate(json.dumps(tool_calls, ensure_ascii=False)),
                     )
 
+            trace_output = {
+                "output_chars": len(content),
+                "tool_call_count": len(tool_calls),
+                "tool_call_names": [tc.get("function", {}).get("name") for tc in tool_calls],
+            }
+            trace_metadata.update(
+                {
+                    "usage_input_tokens": usage.get("prompt_tokens"),
+                    "usage_output_tokens": usage.get("completion_tokens"),
+                    "finish_reason": _extract_finish_reason(response),
+                    "response_format_mode": response_format_mode,
+                }
+            )
             return {"content": content, "tool_calls": tool_calls, "usage": usage}
         except Exception as exc:
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
             err_str = str(exc)
             logger.error(
                 "LiteLLM completion-with-tools payload shape on error: messages=%s tool_count=%s",
@@ -340,7 +458,9 @@ class LiteLLMProvider:
                 len(tools),
             )
             if "finish_reason" in err_str and "abort" in err_str:
-                logger.error("LLM provider returned invalid 'abort' finish_reason. This is a known compatibility issue with some providers.")
+                logger.error(
+                    "LLM provider returned invalid 'abort' finish_reason. This is a known compatibility issue with some providers."
+                )
                 raise RuntimeError(
                     "LLM provider (z.ai) returned an invalid response code ('abort'). "
                     "This usually means the model was cut off or is having internal issues. "
@@ -348,6 +468,67 @@ class LiteLLMProvider:
                 ) from exc
             logger.exception("LiteLLM completion with tools failed")
             raise RuntimeError(f"LiteLLM completion with tools failed: {exc}") from exc
+        finally:
+            await self._finish_observability_span(
+                trace_ctx,
+                trace_token,
+                trace_started_at_ms,
+                status=trace_status,
+                output=trace_output,
+                metadata=trace_metadata,
+            )
+
+    async def _start_observability_span(
+        self,
+        call_type: str,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None,
+    ) -> tuple[Any, Any, float | None]:
+        parent_ctx = get_current_trace_context()
+        if parent_ctx is None or self._trace_sink is None:
+            return None, None, None
+        metadata: dict[str, Any] = {
+            "provider_id": self._profile.provider_id,
+            "model": self._model,
+            "call_type": call_type,
+            "messages_count": len(messages),
+            "input_chars": sum(
+                len(json.dumps(message, ensure_ascii=False, default=str)) for message in messages
+            ),
+            "tool_count": len(tools or []),
+            "tool_names": [tool.get("function", {}).get("name") for tool in tools or []],
+        }
+        if self._settings.observability_capture_content:
+            metadata["input_preview"] = safe_preview(
+                messages, limit=self._settings.observability_preview_chars
+            )
+        span_ctx = await self._trace_sink.start_span(parent_ctx, name="llm.call", metadata=metadata)
+        token = bind_trace_context(span_ctx)
+        return span_ctx, token, now_ms()
+
+    async def _finish_observability_span(
+        self,
+        span_ctx: Any,
+        token: Any,
+        started_at_ms: float | None,
+        *,
+        status: str,
+        output: dict[str, Any] | None,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        if span_ctx is not None and self._trace_sink is not None:
+            finish_meta = dict(metadata or {})
+            if started_at_ms is not None:
+                finish_meta["duration_ms"] = round(now_ms() - started_at_ms, 2)
+            await self._trace_sink.finish_span(
+                span_ctx,
+                status=status,
+                output=output,
+                metadata=finish_meta,
+            )
+        if token is not None:
+            reset_trace_context(token)
 
     async def _complete_with_tools_adaptive_response_format(
         self,
@@ -360,7 +541,9 @@ class LiteLLMProvider:
         requested_response_format = request_kwargs.get("response_format")
         route_key = self._tool_response_format_key()
         preferred_mode = self._tool_response_format_modes.get(route_key)
-        candidates = _response_format_fallback_modes(requested_response_format, preferred_mode=preferred_mode)
+        candidates = _response_format_fallback_modes(
+            requested_response_format, preferred_mode=preferred_mode
+        )
         last_exc: Exception | None = None
 
         for index, mode in enumerate(candidates):
@@ -390,7 +573,9 @@ class LiteLLMProvider:
 
         if last_exc is not None:
             raise last_exc
-        raise RuntimeError("LiteLLM completion with tools failed before issuing a provider request.")
+        raise RuntimeError(
+            "LiteLLM completion with tools failed before issuing a provider request."
+        )
 
     async def _acompletion_with_resilience(self, **kwargs: object) -> Any:
         attempt = 0
@@ -429,7 +614,9 @@ class LiteLLMProvider:
             except Exception as exc:
                 if not _is_closed_client_error(exc):
                     raise
-                logger.warning("LiteLLM client was closed mid-request; retrying once with a fresh completion call")
+                logger.warning(
+                    "LiteLLM client was closed mid-request; retrying once with a fresh completion call"
+                )
                 response = await acompletion(
                     model=self._model,
                     api_base=self._api_base,
@@ -524,7 +711,9 @@ def _coerce_content_text(content: Any) -> str:
 
 def _looks_like_illegal_messages_error(exc: Exception) -> bool:
     err = str(exc).lower()
-    return "messages parameter is illegal" in err or "'code': '1214'" in err or '"code": "1214"' in err
+    return (
+        "messages parameter is illegal" in err or "'code': '1214'" in err or '"code": "1214"' in err
+    )
 
 
 def _is_rate_limit_error(exc: Exception) -> bool:
@@ -535,7 +724,7 @@ def _is_rate_limit_error(exc: Exception) -> bool:
         "rate limit",
         "error code: 429",
         "status code 429",
-        "http_code\":\"529\"",
+        'http_code":"529"',
         "status code 529",
         "server error '529",
         "overloaded_error",
@@ -546,7 +735,10 @@ def _is_rate_limit_error(exc: Exception) -> bool:
 
 def _is_closed_client_error(exc: Exception) -> bool:
     err = str(exc).lower()
-    return "client has been closed" in err or "cannot send a request, as the client has been closed" in err
+    return (
+        "client has been closed" in err
+        or "cannot send a request, as the client has been closed" in err
+    )
 
 
 def _extract_retry_after_seconds(exc: Exception) -> float | None:
@@ -697,6 +889,22 @@ def _extract_usage(response: Any) -> dict[str, int]:
         return {}
 
 
+def _extract_finish_reason(response: Any) -> str | None:
+    try:
+        choices = getattr(response, "choices", None)
+        if choices is None and isinstance(response, dict):
+            choices = response.get("choices")
+        if not choices:
+            return None
+        first = choices[0]
+        finish_reason = getattr(first, "finish_reason", None)
+        if finish_reason is None and isinstance(first, dict):
+            finish_reason = first.get("finish_reason")
+        return str(finish_reason) if finish_reason is not None else None
+    except Exception:
+        return None
+
+
 def _build_request_kwargs(kwargs: dict[str, object], **defaults: object) -> dict[str, object]:
     request_kwargs: dict[str, object] = {
         "temperature": defaults["temperature"],
@@ -820,7 +1028,9 @@ def _flatten_schema_union_for_minimax(variants: list[Any]) -> dict[str, Any] | N
         flattened = {
             "type": "object",
             "properties": merged_properties,
-            "additionalProperties": sanitized_bool_from_variants(object_variants, "additionalProperties", True),
+            "additionalProperties": sanitized_bool_from_variants(
+                object_variants, "additionalProperties", True
+            ),
         }
         required = [key for key, count in required_counts.items() if count == len(object_variants)]
         if required:

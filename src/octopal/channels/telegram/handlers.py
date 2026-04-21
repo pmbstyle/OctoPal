@@ -22,11 +22,12 @@ from octopal.channels.telegram.access import is_allowed_chat, parse_allowed_chat
 from octopal.channels.telegram.approvals import ApprovalManager
 from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.logging import correlation_id_var
-from octopal.runtime.metrics import update_component_gauges
-from octopal.runtime.metrics import read_metrics_snapshot
-from octopal.runtime.octo_status import build_octo_status
+from octopal.infrastructure.observability.base import TraceSink
+from octopal.infrastructure.observability.helpers import safe_preview, summarize_exception
+from octopal.runtime.metrics import read_metrics_snapshot, update_component_gauges
 from octopal.runtime.octo.core import Octo, OctoReply
 from octopal.runtime.octo.delivery import resolve_user_delivery
+from octopal.runtime.octo_status import build_octo_status
 from octopal.runtime.pending_turns import PendingTurnAggregator
 from octopal.runtime.state import update_last_message
 from octopal.utils import (
@@ -45,6 +46,9 @@ logger = structlog.get_logger(__name__)
 class QueuedMessage(NamedTuple):
     text: str
     reply_to_message_id: int | None = None
+    delivery_source: str = "telegram"
+    correlation_id: str | None = None
+    trace_sink: TraceSink | None = None
 
 
 _CHAT_LOCKS: dict[int, asyncio.Lock] = {}
@@ -58,6 +62,7 @@ _SEND_IDLE_TIMEOUT_SECONDS = 300.0
 _INBOUND_MESSAGE_DEDUP_TTL_SECONDS = 300.0
 _INBOUND_PAYLOAD_DEDUP_TTL_SECONDS = 120.0
 _TELEGRAM_PARSE_MODE: str | None = None
+_TELEGRAM_TRACE_SINK: TraceSink | None = None
 _PENDING_TURNS: PendingTurnAggregator | None = None
 _RECENT_INBOUND_MESSAGE_IDS: dict[tuple[int, int], float] = {}
 _RECENT_INBOUND_PAYLOADS: dict[tuple[int, int | str, str], float] = {}
@@ -82,11 +87,7 @@ def _prune_recent_inbound_messages(now: float | None = None) -> None:
         return
     current = time.monotonic() if now is None else now
     cutoff = current - _INBOUND_MESSAGE_DEDUP_TTL_SECONDS
-    expired = [
-        key
-        for key, seen_at in _RECENT_INBOUND_MESSAGE_IDS.items()
-        if seen_at < cutoff
-    ]
+    expired = [key for key, seen_at in _RECENT_INBOUND_MESSAGE_IDS.items() if seen_at < cutoff]
     for key in expired:
         _RECENT_INBOUND_MESSAGE_IDS.pop(key, None)
 
@@ -108,11 +109,7 @@ def _prune_recent_inbound_payloads(now: float | None = None) -> None:
         return
     current = time.monotonic() if now is None else now
     cutoff = current - _INBOUND_PAYLOAD_DEDUP_TTL_SECONDS
-    expired = [
-        key
-        for key, seen_at in _RECENT_INBOUND_PAYLOADS.items()
-        if seen_at < cutoff
-    ]
+    expired = [key for key, seen_at in _RECENT_INBOUND_PAYLOADS.items() if seen_at < cutoff]
     for key in expired:
         _RECENT_INBOUND_PAYLOADS.pop(key, None)
 
@@ -123,9 +120,13 @@ def _build_inbound_message_fingerprint(
     attachment_ids: list[str] | None = None,
 ) -> str:
     normalized_text = re.sub(r"\s+", " ", (text or "").strip()).casefold()
-    normalized_photos = [photo_id.strip() for photo_id in (photo_ids or []) if photo_id and photo_id.strip()]
+    normalized_photos = [
+        photo_id.strip() for photo_id in (photo_ids or []) if photo_id and photo_id.strip()
+    ]
     normalized_attachments = [
-        attachment_id.strip() for attachment_id in (attachment_ids or []) if attachment_id and attachment_id.strip()
+        attachment_id.strip()
+        for attachment_id in (attachment_ids or [])
+        if attachment_id and attachment_id.strip()
     ]
     return (
         f"text={normalized_text}|photos={'|'.join(normalized_photos)}|"
@@ -188,7 +189,9 @@ def _build_telegram_media_artifacts(
     )
     if _is_telegram_image_attachment(file_name, mime_type):
         normalized_mime = str(mime_type or "").strip().lower() or "image/jpeg"
-        return [f"data:{normalized_mime};base64,{base64.b64encode(binary).decode('utf-8')}"], [saved_path]
+        return [f"data:{normalized_mime};base64,{base64.b64encode(binary).decode('utf-8')}"], [
+            saved_path
+        ]
     return [], [saved_path]
 
 
@@ -209,8 +212,9 @@ def _is_duplicate_inbound_payload(chat_id: int, sender_id: int | None, fingerpri
 def register_handlers(
     dp: Dispatcher, octo: Octo, approvals: ApprovalManager, settings: Settings, bot: Bot
 ) -> None:
-    global _TELEGRAM_PARSE_MODE, _TYPING_LOCK, _PENDING_TURNS
+    global _TELEGRAM_PARSE_MODE, _TELEGRAM_TRACE_SINK, _TYPING_LOCK, _PENDING_TURNS
     _TELEGRAM_PARSE_MODE = _normalize_parse_mode(settings.telegram_parse_mode)
+    _TELEGRAM_TRACE_SINK = octo.trace_sink
     if _TYPING_LOCK is None:
         _TYPING_LOCK = asyncio.Lock()
     _PENDING_TURNS = PendingTurnAggregator(
@@ -241,7 +245,9 @@ def register_handlers(
     ) -> None:
         logger.info("Worker progress event", chat_id=chat_id, state=state, text=text)
 
-    async def _internal_worker_event_send(chat_id: int, event: str, payload: dict[str, Any]) -> None:
+    async def _internal_worker_event_send(
+        chat_id: int, event: str, payload: dict[str, Any]
+    ) -> None:
         logger.info("Worker event", chat_id=chat_id, event=event, payload=payload)
 
     async def _internal_typing_control(chat_id: int, active: bool) -> None:
@@ -252,7 +258,9 @@ def register_handlers(
                 if count == 1:
                     stop_event = asyncio.Event()
                     _TYPING_STOP_EVENTS[chat_id] = stop_event
-                    _TYPING_TASKS[chat_id] = asyncio.create_task(_typing_loop_by_id(bot, chat_id, stop_event))
+                    _TYPING_TASKS[chat_id] = asyncio.create_task(
+                        _typing_loop_by_id(bot, chat_id, stop_event)
+                    )
             else:
                 count = _TYPING_REFS.get(chat_id, 0) - 1
                 if count <= 0:
@@ -398,7 +406,10 @@ def register_handlers(
             )
             return
         text = message.text or message.caption or ""
-        photo_ids = [str(getattr(photo, "file_unique_id", "") or "").strip() for photo in (message.photo or [])]
+        photo_ids = [
+            str(getattr(photo, "file_unique_id", "") or "").strip()
+            for photo in (message.photo or [])
+        ]
         attachment_ids = [
             str(getattr(getattr(message, field, None), "file_unique_id", "") or "").strip()
             for field in ("document", "video", "audio", "voice", "animation")
@@ -428,7 +439,12 @@ def register_handlers(
             try:
                 # Use the largest available photo size
                 photo = message.photo[-1]
-                logger.debug("Downloading photo", file_id=photo.file_id, width=photo.width, height=photo.height)
+                logger.debug(
+                    "Downloading photo",
+                    file_id=photo.file_id,
+                    width=photo.width,
+                    height=photo.height,
+                )
 
                 with io.BytesIO() as buffer:
                     await bot.download(photo, destination=buffer)
@@ -493,7 +509,7 @@ def register_handlers(
                     await octo.memory.add_message(
                         "user",
                         f"[SILENT LOG] {clean_text}",
-                        {"chat_id": message.chat.id, "silent": True, "has_images": bool(images)}
+                        {"chat_id": message.chat.id, "silent": True, "has_images": bool(images)},
                     )
                     # We don't store images deep in memory yet, but we acknowledge receipt.
                     try:
@@ -517,7 +533,9 @@ def register_handlers(
     async def handle_callback(query: CallbackQuery) -> None:
         query_chat_id = query.message.chat.id if query.message and query.message.chat else None
         if query_chat_id is None or not is_allowed_chat(query_chat_id, allowed_chat_ids):
-            logger.warning("Rejected Telegram callback from unauthorized chat", chat_id=query_chat_id)
+            logger.warning(
+                "Rejected Telegram callback from unauthorized chat", chat_id=query_chat_id
+            )
             await query.answer("Unauthorized", show_alert=True)
             return
         data = query.data or ""
@@ -536,57 +554,155 @@ def register_handlers(
                 await query.message.edit_reply_markup(reply_markup=None)
 
 
-async def _send_chunked(bot: Bot, chat_id: int, text: str, reply_to_message_id: int | None = None, limit: int = 4000) -> None:
+async def _send_chunked(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_to_message_id: int | None = None,
+    limit: int = 4000,
+    *,
+    delivery_source: str = "telegram",
+    correlation_id: str | None = None,
+    trace_sink: TraceSink | None = None,
+) -> None:
     chunks = _chunk_text(text, limit)
+    chunk_count = len(chunks)
     for i, chunk in enumerate(chunks):
         # Only the first chunk should be a reply to the original message
         rid = reply_to_message_id if i == 0 else None
-        await _send_message_safe(bot, chat_id, chunk, reply_to_message_id=rid)
+        await _send_message_safe(
+            bot,
+            chat_id,
+            chunk,
+            reply_to_message_id=rid,
+            delivery_source=delivery_source,
+            correlation_id=correlation_id,
+            trace_sink=trace_sink,
+            chunk_index=i,
+            chunk_count=chunk_count,
+        )
 
 
-async def _send_message_safe(bot: Bot, chat_id: int, text: str, reply_to_message_id: int | None = None) -> None:
-    sanitized = sanitize_user_facing_text(strip_reaction_tags(text))
-    if not sanitized:
-        logger.debug("Suppressed empty message after Telegram sanitization", chat_id=chat_id)
-        return
-
-    preferred_parse_mode = _TELEGRAM_PARSE_MODE or "MarkdownV2"
-    outbound = sanitized
-
-    if preferred_parse_mode == "MarkdownV2":
-        outbound = _prepare_markdown_v2(sanitized)
-    elif preferred_parse_mode == "HTML":
-        outbound = escape_html(sanitized)
+async def _send_message_safe(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_to_message_id: int | None = None,
+    *,
+    delivery_source: str = "telegram",
+    correlation_id: str | None = None,
+    trace_sink: TraceSink | None = None,
+    chunk_index: int = 0,
+    chunk_count: int = 1,
+) -> None:
+    trace_started_at_ms = time.perf_counter() * 1000.0
+    trace_ctx = None
+    trace_status = "ok"
+    trace_output: dict[str, Any] | None = None
+    trace_metadata: dict[str, Any] = {
+        "delivery_channel": "telegram",
+        "delivery_source": delivery_source,
+        "correlation_id": correlation_id,
+        "chunk_index": chunk_index,
+        "chunk_count": chunk_count,
+        "reply_to_message_id": reply_to_message_id,
+        "text_preview": safe_preview(text, limit=240),
+        "text_len": len(text or ""),
+    }
+    if trace_sink is not None:
+        trace_id = f"channel-delivery-{uuid.uuid4().hex}"
+        root_trace_id = str(correlation_id or trace_id)
+        trace_ctx = await trace_sink.start_trace(
+            name="channel.delivery",
+            trace_id=trace_id,
+            root_trace_id=root_trace_id,
+            session_id=f"chat:{chat_id}",
+            chat_id=chat_id,
+            metadata=trace_metadata,
+        )
 
     try:
-        await bot.send_message(
-            chat_id,
-            outbound,
-            parse_mode=preferred_parse_mode,
-            reply_to_message_id=reply_to_message_id,
-        )
-    except TelegramBadRequest as exc:
-        logger.warning(
-            "Telegram parse failed; retrying with HTML fallback (parse_mode=%s, error=%s)",
-            preferred_parse_mode,
-            exc,
-        )
+        sanitized = sanitize_user_facing_text(strip_reaction_tags(text))
+        trace_metadata["sanitized_len"] = len(sanitized or "")
+        if not sanitized:
+            trace_output = {"status": "suppressed", "reason": "empty_after_sanitize"}
+            logger.debug("Suppressed empty message after Telegram sanitization", chat_id=chat_id)
+            return
+
+        preferred_parse_mode = _TELEGRAM_PARSE_MODE or "MarkdownV2"
+        outbound = sanitized
+
+        if preferred_parse_mode == "MarkdownV2":
+            outbound = _prepare_markdown_v2(sanitized)
+        elif preferred_parse_mode == "HTML":
+            outbound = escape_html(sanitized)
+
         try:
             await bot.send_message(
                 chat_id,
-                escape_html(sanitized),
-                parse_mode="HTML",
+                outbound,
+                parse_mode=preferred_parse_mode,
                 reply_to_message_id=reply_to_message_id,
             )
-        except TelegramBadRequest as html_exc:
+            trace_output = {
+                "status": "sent",
+                "parse_mode": preferred_parse_mode,
+                "fallback_used": False,
+            }
+        except TelegramBadRequest as exc:
+            trace_metadata["fallback_parse_mode"] = "HTML"
+            trace_metadata["initial_parse_mode"] = preferred_parse_mode
             logger.warning(
-                "Telegram HTML parse failed; retrying without parse_mode (error=%s)",
-                html_exc,
+                "Telegram parse failed; retrying with HTML fallback (parse_mode=%s, error=%s)",
+                preferred_parse_mode,
+                exc,
             )
-            await bot.send_message(chat_id, sanitized, reply_to_message_id=reply_to_message_id)
+            try:
+                await bot.send_message(
+                    chat_id,
+                    escape_html(sanitized),
+                    parse_mode="HTML",
+                    reply_to_message_id=reply_to_message_id,
+                )
+                trace_output = {
+                    "status": "sent",
+                    "parse_mode": "HTML",
+                    "fallback_used": True,
+                }
+            except TelegramBadRequest as html_exc:
+                trace_metadata["fallback_parse_mode_2"] = "plain_text"
+                logger.warning(
+                    "Telegram HTML parse failed; retrying without parse_mode (error=%s)",
+                    html_exc,
+                )
+                await bot.send_message(chat_id, sanitized, reply_to_message_id=reply_to_message_id)
+                trace_output = {
+                    "status": "sent",
+                    "parse_mode": None,
+                    "fallback_used": True,
+                }
+    except Exception as exc:
+        trace_status = "error"
+        trace_metadata.update(summarize_exception(exc))
+        trace_output = {"status": "failed"}
+        raise
+    finally:
+        if trace_ctx is not None and trace_sink is not None:
+            finish_meta = dict(trace_metadata)
+            finish_meta["duration_ms"] = round(
+                (time.perf_counter() * 1000.0) - trace_started_at_ms, 2
+            )
+            await trace_sink.finish_trace(
+                trace_ctx,
+                status=trace_status,
+                output=trace_output,
+                metadata=finish_meta,
+            )
 
 
-async def _send_file_safe(bot: Bot, chat_id: int, file_path: str, caption: str | None = None) -> None:
+async def _send_file_safe(
+    bot: Bot, chat_id: int, file_path: str, caption: str | None = None
+) -> None:
     clean_caption = sanitize_user_facing_text(strip_reaction_tags(caption or "")) or None
     input_file = FSInputFile(file_path)
     media_kind = _detect_telegram_media_kind(file_path)
@@ -639,11 +755,22 @@ def _detect_telegram_media_kind(file_path: str) -> str:
     return "document"
 
 
-async def _enqueue_send(bot: Bot, chat_id: int, text: str, reply_to_message_id: int | None = None) -> None:
+async def _enqueue_send(
+    bot: Bot,
+    chat_id: int,
+    text: str,
+    reply_to_message_id: int | None = None,
+    *,
+    delivery_source: str = "telegram",
+    correlation_id: str | None = None,
+    trace_sink: TraceSink | None = None,
+) -> None:
     decision = resolve_user_delivery(text)
     if not decision.user_visible:
         logger.debug("Suppressed control response before queueing", chat_id=chat_id)
         return
+    active_trace_sink = trace_sink or _TELEGRAM_TRACE_SINK
+    active_correlation_id = correlation_id or (str(correlation_id_var.get() or "").strip() or None)
 
     queue = _CHAT_QUEUES.get(chat_id)
     if not queue:
@@ -655,7 +782,15 @@ async def _enqueue_send(bot: Bot, chat_id: int, text: str, reply_to_message_id: 
         _CHAT_SEND_TASKS[chat_id] = asyncio.create_task(_sender_loop(bot, chat_id, queue))
     _publish_runtime_metrics()
 
-    await queue.put(QueuedMessage(text=decision.text, reply_to_message_id=reply_to_message_id))
+    await queue.put(
+        QueuedMessage(
+            text=decision.text,
+            reply_to_message_id=reply_to_message_id,
+            delivery_source=delivery_source,
+            correlation_id=active_correlation_id,
+            trace_sink=active_trace_sink,
+        )
+    )
 
 
 async def _sender_loop(bot: Bot, chat_id: int, queue: asyncio.Queue[QueuedMessage]) -> None:
@@ -668,7 +803,15 @@ async def _sender_loop(bot: Bot, chat_id: int, queue: asyncio.Queue[QueuedMessag
             break
 
         try:
-            await _send_chunked(bot, chat_id, msg.text, reply_to_message_id=msg.reply_to_message_id)
+            await _send_chunked(
+                bot,
+                chat_id,
+                msg.text,
+                reply_to_message_id=msg.reply_to_message_id,
+                delivery_source=msg.delivery_source,
+                correlation_id=msg.correlation_id,
+                trace_sink=msg.trace_sink,
+            )
         except Exception:
             logger.exception("Failed to send queued message")
         finally:

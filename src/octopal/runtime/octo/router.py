@@ -13,6 +13,17 @@ from typing import Any
 
 import structlog
 
+from octopal.infrastructure.observability.base import (
+    bind_trace_context,
+    get_current_trace_context,
+    now_ms,
+    reset_trace_context,
+)
+from octopal.infrastructure.observability.helpers import (
+    hash_payload,
+    safe_preview,
+    summarize_exception,
+)
 from octopal.infrastructure.providers.base import InferenceProvider, Message
 from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.octo.delivery import resolve_user_delivery
@@ -157,11 +168,7 @@ class _WorkerArtifactSummary:
 
 def _is_vision_tool_compatibility_error(exc: Exception) -> bool:
     err = str(exc).lower()
-    return (
-        "invalid api parameter" in err
-        or "'code': '1210'" in err
-        or '"code": "1210"' in err
-    )
+    return "invalid api parameter" in err or "'code': '1210'" in err or '"code": "1210"' in err
 
 
 def _is_invalid_tool_payload_error(exc: Exception) -> bool:
@@ -214,6 +221,28 @@ async def route_or_reply(
 ) -> str:
     """Core routing logic: decide whether to use tools or reply to user."""
     # Internal chat_id (<= 0) should not trigger typing indicators.
+    trace_sink = getattr(octo, "trace_sink", None)
+    parent_trace_ctx = get_current_trace_context()
+    routing_trace_ctx = None
+    routing_trace_token = None
+    routing_trace_started_ms = now_ms()
+    routing_trace_status = "ok"
+    routing_trace_output: dict[str, Any] | None = None
+    routing_trace_metadata: dict[str, Any] = {
+        "internal_followup": internal_followup,
+        "show_typing": show_typing,
+        "include_wakeup": include_wakeup,
+        "has_images": bool(images),
+        "saved_file_paths_count": len(saved_file_paths or []),
+        "route_mode": "unknown",
+    }
+    if trace_sink is not None and parent_trace_ctx is not None:
+        routing_trace_ctx = await trace_sink.start_span(
+            parent_trace_ctx,
+            name="octo.routing",
+            metadata=routing_trace_metadata,
+        )
+        routing_trace_token = bind_trace_context(routing_trace_ctx)
     if chat_id > 0 and show_typing:
         await octo.set_typing(chat_id, True)
 
@@ -236,6 +265,16 @@ async def route_or_reply(
             available_tool_count=available_count,
             deferred_tool_count=deferred_count,
         )
+        if routing_trace_ctx is not None and trace_sink is not None:
+            await trace_sink.annotate(
+                routing_trace_ctx,
+                name="octo.routing.tools",
+                metadata={
+                    "active_tool_count": len(octo_tools),
+                    "available_tool_count": available_count,
+                    "deferred_tool_count": deferred_count,
+                },
+            )
         tool_policy_summary = _build_octo_tool_policy_summary(
             octo_tools,
             ctx.get("tool_resolution_report"),
@@ -266,6 +305,11 @@ async def route_or_reply(
                 steps=len(plan.get("steps", [])),
             )
             if plan["mode"] == "reply":
+                routing_trace_metadata["route_mode"] = "reply"
+                routing_trace_output = {
+                    "planner_mode": plan["mode"],
+                    "steps_count": len(plan.get("steps", [])),
+                }
                 return await _finalize_response(
                     provider=provider,
                     messages=messages,
@@ -274,7 +318,9 @@ async def route_or_reply(
                 )
             plan_steps = plan.get("steps", [])
             if plan_steps:
-                plan_block = "\n".join([f"{idx + 1}. {step}" for idx, step in enumerate(plan_steps)])
+                plan_block = "\n".join(
+                    [f"{idx + 1}. {step}" for idx, step in enumerate(plan_steps)]
+                )
                 messages.append(
                     Message(
                         role="system",
@@ -286,6 +332,7 @@ async def route_or_reply(
                         ),
                     )
                 )
+        routing_trace_metadata["route_mode"] = "tools"
         return await _complete_route_with_tools(
             octo=octo,
             provider=provider,
@@ -298,7 +345,9 @@ async def route_or_reply(
             on_plain_partial=partial_callback,
             allow_tool_catalog_expansion=True,
         )
-    except Exception:
+    except Exception as exc:
+        routing_trace_status = "error"
+        routing_trace_metadata.update(summarize_exception(exc))
         logger.exception("Error in route_or_reply")
         raise
     finally:
@@ -306,6 +355,17 @@ async def route_or_reply(
         if chat_id > 0 and show_typing:
             logger.debug("Toggling typing indicator off", chat_id=chat_id)
             await octo.set_typing(chat_id, False)
+        if routing_trace_ctx is not None and trace_sink is not None:
+            finish_meta = dict(routing_trace_metadata)
+            finish_meta["duration_ms"] = round(now_ms() - routing_trace_started_ms, 2)
+            await trace_sink.finish_span(
+                routing_trace_ctx,
+                status=routing_trace_status,
+                output=routing_trace_output,
+                metadata=finish_meta,
+            )
+        if routing_trace_token is not None:
+            reset_trace_context(routing_trace_token)
 
 
 async def _complete_route_with_tools(
@@ -322,8 +382,16 @@ async def _complete_route_with_tools(
     allow_tool_catalog_expansion: bool,
 ) -> str:
     tool_capable = getattr(provider, "complete_with_tools", None)
+    trace_ctx = get_current_trace_context()
+    trace_sink = getattr(octo, "trace_sink", None)
 
     if callable(tool_capable) and tool_specs:
+        if trace_ctx is not None and trace_sink is not None:
+            await trace_sink.annotate(
+                trace_ctx,
+                name="octo.routing.mode",
+                metadata={"route_mode": "tools", "active_tool_count": len(tool_specs)},
+            )
         active_tool_specs = list(tool_specs)
         tools = [spec.to_openai_tool() for spec in active_tool_specs]
         last_error: str | None = None
@@ -337,13 +405,23 @@ async def _complete_route_with_tools(
 
         for _ in range(max_attempts):
             try:
-                result = await provider.complete_with_tools(messages, tools=tools, tool_choice="auto")
+                result = await provider.complete_with_tools(
+                    messages, tools=tools, tool_choice="auto"
+                )
             except Exception as e:
-                if images and not vision_tool_fallback_used and _is_vision_tool_compatibility_error(e):
-                    logger.warning("Vision+Tools failed; attempting save-to-disk fallback", error=str(e))
+                if (
+                    images
+                    and not vision_tool_fallback_used
+                    and _is_vision_tool_compatibility_error(e)
+                ):
+                    logger.warning(
+                        "Vision+Tools failed; attempting save-to-disk fallback", error=str(e)
+                    )
                     try:
                         saved_paths = []
-                        workspace_dir = Path(os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")).resolve()
+                        workspace_dir = Path(
+                            os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace")
+                        ).resolve()
                         img_dir = workspace_dir / "tmp" / "telegram_images"
                         img_dir.mkdir(parents=True, exist_ok=True)
 
@@ -367,7 +445,10 @@ async def _complete_route_with_tools(
 
                         fallback_text = _build_saved_image_fallback_text(user_text, saved_paths)
 
-                        logger.info("Retrying with text-only fallback and saved images", count=len(saved_paths))
+                        logger.info(
+                            "Retrying with text-only fallback and saved images",
+                            count=len(saved_paths),
+                        )
                         messages[-1] = {"role": "user", "content": fallback_text}
                         images = None
                         vision_tool_fallback_used = True
@@ -405,7 +486,10 @@ async def _complete_route_with_tools(
                         response_text=fallback_text,
                         internal_followup=internal_followup,
                     )
-                if _is_context_overflow_error(e) and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW:
+                if (
+                    _is_context_overflow_error(e)
+                    and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW
+                ):
                     prior_count = len(active_tool_specs)
                     active_tool_specs = _shrink_tool_specs_for_retry(active_tool_specs)
                     tools = [spec.to_openai_tool() for spec in active_tool_specs]
@@ -415,7 +499,10 @@ async def _complete_route_with_tools(
                         reduced_tool_count=len(active_tool_specs),
                     )
                     continue
-                if _is_invalid_tool_payload_error(e) and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW:
+                if (
+                    _is_invalid_tool_payload_error(e)
+                    and len(active_tool_specs) > _MIN_TOOL_COUNT_ON_OVERFLOW
+                ):
                     prior_count = len(active_tool_specs)
                     active_tool_specs = _shrink_tool_specs_for_retry(active_tool_specs)
                     tools = [spec.to_openai_tool() for spec in active_tool_specs]
@@ -486,22 +573,31 @@ async def _complete_route_with_tools(
                 messages.append(assistant_msg)
 
                 for call in tool_calls:
-                    tool_result, tool_meta = await _handle_octo_tool_call(call, active_tool_specs, ctx)
+                    tool_result, tool_meta = await _handle_octo_tool_call(
+                        call, active_tool_specs, ctx
+                    )
                     if (
                         not internal_followup
                         and not structured_followup_required
-                        and _tool_result_requests_followup(call.get("function", {}).get("name"), tool_result)
+                        and _tool_result_requests_followup(
+                            call.get("function", {}).get("name"), tool_result
+                        )
                     ):
                         structured_followup_required = True
                         marker = getattr(octo, "mark_structured_followup_required", None)
                         if callable(marker):
                             marker()
                     expanded_names: list[str] = []
-                    if allow_tool_catalog_expansion and str(call.get("function", {}).get("name") or "") == "tool_catalog_search":
-                        active_tool_specs, expanded_names = _expand_active_tool_specs_from_catalog_result(
-                            tool_result,
-                            active_tool_specs=active_tool_specs,
-                            ctx=ctx,
+                    if (
+                        allow_tool_catalog_expansion
+                        and str(call.get("function", {}).get("name") or "") == "tool_catalog_search"
+                    ):
+                        active_tool_specs, expanded_names = (
+                            _expand_active_tool_specs_from_catalog_result(
+                                tool_result,
+                                active_tool_specs=active_tool_specs,
+                                ctx=ctx,
+                            )
                         )
                         tools = [spec.to_openai_tool() for spec in active_tool_specs]
                         if expanded_names:
@@ -543,6 +639,20 @@ async def _complete_route_with_tools(
                         }
                     )
                     if loop_state is not None:
+                        current_trace_ctx = get_current_trace_context()
+                        trace_sink = getattr(octo, "trace_sink", None)
+                        if current_trace_ctx is not None and trace_sink is not None:
+                            await trace_sink.annotate(
+                                current_trace_ctx,
+                                name="octo.tool_loop_detected",
+                                metadata={
+                                    "detector": loop_state["detector"],
+                                    "level": loop_state["level"],
+                                    "count": loop_state["count"],
+                                    "message": loop_state["message"],
+                                    "tool_name": tool_name,
+                                },
+                            )
                         logger.warning(
                             "Octo tool loop detected",
                             detector=loop_state["detector"],
@@ -873,7 +983,9 @@ def _summarize_worker_artifacts(result: WorkerResult) -> _WorkerArtifactSummary:
     )
 
 
-def _build_worker_result_payload(worker_id: str, task_text: str, result: WorkerResult) -> dict[str, Any]:
+def _build_worker_result_payload(
+    worker_id: str, task_text: str, result: WorkerResult
+) -> dict[str, Any]:
     output_summary = result.output
     output_truncated = False
     output_preview_text = ""
@@ -1093,7 +1205,9 @@ def _get_worker_followup_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec],
     return tool_specs, ctx
 
 
-def _ensure_mandatory_octo_tools(active_tools: list[ToolSpec], all_tools: list[ToolSpec]) -> list[ToolSpec]:
+def _ensure_mandatory_octo_tools(
+    active_tools: list[ToolSpec], all_tools: list[ToolSpec]
+) -> list[ToolSpec]:
     by_name = {str(spec.name): spec for spec in active_tools}
     for spec in all_tools:
         name = str(spec.name)
@@ -1188,7 +1302,9 @@ def _budget_tool_specs(tool_specs: list[ToolSpec], *, max_count: int) -> list[To
     if len(tool_specs) <= max_count:
         return tool_specs
     prioritized = sorted(tool_specs, key=_tool_priority)
-    always = [spec for spec in prioritized if str(getattr(spec, "name", "")) in _ALWAYS_INCLUDE_TOOL_NAMES]
+    always = [
+        spec for spec in prioritized if str(getattr(spec, "name", "")) in _ALWAYS_INCLUDE_TOOL_NAMES
+    ]
 
     selected: list[ToolSpec] = list(always)
     selected_names = {str(getattr(spec, "name", "")) for spec in selected}
@@ -1347,9 +1463,17 @@ def _should_expand_mcp_catalog_item(
         return False
 
     name = str(item.get("name", "") or getattr(spec, "name", "") or "").strip().lower()
-    remote_name = str(item.get("remote_name", "") or getattr(spec, "remote_tool_name", "") or "").strip().lower()
-    server_id = str(item.get("server_id", "") or getattr(spec, "server_id", "") or "").strip().lower()
-    description = str(item.get("description", "") or getattr(spec, "description", "") or "").strip().lower()
+    remote_name = (
+        str(item.get("remote_name", "") or getattr(spec, "remote_tool_name", "") or "")
+        .strip()
+        .lower()
+    )
+    server_id = (
+        str(item.get("server_id", "") or getattr(spec, "server_id", "") or "").strip().lower()
+    )
+    description = (
+        str(item.get("description", "") or getattr(spec, "description", "") or "").strip().lower()
+    )
     query_terms = tuple(term for term in re.split(r"[\s_:/-]+", query) if term)
     content_haystacks = tuple(part for part in (name, remote_name, description) if part)
 
@@ -1362,9 +1486,7 @@ def _should_expand_mcp_catalog_item(
     non_server_terms = tuple(term for term in query_terms if term and term != server_id)
     if not non_server_terms:
         return False
-    if all(any(term in haystack for haystack in content_haystacks) for term in non_server_terms):
-        return True
-    return False
+    return all(any(term in haystack for haystack in content_haystacks) for term in non_server_terms)
 
 
 def _hydrate_mcp_tool_spec_for_activation(spec: ToolSpec, ctx: dict[str, object]) -> ToolSpec:
@@ -1378,7 +1500,9 @@ def _hydrate_mcp_tool_spec_for_activation(spec: ToolSpec, ctx: dict[str, object]
     try:
         hydrated = hydrate(spec)
     except Exception:
-        logger.warning("Failed to hydrate MCP tool spec for activation", tool_name=spec.name, exc_info=True)
+        logger.warning(
+            "Failed to hydrate MCP tool spec for activation", tool_name=spec.name, exc_info=True
+        )
         return spec
     return hydrated if isinstance(hydrated, ToolSpec) else spec
 
@@ -1396,29 +1520,98 @@ async def _handle_octo_tool_call(
     except Exception:
         args = {}
 
-    logger.debug("Octo tool call", tool_name=name, args=args)
-    for spec in tools:
-        if spec.name == name:
-            try:
-                if spec.is_async:
-                    import inspect
+    trace_sink = getattr(ctx.get("octo"), "trace_sink", None)
+    parent_trace_ctx = get_current_trace_context()
+    tool_trace_ctx = None
+    tool_trace_token = None
+    tool_started_at_ms = now_ms()
+    tool_trace_status = "ok"
+    tool_trace_output: dict[str, Any] | None = None
+    tool_trace_metadata: dict[str, Any] = {
+        "tool_name": str(name or ""),
+        "args_hash": hash_payload(args),
+        "args_preview": safe_preview(args, limit=240),
+    }
+    if trace_sink is not None and parent_trace_ctx is not None:
+        tool_trace_ctx = await trace_sink.start_span(
+            parent_trace_ctx,
+            name="octo.tool",
+            metadata=tool_trace_metadata,
+        )
+        tool_trace_token = bind_trace_context(tool_trace_ctx)
 
-                    result = spec.handler(args, ctx)
-                    if inspect.isawaitable(result):
-                        result = await result
-                else:
-                    result = await asyncio.to_thread(spec.handler, args, ctx)
-            except Exception as exc:
-                logger.exception("Octo tool execution failed", tool_name=name)
-                return {
-                    "error": f"Tool execution failed: {name}: {exc}"
-                }, {"timed_out": False, "had_error": True}
-            logger.debug("Octo tool result", tool_name=name, result_preview=f"{str(result)[:200]}...")
-            return result, {"timed_out": False, "had_error": False}
-    blocked_payload = _resolve_octo_policy_block(tool_name=str(name or ""), ctx=ctx)
-    if blocked_payload is not None:
-        return blocked_payload, {"timed_out": False, "had_error": True, "error_type": "policy_block"}
-    return {"error": f"Unknown tool: {name}"}, {"timed_out": False, "had_error": True}
+    try:
+        logger.debug("Octo tool call", tool_name=name, args=args)
+        for spec in tools:
+            if spec.name == name:
+                try:
+                    if spec.is_async:
+                        import inspect
+
+                        result = spec.handler(args, ctx)
+                        if inspect.isawaitable(result):
+                            result = await result
+                    else:
+                        result = await asyncio.to_thread(spec.handler, args, ctx)
+                except Exception as exc:
+                    tool_trace_status = "error"
+                    tool_trace_metadata.update(summarize_exception(exc))
+                    logger.exception("Octo tool execution failed", tool_name=name)
+                    return {"error": f"Tool execution failed: {name}: {exc}"}, {
+                        "timed_out": False,
+                        "had_error": True,
+                    }
+                tool_trace_output = {
+                    "result_preview": safe_preview(result, limit=240),
+                    "result_size": len(str(result)),
+                }
+                logger.debug(
+                    "Octo tool result", tool_name=name, result_preview=f"{str(result)[:200]}..."
+                )
+                return result, {"timed_out": False, "had_error": False}
+        blocked_payload = _resolve_octo_policy_block(tool_name=str(name or ""), ctx=ctx)
+        if blocked_payload is not None:
+            tool_trace_status = "error"
+            tool_trace_metadata["policy_blocked"] = True
+            if tool_trace_ctx is not None and trace_sink is not None:
+                await trace_sink.annotate(
+                    tool_trace_ctx,
+                    name="octo.policy_blocked",
+                    metadata={
+                        "tool_name": str(name or ""),
+                        "reason": str(blocked_payload.get("reason") or "blocked_by_policy"),
+                        "risk": str(blocked_payload.get("risk") or ""),
+                    },
+                )
+            tool_trace_output = {
+                "result_preview": safe_preview(blocked_payload, limit=240),
+                "result_size": len(str(blocked_payload)),
+            }
+            return blocked_payload, {
+                "timed_out": False,
+                "had_error": True,
+                "error_type": "policy_block",
+            }
+        tool_trace_status = "error"
+        tool_trace_metadata["error_type"] = "unknown_tool"
+        unknown_payload = {"error": f"Unknown tool: {name}"}
+        tool_trace_output = {
+            "result_preview": safe_preview(unknown_payload, limit=240),
+            "result_size": len(str(unknown_payload)),
+        }
+        return unknown_payload, {"timed_out": False, "had_error": True}
+    finally:
+        if tool_trace_ctx is not None and trace_sink is not None:
+            finish_meta = dict(tool_trace_metadata)
+            finish_meta["duration_ms"] = round(now_ms() - tool_started_at_ms, 2)
+            await trace_sink.finish_span(
+                tool_trace_ctx,
+                status=tool_trace_status,
+                output=tool_trace_output,
+                metadata=finish_meta,
+            )
+        if tool_trace_token is not None:
+            reset_trace_context(tool_trace_token)
 
 
 def _record_octo_tool_call(
@@ -1475,7 +1668,9 @@ def _build_octo_tool_policy_summary(
 ) -> str:
     available_counts = {"safe": 0, "guarded": 0, "dangerous": 0}
     for spec in active_tools:
-        available_counts[str(spec.metadata.risk)] = available_counts.get(str(spec.metadata.risk), 0) + 1
+        available_counts[str(spec.metadata.risk)] = (
+            available_counts.get(str(spec.metadata.risk), 0) + 1
+        )
 
     blocked_dangerous = 0
     blocked_guarded = 0
@@ -1529,9 +1724,13 @@ def _resolve_octo_policy_block(tool_name: str, ctx: dict[str, object]) -> dict[s
 def _policy_block_hint(tool: ToolSpec) -> str:
     risk = str(tool.metadata.risk)
     if risk == "dangerous":
-        return "Try a safer read-only or worker-driven path first, then explain what remains blocked."
+        return (
+            "Try a safer read-only or worker-driven path first, then explain what remains blocked."
+        )
     if risk == "guarded":
-        return "Use a lower-risk alternative if one exists, or explain why the guarded path matters."
+        return (
+            "Use a lower-risk alternative if one exists, or explain why the guarded path matters."
+        )
     return "Use another available tool path."
 
 
@@ -1586,7 +1785,11 @@ def _recover_textual_tool_call(content: str, tools: list[ToolSpec]) -> dict[str,
 
 def _parse_textual_tool_preview_args(preview: str, spec: ToolSpec) -> dict[str, Any] | None:
     args: dict[str, Any] = {}
-    properties = ((spec.parameters or {}).get("properties") or {}) if isinstance(spec.parameters, dict) else {}
+    properties = (
+        ((spec.parameters or {}).get("properties") or {})
+        if isinstance(spec.parameters, dict)
+        else {}
+    )
     alias_map = {"file": "path"}
 
     for chunk in preview.split(","):
@@ -1644,9 +1847,8 @@ async def _persist_plan(memory: MemoryService, chat_id: int, plan: dict[str, Any
     mode = str(plan.get("mode", "execute"))
     steps = [str(step) for step in plan.get("steps", []) if str(step).strip()]
     response = str(plan.get("response", "")).strip()
-    plan_summary = (
-        f"Planner mode={mode}; steps={len(steps)}"
-        + (f"; response_len={len(response)}" if response else "")
+    plan_summary = f"Planner mode={mode}; steps={len(steps)}" + (
+        f"; response_len={len(response)}" if response else ""
     )
     try:
         await memory.add_message(
@@ -1719,7 +1921,10 @@ async def _finalize_response(
         return cleaned
     _, cleaned_visible_text = extract_reaction_and_strip(cleaned)
     if looks_like_textual_tool_invocation(cleaned_visible_text):
-        logger.warning("Final response collapsed to textual tool invocation; attempting rewrite", preview=cleaned[:120])
+        logger.warning(
+            "Final response collapsed to textual tool invocation; attempting rewrite",
+            preview=cleaned[:120],
+        )
         rewrite_messages = list(messages)
         rewrite_messages.append(
             Message(
@@ -1794,7 +1999,9 @@ async def _verify_final_response(
     return candidate
 
 
-def _messages_to_text(messages: list[Message | dict[str, Any]], max_chars: int = _MAX_VERIFY_CONTEXT_CHARS) -> str:
+def _messages_to_text(
+    messages: list[Message | dict[str, Any]], max_chars: int = _MAX_VERIFY_CONTEXT_CHARS
+) -> str:
     lines: list[str] = []
     for msg in messages[-14:]:
         if isinstance(msg, Message):
@@ -1882,7 +2089,11 @@ async def _complete_text(
             try:
                 await on_partial(text)
             except Exception:
-                logger.debug("Partial callback failed on non-stream completion", context=context, exc_info=True)
+                logger.debug(
+                    "Partial callback failed on non-stream completion",
+                    context=context,
+                    exc_info=True,
+                )
         return text
     except Exception:
         logger.debug(
@@ -1894,7 +2105,9 @@ async def _complete_text(
         raise
 
 
-def _sanitize_messages_for_complete(messages: list[Message | dict[str, Any]]) -> list[dict[str, str]]:
+def _sanitize_messages_for_complete(
+    messages: list[Message | dict[str, Any]],
+) -> list[dict[str, str]]:
     sanitized: list[dict[str, str]] = []
     for msg in messages:
         role: str

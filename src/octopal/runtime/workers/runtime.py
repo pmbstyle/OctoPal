@@ -25,6 +25,14 @@ import structlog
 from octopal.infrastructure.config.models import LLMConfig
 from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.mcp.manager import MCPManager
+from octopal.infrastructure.observability.base import (
+    TraceSink,
+    bind_trace_context,
+    get_current_trace_context,
+    now_ms,
+    reset_trace_context,
+)
+from octopal.infrastructure.observability.helpers import safe_preview, summarize_exception
 from octopal.infrastructure.store.base import Store
 from octopal.infrastructure.store.models import AuditEvent, WorkerRecord, WorkerTemplateRecord
 from octopal.runtime.housekeeping import remove_tree_with_retries
@@ -91,6 +99,7 @@ class WorkerRuntime:
     settings: Settings
     mcp_manager: MCPManager | None = None
     octo: Any | None = None
+    trace_sink: TraceSink | None = None
     _running: dict[str, asyncio.subprocess.Process] = field(default_factory=dict)
     _stop_requests: set[str] = field(default_factory=set)
 
@@ -363,6 +372,31 @@ class WorkerRuntime:
     ) -> WorkerResult:
         """Run a worker with the given spec."""
         task_preview = _sanitize_task_text(spec.task, limit=_TASK_LOG_PREVIEW_CHARS)
+        trace_sink = self.trace_sink
+        parent_trace_ctx = get_current_trace_context()
+        worker_trace_ctx = None
+        worker_trace_token = None
+        worker_started_at_ms = now_ms()
+        worker_trace_status = "ok"
+        worker_trace_output: dict[str, Any] | None = None
+        worker_trace_metadata: dict[str, Any] = {
+            "worker_run_id": spec.id,
+            "template_id": spec.template_id,
+            "template_name": spec.template_name,
+            "task_preview": task_preview,
+            "timeout_seconds": spec.timeout_seconds,
+            "tools_allowed": len(spec.available_tools),
+            "lineage_id": spec.lineage_id,
+            "parent_worker_id": spec.parent_worker_id,
+            "spawn_depth": spec.spawn_depth,
+        }
+        if trace_sink is not None and parent_trace_ctx is not None:
+            worker_trace_ctx = await trace_sink.start_span(
+                parent_trace_ctx,
+                name="worker.run",
+                metadata=worker_trace_metadata,
+            )
+            worker_trace_token = bind_trace_context(worker_trace_ctx)
         logger.info(
             "WorkerRuntime run: id=%s task=%s timeout=%ss tools=%s",
             spec.id,
@@ -516,6 +550,17 @@ class WorkerRuntime:
                     "attempts": attempts,
                     "recovered": attempts > 1,
                 }
+            if str(result.status).strip().lower() == "failed":
+                worker_trace_status = "error"
+            worker_trace_output = {
+                "status": result.status,
+                "summary_preview": safe_preview(result.summary, limit=240),
+                "summary_len": len(result.summary),
+                "questions_count": len(result.questions),
+                "tools_used": list(result.tools_used),
+                "recovery_attempts": attempts,
+                "recovered": attempts > 1,
+            }
             logger.info("WorkerRuntime result: id=%s summary_len=%s", spec.id, len(result.summary))
             await self._append_audit(
                 "worker_result",
@@ -541,6 +586,17 @@ class WorkerRuntime:
                     "max_attempts": max_attempts,
                 },
             )
+            worker_trace_status = "error"
+            worker_trace_metadata["stop_reason"] = "stop_requested"
+            worker_trace_output = {
+                "status": "failed",
+                "summary_preview": "Worker stopped.",
+                "summary_len": len("Worker stopped."),
+                "questions_count": 0,
+                "tools_used": [],
+                "recovery_attempts": attempts,
+                "recovered": attempts > 1,
+            }
             return WorkerResult(
                 status="failed", summary="Worker stopped.", output={"stopped": True}
             )
@@ -556,6 +612,11 @@ class WorkerRuntime:
                 level="error",
                 correlation_id=spec.id,
                 data={"reason": "timeout", "attempts": attempts, "max_attempts": max_attempts},
+            )
+            worker_trace_status = "error"
+            worker_trace_metadata["error_type"] = "TimeoutError"
+            worker_trace_metadata["error_message_short"] = (
+                f"Worker timed out after recovery attempts ({attempts}/{max_attempts})"
             )
             raise RuntimeError("Worker timed out after recovery attempts") from None
         except Exception as exc:
@@ -576,10 +637,23 @@ class WorkerRuntime:
                     "max_attempts": max_attempts,
                 },
             )
+            worker_trace_status = "error"
+            worker_trace_metadata.update(summarize_exception(exc))
             if attempts >= max_attempts and last_error is not None:
                 raise RuntimeError(f"Worker failed after recovery attempts: {last_error}") from None
             raise
         finally:
+            if worker_trace_ctx is not None and trace_sink is not None:
+                finish_meta = dict(worker_trace_metadata)
+                finish_meta["duration_ms"] = round(now_ms() - worker_started_at_ms, 2)
+                await trace_sink.finish_span(
+                    worker_trace_ctx,
+                    status=worker_trace_status,
+                    output=worker_trace_output,
+                    metadata=finish_meta,
+                )
+            if worker_trace_token is not None:
+                reset_trace_context(worker_trace_token)
             self._stop_requests.discard(spec.id)
             if spec.lifecycle == "ephemeral":
                 await self._cleanup_worker_dir(worker_dir)
@@ -671,7 +745,11 @@ class WorkerRuntime:
         process: asyncio.subprocess.Process,
         worker_ids: list[str],
     ) -> ChildBatchResume:
-        child_ids = list(dict.fromkeys(str(worker_id).strip() for worker_id in worker_ids if str(worker_id).strip()))
+        child_ids = list(
+            dict.fromkeys(
+                str(worker_id).strip() for worker_id in worker_ids if str(worker_id).strip()
+            )
+        )
         if not child_ids:
             return ChildBatchResume()
 
@@ -680,8 +758,7 @@ class WorkerRuntime:
             self.store.update_worker_result,
             spec.id,
             summary=(
-                f"Waiting for {len(child_ids)} child worker(s) to finish: "
-                + ", ".join(child_ids)
+                f"Waiting for {len(child_ids)} child worker(s) to finish: " + ", ".join(child_ids)
             ),
         )
         await self._append_audit(
@@ -694,7 +771,9 @@ class WorkerRuntime:
 
         while True:
             if self._is_stop_requested(spec.id):
-                raise _WorkerStopRequested(f"Worker {spec.id} stop requested while waiting for children")
+                raise _WorkerStopRequested(
+                    f"Worker {spec.id} stop requested while waiting for children"
+                )
             if process.returncode is not None:
                 raise RuntimeError("Parent worker exited while waiting for child workers")
 
