@@ -76,6 +76,29 @@ _CONTENT_HEAVY_BUDGET = ToolRenderBudget(
     max_depth=_MAX_DEPTH,
     max_string_chars=_CONTENT_HEAVY_MAX_STRING_CHARS,
 )
+_EXACT_TOOL_BUDGET_OVERRIDES: dict[str, ToolRenderBudget] = {
+    "browser_extract": _CONTENT_HEAVY_BUDGET,
+    "markdown_new_fetch": _CONTENT_HEAVY_BUDGET,
+    "web_fetch": _CONTENT_HEAVY_BUDGET,
+    "mcp_agentmail_get_thread": ToolRenderBudget(
+        max_chars=64_000,
+        max_container_items=96,
+        max_depth=_MAX_DEPTH,
+        max_string_chars=32_000,
+    ),
+    "mcp_agentmail_list_threads": ToolRenderBudget(
+        max_chars=64_000,
+        max_container_items=128,
+        max_depth=_MAX_DEPTH,
+        max_string_chars=24_000,
+    ),
+    "mcp_agentmail_get_attachment": ToolRenderBudget(
+        max_chars=64_000,
+        max_container_items=96,
+        max_depth=_MAX_DEPTH,
+        max_string_chars=40_000,
+    ),
+}
 
 
 def render_tool_result_for_llm(
@@ -117,7 +140,9 @@ def render_tool_result_for_llm(
 
 def _budget_for_tool(tool_name: str | None, *, max_chars: int | None) -> ToolRenderBudget:
     normalized_name = str(tool_name or "").strip().lower()
-    base_budget = _CONTENT_HEAVY_BUDGET if _is_content_heavy_tool_name(normalized_name) else _DEFAULT_BUDGET
+    base_budget = _EXACT_TOOL_BUDGET_OVERRIDES.get(normalized_name)
+    if base_budget is None:
+        base_budget = _CONTENT_HEAVY_BUDGET if _is_content_heavy_tool_name(normalized_name) else _DEFAULT_BUDGET
     if max_chars is None:
         return base_budget
     return ToolRenderBudget(
@@ -216,13 +241,13 @@ def _compact_tool_value(
             return "", False
         parsed = _parse_json_like_string(stripped)
         if parsed is not None:
-            compacted, _changed = _compact_tool_value(
+            compacted, changed = _compact_tool_value(
                 parsed,
                 depth=depth + 1,
                 budget=budget,
                 raw_text_field_names=raw_text_field_names,
             )
-            return compacted, True
+            return compacted, changed
         if len(stripped) <= budget.max_string_chars:
             return stripped, False
         return _truncate_string(stripped, max_chars=budget.max_string_chars), True
