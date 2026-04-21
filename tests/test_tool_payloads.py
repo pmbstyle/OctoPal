@@ -120,9 +120,9 @@ def test_render_tool_result_preserves_larger_mcp_thread_payload() -> None:
 
     rendered = render_tool_result_for_llm(payload, tool_name="mcp_agentmail_get_thread")
 
-    assert rendered.was_compacted is True
-    assert len(rendered.text) <= 64_000
-    assert "truncated" in rendered.text or "__octopal_compaction__" in rendered.text
+    assert rendered.was_compacted is False
+    assert len(rendered.text) > 20_000
+    assert "truncated" not in rendered.text
 
 
 def test_render_tool_result_preserves_more_items_for_content_heavy_mcp_lists() -> None:
@@ -135,8 +135,8 @@ def test_render_tool_result_preserves_more_items_for_content_heavy_mcp_lists() -
 
     rendered = render_tool_result_for_llm(payload, tool_name="mcp_agentmail_list_threads")
 
-    assert rendered.was_compacted is True
-    assert "more list items omitted" in rendered.text or "__octopal_compaction__" in rendered.text
+    assert rendered.was_compacted is False
+    assert "more list items omitted" not in rendered.text
 
 
 def test_route_compacts_tool_messages_before_next_tool_round(monkeypatch) -> None:
