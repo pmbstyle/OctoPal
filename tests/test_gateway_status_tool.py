@@ -88,3 +88,51 @@ def test_gateway_status_summarizes_runtime_and_channel_state(monkeypatch, tmp_pa
     assert any(service["id"] == "gateway" and service["status"] == "ok" for service in payload["services"])
     assert any("rejected by policy" in hint for hint in payload["hints"])
     assert any("follow-up queue" in hint for hint in payload["hints"])
+
+
+def test_gateway_status_treats_missing_scheduler_metrics_as_not_reporting(monkeypatch, tmp_path: Path) -> None:
+    settings = SimpleNamespace(
+        state_dir=tmp_path / "data",
+        workspace_dir=tmp_path / "workspace",
+        gateway_host="127.0.0.1",
+        gateway_port=8123,
+        user_channel="telegram",
+    )
+    monkeypatch.setattr(tool_catalog, "load_settings", lambda: settings)
+    monkeypatch.setattr(
+        tool_catalog,
+        "read_status",
+        lambda _settings: {
+            "pid": 4321,
+            "started_at": "2026-03-20T10:00:00+00:00",
+            "last_message_at": "2026-03-20T10:05:00+00:00",
+            "active_channel": "Telegram",
+        },
+    )
+    monkeypatch.setattr(tool_catalog, "is_pid_running", lambda pid: pid == 4321)
+    monkeypatch.setattr(
+        tool_catalog,
+        "read_metrics_snapshot",
+        lambda _state_dir: {
+            "octo": {
+                "followup_queues": 0,
+                "internal_queues": 0,
+                "followup_tasks": 0,
+                "internal_tasks": 0,
+                "thinking_count": 0,
+                "updated_at": "2026-03-20T10:05:01+00:00",
+            },
+            "telegram": {
+                "chat_queues": 0,
+                "send_tasks": 0,
+                "updated_at": "2026-03-20T10:05:02+00:00",
+            },
+            "connectivity": {"mcp_servers": {}, "updated_at": "2026-03-20T10:05:04+00:00"},
+        },
+    )
+
+    payload = json.loads(tool_catalog._tool_gateway_status({}, {}))
+
+    scheduler_service = next(service for service in payload["services"] if service["id"] == "scheduler")
+    assert scheduler_service["status"] == "ok"
+    assert scheduler_service["reason"] == "scheduler metrics unavailable"

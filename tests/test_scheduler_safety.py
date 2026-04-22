@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from octopal.runtime.octo import core as octo_core
-from octopal.runtime.octo.core import Octo
 from octopal.runtime.octo import router as octo_router
+from octopal.runtime.octo.core import Octo
 from octopal.runtime.scheduler.service import SchedulerService
 from octopal.runtime.workers.contracts import WorkerResult
 from octopal.tools.tools import _tool_check_schedule, _tool_schedule_task, _tool_scheduler_status
@@ -160,6 +160,7 @@ def test_schedule_task_derives_legacy_octo_control_mode_without_worker_id(tmp_pa
 
     assert payload["status"] == "scheduled"
     assert payload["execution_mode"] == "octo_control"
+    assert payload["notify_user"] == "never"
     assert store.last_upsert is not None
     assert store.last_upsert["metadata"] == {
         "notify_user": "never",

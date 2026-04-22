@@ -695,6 +695,17 @@ export function SystemPage() {
   const connectivity = (data?.connectivity ?? {}) as Connectivity;
   const mcpServers = connectivity.mcp_servers ?? {};
   const scheduler = (system.scheduler ?? {}) as SchedulerMetrics;
+  const schedulerAvailable = Object.keys(scheduler).length > 0;
+  const schedulerBadgeStatus = !schedulerAvailable
+    ? "ok"
+    : scheduler.running
+      ? (scheduler.last_tick_status === "failed" ? "critical" : "running")
+      : "warning";
+  const schedulerBadgeLabel = !schedulerAvailable
+    ? "not reporting"
+    : scheduler.running
+      ? (scheduler.last_tick_status ?? "running")
+      : "stopped";
   const launcher = configData?.worker_launcher ?? { configured: "n/a", effective: "n/a", available: false, reason: "No data", docker_image: "n/a" };
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((current) => (current ? { ...current, [key]: value } : current));
 
@@ -800,10 +811,12 @@ export function SystemPage() {
             <div className="rounded-2xl border border-white/6 bg-[var(--surface-panel-strong)] p-4">
               <div className="flex items-center justify-between gap-3">
                 <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Loop status</div>
-                <span className={`rounded-full border px-2.5 py-1 text-[11px] uppercase tracking-wide ${statusTone(scheduler.running ? (scheduler.last_tick_status === "failed" ? "critical" : "running") : "warning")}`}>{scheduler.running ? (scheduler.last_tick_status ?? "running") : "stopped"}</span>
+                <span className={`rounded-full border px-2.5 py-1 text-[11px] uppercase tracking-wide ${statusTone(schedulerBadgeStatus)}`}>{schedulerBadgeLabel}</span>
               </div>
               <p className="mt-3 text-sm text-[var(--text-muted)]">
-                Interval {scheduler.interval_seconds ?? "n/a"}s | Max tasks {scheduler.max_tasks ?? "n/a"} | Updated {scheduler.updated_at ? formatLocalDateTime(scheduler.updated_at) : "n/a"}
+                {schedulerAvailable
+                  ? `Interval ${scheduler.interval_seconds ?? "n/a"}s | Max tasks ${scheduler.max_tasks ?? "n/a"} | Updated ${scheduler.updated_at ? formatLocalDateTime(scheduler.updated_at) : "n/a"}`
+                  : "Scheduler metrics are not reporting yet."}
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">

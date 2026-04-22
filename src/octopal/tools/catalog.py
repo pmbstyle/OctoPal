@@ -4,13 +4,12 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import structlog
 
 from octopal.channels import normalize_user_channel, user_channel_label
 from octopal.infrastructure.config.settings import load_settings
-from octopal.runtime.scheduler.service import normalize_execution_mode
-from octopal.tools.communication.send_file import send_file_to_user
 from octopal.runtime.memory.memchain import (
     memchain_init,
     memchain_record,
@@ -19,6 +18,10 @@ from octopal.runtime.memory.memchain import (
 )
 from octopal.runtime.metrics import read_metrics_snapshot
 from octopal.runtime.octo_status import build_octo_status
+from octopal.runtime.scheduler.service import (
+    normalize_execution_mode,
+    normalize_notify_user_policy,
+)
 from octopal.runtime.state import is_pid_running, read_status
 from octopal.tools.browser.actions import (
     browser_click,
@@ -34,10 +37,11 @@ from octopal.tools.browser.actions import (
     browser_wait_for,
     browser_workflow,
 )
+from octopal.tools.communication.send_file import send_file_to_user
 from octopal.tools.connectors.calendar import get_calendar_connector_tools
 from octopal.tools.connectors.drive import get_drive_connector_tools
-from octopal.tools.connectors.gmail import get_gmail_connector_tools
 from octopal.tools.connectors.github import get_github_connector_tools
+from octopal.tools.connectors.gmail import get_gmail_connector_tools
 from octopal.tools.connectors.status import get_connector_status_tools
 from octopal.tools.filesystem.download import download_file
 from octopal.tools.filesystem.files import fs_delete, fs_list, fs_move, fs_read, fs_write
@@ -235,7 +239,7 @@ def _tool_catalog_search(args, ctx) -> str:
                 "capabilities": list(getattr(metadata, "capabilities", ()) or ()),
                 "profile_tags": list(getattr(metadata, "profile_tags", ()) or ()),
                 "required_arguments": [str(item) for item in required if str(item).strip()],
-                "argument_names": sorted(str(key) for key in properties.keys()),
+                "argument_names": sorted(str(key) for key in properties),
                 "server_id": str(getattr(spec, "server_id", "") or "") or None,
                 "remote_name": str(getattr(spec, "remote_tool_name", "") or "") or None,
                 "is_mcp": str(getattr(metadata, "category", "") or "").strip().lower() == "mcp",
@@ -1708,17 +1712,22 @@ def _tool_schedule_task(args, ctx) -> str:
     except ValueError as exc:
         return f"schedule_task error: {exc}"
 
+    execution_mode = normalize_execution_mode(
+        args.get("execution_mode"),
+        worker_id=args.get("worker_id"),
+    )
+    notify_user = normalize_notify_user_policy(args.get("notify_user"))
+    if execution_mode == "octo_control" and notify_user == "if_significant":
+        notify_user = "never"
+
     return json.dumps(
         {
             "status": "scheduled",
             "task_id": task_id,
             "name": args["name"],
             "frequency": args["frequency"],
-            "execution_mode": normalize_execution_mode(
-                args.get("execution_mode"),
-                worker_id=args.get("worker_id"),
-            ),
-            "notify_user": args.get("notify_user", "if_significant"),
+            "execution_mode": execution_mode,
+            "notify_user": notify_user,
         },
         ensure_ascii=False,
     )
@@ -1978,7 +1987,7 @@ def _gateway_mcp_reason(connectivity_metrics: dict[str, object]) -> str:
 
 def _gateway_scheduler_status(scheduler_metrics: dict[str, object]) -> str:
     if not isinstance(scheduler_metrics, dict) or not scheduler_metrics:
-        return "warning"
+        return "ok"
     if not bool(scheduler_metrics.get("running")):
         return "warning"
     if str(scheduler_metrics.get("last_tick_status", "") or "").strip().lower() == "failed":
