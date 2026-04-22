@@ -1498,7 +1498,7 @@ class Octo:
         trace_metadata: dict[str, Any] = {
             "route_mode": RouteMode.SCHEDULER.value,
             "chat_id": chat_id,
-            "dry_run": True,
+            "dry_run": False,
             "max_tasks": max_tasks,
         }
         trace_ctx, trace_token, is_root_trace = await _start_background_trace_context(
@@ -1514,23 +1514,32 @@ class Octo:
             result = await route_scheduler_tick(self, chat_id=chat_id, max_tasks=max_tasks)
             normalized = normalize_plain_text(result)
             normalized_upper = normalized.strip().upper()
-            due_count = 0
-            try:
-                due_count = len(self.scheduler.get_actionable_tasks())
-            except Exception:
-                due_count = 0
+            dispatch_summary = await self._dispatch_due_scheduled_tasks_once(
+                chat_id=chat_id,
+                max_tasks=max_tasks,
+            )
+            due_count = int(dispatch_summary.get("due_count") or 0)
             trace_metadata.update(
                 {
                     "due_count": due_count,
                     "result_preview": safe_preview(normalized, limit=240),
                     "result_len": len(normalized or ""),
+                    "dispatch_started": int(dispatch_summary.get("started") or 0),
+                    "dispatch_duplicates": int(dispatch_summary.get("duplicates") or 0),
+                    "dispatch_invalid": int(dispatch_summary.get("invalid") or 0),
+                    "dispatch_errors": int(dispatch_summary.get("errors") or 0),
                 }
             )
             if normalized_upper in {"", "SCHEDULER_IDLE", "NO_USER_RESPONSE"}:
-                trace_output = {"status": "idle", "due_count": due_count}
+                trace_output = {
+                    "status": "idle",
+                    "due_count": due_count,
+                    "dispatch": dispatch_summary,
+                }
                 logger.debug(
-                    "Scheduler dry-run tick idle",
+                    "Scheduler tick complete",
                     due_count=due_count,
+                    dispatch=dispatch_summary,
                     result=normalized_upper or "EMPTY",
                 )
                 return
@@ -1539,17 +1548,19 @@ class Octo:
                 "status": "decision_ready",
                 "due_count": due_count,
                 "result_preview": safe_preview(normalized, limit=160),
+                "dispatch": dispatch_summary,
             }
             logger.info(
-                "Scheduler dry-run tick produced decision",
+                "Scheduler tick produced decision",
                 due_count=due_count,
+                dispatch=dispatch_summary,
                 result_preview=safe_preview(normalized, limit=160),
             )
         except Exception as exc:
             trace_status = "error"
             trace_metadata.update(summarize_exception(exc))
             trace_output = {"status": "failed"}
-            logger.exception("Scheduler dry-run tick failed")
+            logger.exception("Scheduler tick failed")
         finally:
             trace_metadata["duration_ms"] = round(now_ms() - trace_started_at_ms, 2)
             await _finish_background_trace_context(
@@ -1566,6 +1577,72 @@ class Octo:
         while True:
             await asyncio.sleep(interval_seconds)
             await self._run_scheduler_tick_once(chat_id=0, max_tasks=max_tasks)
+
+    async def _dispatch_due_scheduled_tasks_once(
+        self,
+        *,
+        chat_id: int = 0,
+        max_tasks: int = 10,
+    ) -> dict[str, int]:
+        scheduler = self.scheduler
+        summary = {
+            "due_count": 0,
+            "attempted": 0,
+            "started": 0,
+            "duplicates": 0,
+            "invalid": 0,
+            "errors": 0,
+        }
+        if scheduler is None:
+            return summary
+
+        due_tasks = list(scheduler.get_actionable_tasks() or [])
+        summary["due_count"] = len(due_tasks)
+        for task in due_tasks[: max(1, int(max_tasks))]:
+            task_id = str(task.get("id") or "").strip()
+            worker_id = str(task.get("worker_id") or "").strip()
+            task_text = str(task.get("task_text") or "").strip()
+            inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
+            if not worker_id or not task_text:
+                summary["invalid"] += 1
+                logger.warning(
+                    "Skipped scheduled task without dispatchable worker payload",
+                    task_id=task_id or None,
+                    worker_id=worker_id or None,
+                    has_task_text=bool(task_text),
+                )
+                continue
+
+            summary["attempted"] += 1
+            try:
+                result = await self._start_worker_async(
+                    worker_id=worker_id,
+                    task=task_text,
+                    chat_id=chat_id,
+                    inputs=inputs,
+                    tools=None,
+                    model=None,
+                    timeout_seconds=None,
+                    scheduled_task_id=task_id or None,
+                )
+            except Exception:
+                summary["errors"] += 1
+                logger.exception(
+                    "Scheduled task dispatch failed",
+                    task_id=task_id or None,
+                    worker_id=worker_id,
+                )
+                continue
+
+            status = str(result.get("status") or "").strip().lower()
+            if status == "started":
+                summary["started"] += 1
+            elif status == "skipped_duplicate":
+                summary["duplicates"] += 1
+            elif status in {"rejected", "failed"}:
+                summary["errors"] += 1
+
+        return summary
 
     def _reconcile_stale_worker_records(self) -> None:
         """Normalize stale DB worker states that no longer exist in runtime."""

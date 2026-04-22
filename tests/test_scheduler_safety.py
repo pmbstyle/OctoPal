@@ -297,7 +297,7 @@ async def test_route_scheduler_tick_uses_control_plane_prompt_and_skips_planner(
 
 @pytest.mark.asyncio
 async def test_octo_run_scheduler_tick_once_uses_bounded_scheduler_route(monkeypatch):
-    calls = {"scheduler_tick": 0}
+    calls = {"scheduler_tick": 0, "dispatch": 0}
 
     async def _route_scheduler_tick(octo, chat_id=0, *, max_tasks=10):
         calls["scheduler_tick"] += 1
@@ -305,8 +305,26 @@ async def test_octo_run_scheduler_tick_once_uses_bounded_scheduler_route(monkeyp
         assert max_tasks == 7
         return "SCHEDULER_IDLE"
 
+    async def _dispatch_due_scheduled_tasks_once(self, *, chat_id=0, max_tasks=10):
+        calls["dispatch"] += 1
+        assert chat_id == 0
+        assert max_tasks == 7
+        return {
+            "due_count": 0,
+            "attempted": 0,
+            "started": 0,
+            "duplicates": 0,
+            "invalid": 0,
+            "errors": 0,
+        }
+
     monkeypatch.setattr(octo_router, "route_scheduler_tick", _route_scheduler_tick)
     monkeypatch.setattr(octo_core, "route_scheduler_tick", _route_scheduler_tick)
+    monkeypatch.setattr(
+        octo_core.Octo,
+        "_dispatch_due_scheduled_tasks_once",
+        _dispatch_due_scheduled_tasks_once,
+    )
 
     octo = Octo(
         provider=object(),
@@ -321,7 +339,121 @@ async def test_octo_run_scheduler_tick_once_uses_bounded_scheduler_route(monkeyp
 
     await octo._run_scheduler_tick_once(max_tasks=7)
 
-    assert calls == {"scheduler_tick": 1}
+    assert calls == {"scheduler_tick": 1, "dispatch": 1}
+
+
+@pytest.mark.asyncio
+async def test_octo_dispatch_due_scheduled_tasks_starts_dispatchable_workers(monkeypatch):
+    started_calls = []
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "daily_digest",
+                    "name": "Daily Digest",
+                    "description": "Build digest",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": "writer",
+                    "task_text": "Generate digest",
+                    "inputs_json": json.dumps({"section": "news"}),
+                    "metadata_json": json.dumps({"notify_user": "always"}),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+
+    async def _start_worker_async(self, **kwargs):
+        started_calls.append(kwargs)
+        return {"status": "started", "run_id": "run-1", "worker_id": "run-1"}
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+    )
+
+    summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
+
+    assert summary == {
+        "due_count": 1,
+        "attempted": 1,
+        "started": 1,
+        "duplicates": 0,
+        "invalid": 0,
+        "errors": 0,
+    }
+    assert started_calls == [
+        {
+            "worker_id": "writer",
+            "task": "Generate digest",
+            "chat_id": 0,
+            "inputs": {"section": "news"},
+            "tools": None,
+            "model": None,
+            "timeout_seconds": None,
+            "scheduled_task_id": "daily_digest",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_octo_dispatch_due_scheduled_tasks_skips_invalid_items(monkeypatch):
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "memory_compact",
+                    "name": "Memory Compact",
+                    "description": "Compact memory",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": None,
+                    "task_text": "Compact memory",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps({"notify_user": "never"}),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+
+    async def _start_worker_async(self, **kwargs):
+        raise AssertionError("_start_worker_async should not be called for invalid scheduled items")
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+    )
+
+    summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
+
+    assert summary == {
+        "due_count": 1,
+        "attempted": 0,
+        "started": 0,
+        "duplicates": 0,
+        "invalid": 1,
+        "errors": 0,
+    }
 
 
 @pytest.mark.asyncio
