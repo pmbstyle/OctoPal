@@ -26,6 +26,7 @@ from octopal.infrastructure.observability.helpers import (
 )
 from octopal.infrastructure.providers.base import InferenceProvider, Message
 from octopal.runtime.memory.service import MemoryService
+from octopal.runtime.octo.control_plane import RouteMode
 from octopal.runtime.octo.delivery import resolve_user_delivery
 from octopal.runtime.octo.prompt_builder import (
     build_bootstrap_context_prompt,
@@ -227,6 +228,7 @@ async def route_or_reply(
     images: list[str] | None = None,
     saved_file_paths: list[str] | None = None,
     include_wakeup: bool = True,
+    route_mode: str | RouteMode = RouteMode.CONVERSATION,
 ) -> str:
     """Core routing logic: decide whether to use tools or reply to user."""
     # Internal chat_id (<= 0) should not trigger typing indicators.
@@ -237,13 +239,19 @@ async def route_or_reply(
     routing_trace_started_ms = now_ms()
     routing_trace_status = "ok"
     routing_trace_output: dict[str, Any] | None = None
+    route_mode_value = (
+        route_mode.value if isinstance(route_mode, RouteMode) else str(route_mode or "unknown").strip() or "unknown"
+    )
     routing_trace_metadata: dict[str, Any] = {
         "internal_followup": internal_followup,
         "show_typing": show_typing,
         "include_wakeup": include_wakeup,
         "has_images": bool(images),
         "saved_file_paths_count": len(saved_file_paths or []),
-        "route_mode": "unknown",
+        "route_mode": route_mode_value,
+        "bootstrap_chars": len(bootstrap_context or ""),
+        "planner_used": False,
+        "mcp_refresh_attempted": False,
     }
     if trace_sink is not None and parent_trace_ctx is not None:
         routing_trace_ctx = await trace_sink.start_span(
@@ -262,6 +270,7 @@ async def route_or_reply(
         wake_notice = ""
         if include_wakeup and hasattr(octo, "peek_context_wakeup"):
             wake_notice = str(octo.peek_context_wakeup(chat_id) or "")
+        routing_trace_metadata["mcp_refresh_attempted"] = True
         await _ensure_mcp_connected_for_routing(octo)
 
         octo_tools, ctx = _get_octo_tools(octo, chat_id)
@@ -270,6 +279,7 @@ async def route_or_reply(
         deferred_count = max(0, available_count - len(octo_tools))
         logger.info(
             "Octo tools fetched",
+            route_mode=route_mode_value,
             active_tool_count=len(octo_tools),
             available_tool_count=available_count,
             deferred_tool_count=deferred_count,
@@ -279,6 +289,7 @@ async def route_or_reply(
                 routing_trace_ctx,
                 name="octo.routing.tools",
                 metadata={
+                    "route_mode": route_mode_value,
                     "active_tool_count": len(octo_tools),
                     "available_tool_count": available_count,
                     "deferred_tool_count": deferred_count,
@@ -307,15 +318,17 @@ async def route_or_reply(
 
         plan = await _build_plan(provider, messages, bool(octo_tools))
         if plan:
+            routing_trace_metadata["planner_used"] = True
             await _persist_plan(memory, chat_id, plan)
             logger.info(
                 "Octo plan ready",
+                route_mode=route_mode_value,
                 mode=plan["mode"],
                 steps=len(plan.get("steps", [])),
             )
             if plan["mode"] == "reply":
-                routing_trace_metadata["route_mode"] = "reply"
                 routing_trace_output = {
+                    "route_mode": route_mode_value,
                     "planner_mode": plan["mode"],
                     "steps_count": len(plan.get("steps", [])),
                 }
@@ -341,7 +354,11 @@ async def route_or_reply(
                         ),
                     )
                 )
-        routing_trace_metadata["route_mode"] = "tools"
+        routing_trace_output = {
+            "route_mode": route_mode_value,
+            "planner_mode": "execute" if routing_trace_metadata["planner_used"] else "none",
+            "steps_count": len(plan.get("steps", [])) if plan else 0,
+        }
         return await _complete_route_with_tools(
             octo=octo,
             provider=provider,

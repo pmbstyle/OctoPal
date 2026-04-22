@@ -47,6 +47,11 @@ from octopal.runtime.memory.memchain import memchain_record
 from octopal.runtime.memory.reflection import ReflectionService
 from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.metrics import update_component_gauges
+from octopal.runtime.octo.control_plane import (
+    RouteMode,
+    RouteRequest,
+    resolve_turn_route_mode,
+)
 from octopal.runtime.octo.delivery import (
     DeliveryMode,
     _result_has_blocking_failure,
@@ -2505,6 +2510,19 @@ class Octo:
         }
         wants_followup = False
         finalized_visible_reply = False
+        route_request = RouteRequest(
+            mode=resolve_turn_route_mode(
+                track_progress=track_progress,
+                background_delivery=background_delivery,
+            ),
+            user_text=text,
+            chat_id=chat_id,
+            show_typing=show_typing,
+            include_wakeup=include_wakeup,
+            track_progress=track_progress,
+            background_delivery=background_delivery,
+        )
+        trace_metadata["route_mode"] = route_request.mode.value
         if not correlation_id:
             correlation_id = f"turn-{uuid4()}"
             correlation_token = correlation_id_var.set(correlation_id)
@@ -2528,7 +2546,13 @@ class Octo:
             self.mark_user_turn_active(correlation_id)
             if callable(approval_requester):
                 self._approval_requesters[chat_id] = approval_requester
-            logger.info("Handling message", chat_id=chat_id, is_ws=is_ws, has_images=bool(images))
+            logger.info(
+                "Handling message",
+                chat_id=chat_id,
+                is_ws=is_ws,
+                has_images=bool(images),
+                route_mode=route_request.mode.value,
+            )
             logger.debug("Received message text", text_len=len(text), text=text[:500])
             if not track_progress:
                 self.suppress_turn_followups(correlation_id)
@@ -2543,12 +2567,14 @@ class Octo:
                     },
                 )
             bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
+            trace_metadata["bootstrap_chars"] = len(bootstrap_context.content)
             if bootstrap_context.files:
                 files_summary = ", ".join(
                     [f"{name} ({size} chars)" for name, size in bootstrap_context.files]
                 )
                 logger.debug(
                     "Octo bootstrap files",
+                    route_mode=route_request.mode.value,
                     files=files_summary,
                     file_count=len(bootstrap_context.files),
                     total_chars=len(bootstrap_context.content),
@@ -2559,6 +2585,7 @@ class Octo:
                 "images": images,
                 "saved_file_paths": saved_file_paths,
                 "include_wakeup": include_wakeup,
+                "route_mode": route_request.mode,
             }
             while True:
                 try:
@@ -2631,6 +2658,7 @@ class Octo:
             logger.debug(
                 "OctoReply prepared for channel delivery",
                 chat_id=chat_id,
+                route_mode=route_request.mode.value,
                 has_react_tag="<react>" in immediate_text.lower(),
                 reaction=reaction_emoji,
                 delivery_mode=delivery.mode,

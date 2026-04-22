@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from octopal.runtime.octo import core as octo_core
+from octopal.runtime.octo.control_plane import RouteMode, RouteRequest, resolve_turn_route_mode
 from octopal.runtime.octo.core import (
     Octo,
     _build_forced_worker_followup_batch,
@@ -34,6 +35,23 @@ from octopal.utils import (
     should_suppress_user_delivery,
     utc_now,
 )
+
+
+def test_resolve_turn_route_mode():
+    assert resolve_turn_route_mode(track_progress=True, background_delivery=False) is RouteMode.CONVERSATION
+    assert resolve_turn_route_mode(track_progress=False, background_delivery=True) is RouteMode.HEARTBEAT
+    assert (
+        resolve_turn_route_mode(track_progress=False, background_delivery=False)
+        is RouteMode.INTERNAL_MAINTENANCE
+    )
+
+
+def test_route_request_marks_control_plane_modes():
+    conversation = RouteRequest(mode=RouteMode.CONVERSATION, user_text="hi", chat_id=1)
+    heartbeat = RouteRequest(mode=RouteMode.HEARTBEAT, user_text="tick", chat_id=1)
+
+    assert conversation.is_control_plane is False
+    assert heartbeat.is_control_plane is True
 
 
 def test_is_heartbeat_ok():
