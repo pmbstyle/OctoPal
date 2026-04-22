@@ -288,6 +288,72 @@ async def _normalize_heartbeat_delivery_reply(provider: InferenceProvider | None
     return _coerce_control_plane_reply(rewritten)
 
 
+_SCHEDULED_OCTO_CONTROL_DONE = "SCHEDULED_TASK_DONE"
+
+
+def _coerce_scheduled_octo_control_reply(text: str) -> str:
+    value = normalize_plain_text(text or "")
+    explicit = extract_heartbeat_user_visible_message(value)
+    if explicit:
+        return explicit
+    normalized_upper = value.strip().upper()
+    if normalized_upper == _SCHEDULED_OCTO_CONTROL_DONE:
+        return _SCHEDULED_OCTO_CONTROL_DONE
+    if normalized_upper == "NO_USER_RESPONSE" or has_no_user_response_suffix(value):
+        return "NO_USER_RESPONSE"
+    return "NO_USER_RESPONSE"
+
+
+async def _normalize_scheduled_octo_control_reply(
+    provider: InferenceProvider | None,
+    text: str,
+) -> str:
+    value = normalize_plain_text(text or "")
+    explicit = extract_heartbeat_user_visible_message(value)
+    if explicit:
+        return explicit
+    normalized_upper = value.strip().upper()
+    if normalized_upper == _SCHEDULED_OCTO_CONTROL_DONE:
+        return _SCHEDULED_OCTO_CONTROL_DONE
+    if normalized_upper == "NO_USER_RESPONSE" or has_no_user_response_suffix(value):
+        return "NO_USER_RESPONSE"
+    if provider is None:
+        return _coerce_scheduled_octo_control_reply(value)
+
+    rewrite_prompt = (
+        "Rewrite the draft scheduled Octo control reply into the strict completion contract.\n"
+        "Return exactly one of:\n"
+        "- SCHEDULED_TASK_DONE\n"
+        "- NO_USER_RESPONSE\n"
+        "- <user_visible>...</user_visible>\n"
+        "Use SCHEDULED_TASK_DONE only if the task completed successfully with no user-visible update.\n"
+        "Use <user_visible> only for a concise completed user-facing update.\n"
+        "Use NO_USER_RESPONSE if the task did not complete or there is no completion signal.\n"
+        "Do not include any extra text outside the token or wrapper."
+    )
+    try:
+        rewritten = await _complete_text(
+            provider,
+            [
+                Message(role="system", content=rewrite_prompt),
+                Message(role="user", content=f"<draft>\n{value}\n</draft>"),
+            ],
+            context="scheduled_octo_control_delivery_rewrite",
+        )
+    except Exception:
+        logger.debug("Scheduled Octo control delivery rewrite failed", exc_info=True)
+        return _coerce_scheduled_octo_control_reply(value)
+
+    return _coerce_scheduled_octo_control_reply(rewritten)
+
+
+def _normalize_scheduled_octo_control_notify_policy(notify_user: str | None) -> str:
+    policy = normalize_notify_user_policy(notify_user)
+    if policy == "if_significant":
+        return "never"
+    return policy
+
+
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
     raw = os.getenv(name)
     if raw is None:
@@ -1887,13 +1953,40 @@ class Octo:
     ) -> dict[str, Any]:
         scheduler = self.scheduler
         task_id = str(task.get("id") or "").strip()
-        notify_user = normalize_notify_user_policy(task.get("notify_user"))
+        notify_user = _normalize_scheduled_octo_control_notify_policy(task.get("notify_user"))
         reply_text = await route_scheduled_octo_control(
             self,
             task,
             chat_id=chat_id,
         )
-        normalized_reply = await _normalize_heartbeat_delivery_reply(self.provider, reply_text)
+        normalized_reply = await _normalize_scheduled_octo_control_reply(self.provider, reply_text)
+        if normalized_reply == "NO_USER_RESPONSE":
+            logger.warning(
+                "Scheduled Octo control task missing explicit completion signal",
+                task_id=task_id or None,
+                chat_id=chat_id,
+                raw_reply_preview=safe_preview(reply_text, limit=200),
+            )
+            return {
+                "status": "failed",
+                "completed": False,
+                "reason": "missing_completion_signal",
+            }
+        if normalized_reply == _SCHEDULED_OCTO_CONTROL_DONE:
+            if scheduler is not None and task_id:
+                scheduler.mark_executed(task_id)
+            logger.info(
+                "Scheduled Octo control task completed silently",
+                task_id=task_id or None,
+                notify_user=notify_user,
+                chat_id=chat_id,
+            )
+            return {
+                "status": "completed",
+                "completed": True,
+                "user_visible_sent": False,
+                "delivery_mode": DeliveryMode.SILENT,
+            }
         delivery = resolve_user_delivery(normalized_reply)
         user_visible_sent = False
         if delivery.user_visible and notify_user != "never":

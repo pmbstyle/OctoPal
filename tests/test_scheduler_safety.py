@@ -162,7 +162,7 @@ def test_schedule_task_derives_legacy_octo_control_mode_without_worker_id(tmp_pa
     assert payload["execution_mode"] == "octo_control"
     assert store.last_upsert is not None
     assert store.last_upsert["metadata"] == {
-        "notify_user": "if_significant",
+        "notify_user": "never",
         "execution_mode": "octo_control",
     }
 
@@ -419,7 +419,7 @@ async def test_route_scheduled_octo_control_uses_control_plane_prompt_and_skips_
 
     async def _complete_route_with_tools(**kwargs):
         calls["complete_route"] += 1
-        return "NO_USER_RESPONSE"
+        return "SCHEDULED_TASK_DONE"
 
     def _build_octo_prompt_should_not_run(*args, **kwargs):
         raise AssertionError("build_octo_prompt should not run for scheduled octo control route")
@@ -434,7 +434,7 @@ async def test_route_scheduled_octo_control_uses_control_plane_prompt_and_skips_
 
     result = await octo_router.route_scheduled_octo_control(DummyOcto(), task)
 
-    assert result == "NO_USER_RESPONSE"
+    assert result == "SCHEDULED_TASK_DONE"
     assert calls == {"control_prompt": 1, "complete_route": 1}
 
 
@@ -582,12 +582,12 @@ async def test_octo_dispatch_due_scheduled_tasks_runs_octo_control_tasks(monkeyp
     monkeypatch.setattr(
         octo_router,
         "route_scheduled_octo_control",
-        lambda octo, task, *, chat_id=0: asyncio.sleep(0, result="NO_USER_RESPONSE"),
+        lambda octo, task, *, chat_id=0: asyncio.sleep(0, result="SCHEDULED_TASK_DONE"),
     )
     monkeypatch.setattr(
         octo_core,
         "route_scheduled_octo_control",
-        lambda octo, task, *, chat_id=0: asyncio.sleep(0, result="NO_USER_RESPONSE"),
+        lambda octo, task, *, chat_id=0: asyncio.sleep(0, result="SCHEDULED_TASK_DONE"),
     )
 
     octo = Octo(
@@ -614,6 +614,69 @@ async def test_octo_dispatch_due_scheduled_tasks_runs_octo_control_tasks(monkeyp
         "errors": 0,
     }
     assert scheduler.store.marked_task_ids == ["memory_compact"]
+
+
+@pytest.mark.asyncio
+async def test_octo_dispatch_due_scheduled_tasks_requires_explicit_octo_control_completion_signal(monkeypatch):
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "memory_compact",
+                    "name": "Memory Compact",
+                    "description": "Compact memory",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": None,
+                    "task_text": "Compact memory",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps({"notify_user": "never"}),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+
+    async def _start_worker_async(self, **kwargs):
+        raise AssertionError("_start_worker_async should not be called for octo_control tasks")
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+    monkeypatch.setattr(
+        octo_router,
+        "route_scheduled_octo_control",
+        lambda octo, task, *, chat_id=0: asyncio.sleep(0, result="NO_USER_RESPONSE"),
+    )
+    monkeypatch.setattr(
+        octo_core,
+        "route_scheduled_octo_control",
+        lambda octo, task, *, chat_id=0: asyncio.sleep(0, result="NO_USER_RESPONSE"),
+    )
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+    )
+
+    summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
+
+    assert summary == {
+        "due_count": 1,
+        "attempted": 1,
+        "started": 0,
+        "completed": 0,
+        "duplicates": 0,
+        "rejected_by_policy": 0,
+        "policy_reasons": {},
+        "errors": 1,
+    }
+    assert scheduler.store.marked_task_ids == []
 
 
 @pytest.mark.asyncio
@@ -681,6 +744,70 @@ async def test_octo_dispatch_due_scheduled_tasks_sends_user_visible_octo_control
         "errors": 0,
     }
     assert sent_messages == [(123, "Daily digest is ready.")]
+    assert scheduler.store.marked_task_ids == ["daily_digest"]
+
+
+@pytest.mark.asyncio
+async def test_octo_control_if_significant_is_treated_as_never_for_delivery(monkeypatch):
+    sent_messages = []
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "daily_digest",
+                    "name": "Daily Digest",
+                    "description": "Build digest",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": None,
+                    "task_text": "Send daily digest",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps({"notify_user": "if_significant"}),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+
+    async def _start_worker_async(self, **kwargs):
+        raise AssertionError("_start_worker_async should not be called for octo_control tasks")
+
+    async def _internal_send(chat_id, text):
+        sent_messages.append((chat_id, text))
+
+    async def _route_scheduled_octo_control(octo, task, *, chat_id=0):
+        return "<user_visible>Daily digest is ready.</user_visible>"
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+    monkeypatch.setattr(octo_router, "route_scheduled_octo_control", _route_scheduled_octo_control)
+    monkeypatch.setattr(octo_core, "route_scheduled_octo_control", _route_scheduled_octo_control)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+        internal_send=_internal_send,
+    )
+
+    summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=123, max_tasks=5)
+
+    assert summary == {
+        "due_count": 1,
+        "attempted": 1,
+        "started": 0,
+        "completed": 1,
+        "duplicates": 0,
+        "rejected_by_policy": 0,
+        "policy_reasons": {},
+        "errors": 0,
+    }
+    assert sent_messages == []
     assert scheduler.store.marked_task_ids == ["daily_digest"]
 
 

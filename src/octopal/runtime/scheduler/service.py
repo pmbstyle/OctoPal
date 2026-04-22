@@ -67,6 +67,8 @@ class SchedulerService:
             worker_id=worker_id,
         )
         worker_id_value = str(worker_id or "").strip() or None
+        if normalized_execution_mode == "octo_control" and normalized_notify_user == "if_significant":
+            normalized_notify_user = "never"
         if normalized_execution_mode == "worker" and not worker_id_value:
             raise ValueError("worker_id is required when execution_mode=worker.")
         if normalized_execution_mode == "octo_control" and worker_id_value:
@@ -280,6 +282,8 @@ class SchedulerService:
                 None,
                 worker_id=normalized.get("worker_id"),
             )
+        if normalized["execution_mode"] == "octo_control" and normalized["notify_user"] == "if_significant":
+            normalized["notify_user"] = "never"
         dispatch_ready, dispatch_policy_reason = self._dispatch_readiness(normalized)
         normalized["dispatch_ready"] = dispatch_ready
         normalized["dispatch_policy_reason"] = dispatch_policy_reason

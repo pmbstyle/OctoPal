@@ -638,7 +638,8 @@ async def route_scheduled_octo_control(
                 "- Keep this turn bounded to the single scheduled task in the payload.\n"
                 "- You may use allowed control-plane and maintenance tools when necessary.\n"
                 "- Do not start workers or broad orchestration from this route.\n"
-                "- Return exactly one of: NO_USER_RESPONSE or <user_visible>...</user_visible>.\n"
+                "- Return exactly one of: SCHEDULED_TASK_DONE, NO_USER_RESPONSE, or <user_visible>...</user_visible>.\n"
+                "- Use SCHEDULED_TASK_DONE only if the task completed successfully with no user-visible update.\n"
                 "- Use <user_visible> only for a concise user-facing update after the task is complete."
             ),
         )
