@@ -29,6 +29,7 @@ from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.octo.control_plane import RouteMode
 from octopal.runtime.octo.delivery import resolve_user_delivery
 from octopal.runtime.octo.prompt_builder import (
+    build_control_plane_prompt,
     build_bootstrap_context_prompt,
     build_octo_prompt,
 )
@@ -145,6 +146,12 @@ _INITIAL_OCTO_TOOL_NAMES = _ALWAYS_INCLUDE_TOOL_NAMES | {
 _WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES = {
     "get_worker_output_path",
     "manage_canon",
+}
+_HEARTBEAT_ALLOWED_TOOL_NAMES = {
+    "octo_context_health",
+    "scheduler_status",
+    "check_schedule",
+    "gateway_status",
 }
 _DURABLE_WORKSPACE_ROOTS = ("reports", "artifacts")
 _LEGACY_WORKER_ARTIFACT_KEYS = ("report_path", "output_path", "path", "file")
@@ -392,6 +399,73 @@ async def route_or_reply(
             )
         if routing_trace_token is not None:
             reset_trace_context(routing_trace_token)
+
+
+async def route_heartbeat(
+    octo: Any,
+    chat_id: int,
+    user_text: str,
+    *,
+    show_typing: bool = True,
+    include_wakeup: bool = True,
+) -> str:
+    """Run a bounded heartbeat/control-plane turn without the full conversation planner path."""
+    if chat_id > 0 and show_typing:
+        await octo.set_typing(chat_id, True)
+
+    await octo.set_thinking(True)
+    try:
+        wake_notice = ""
+        if include_wakeup and hasattr(octo, "peek_context_wakeup"):
+            wake_notice = str(octo.peek_context_wakeup(chat_id) or "")
+
+        octo_tools, ctx = _get_heartbeat_tools(octo, chat_id)
+        resolution_report = ctx.get("tool_resolution_report")
+        available_count = len(getattr(resolution_report, "available_tools", ()) or ())
+        deferred_count = max(0, available_count - len(octo_tools))
+        logger.info(
+            "Heartbeat tools fetched",
+            route_mode=RouteMode.HEARTBEAT.value,
+            active_tool_count=len(octo_tools),
+            available_tool_count=available_count,
+            deferred_tool_count=deferred_count,
+        )
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
+            ctx.get("tool_resolution_report"),
+        )
+        messages = await build_control_plane_prompt(
+            user_text=user_text,
+            chat_id=chat_id,
+            tool_policy_summary=tool_policy_summary,
+            wake_notice=wake_notice,
+            reflection=getattr(octo, "reflection", None),
+            mode_label="heartbeat",
+            mode_rules=(
+                "Heartbeat route rules:\n"
+                "- Return exactly one of: HEARTBEAT_OK, NO_USER_RESPONSE, or <user_visible>...</user_visible>.\n"
+                "- Use tools only if they are clearly necessary for current heartbeat/scheduler state.\n"
+                "- Do not start broad orchestration from heartbeat mode.\n"
+                "- Do not rely on full workspace bootstrap, recent chat history, or rich memory recall."
+            ),
+        )
+        _log_system_prompt(messages, "heartbeat")
+        reply_text = await _complete_route_with_tools(
+            octo=octo,
+            provider=octo.provider,
+            messages=messages,
+            tool_specs=octo_tools,
+            ctx=ctx,
+            internal_followup=False,
+            user_text=user_text,
+            images=None,
+            allow_tool_catalog_expansion=False,
+        )
+        return normalize_plain_text(reply_text)
+    finally:
+        await octo.set_thinking(False)
+        if chat_id > 0 and show_typing:
+            await octo.set_typing(chat_id, False)
 
 
 async def _complete_route_with_tools(
@@ -1215,6 +1289,48 @@ def _get_worker_followup_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec],
     )
     tool_specs = list(resolution_report.available_tools)
     tool_specs = _budget_tool_specs(tool_specs, max_count=len(_WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES))
+    ctx["active_tool_specs"] = tool_specs
+    ctx["tool_resolution_report"] = resolution_report
+    ctx["all_tool_specs"] = all_tools
+    return tool_specs, ctx
+
+
+def _get_heartbeat_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, object]]:
+    return _get_control_plane_tools(
+        octo,
+        chat_id,
+        allowed_tool_names=_HEARTBEAT_ALLOWED_TOOL_NAMES,
+        policy_label="octo.heartbeat_allowlist",
+    )
+
+
+def _get_control_plane_tools(
+    octo: Any,
+    chat_id: int,
+    *,
+    allowed_tool_names: set[str],
+    policy_label: str,
+) -> tuple[list[ToolSpec], dict[str, object]]:
+    perms = {
+        "self_control": True,
+        "service_read": True,
+    }
+    ctx = {"octo": octo, "chat_id": chat_id}
+    mcp_manager = getattr(octo, "mcp_manager", None)
+    policy_steps = [
+        ToolPolicyPipelineStep(
+            label=policy_label,
+            policy=ToolPolicy(allow=sorted(allowed_tool_names)),
+        )
+    ]
+    all_tools = get_tools(mcp_manager=mcp_manager)
+    resolution_report = resolve_tool_diagnostics(
+        all_tools,
+        permissions=perms,
+        policy_pipeline_steps=policy_steps,
+    )
+    tool_specs = list(resolution_report.available_tools)
+    tool_specs = _budget_tool_specs(tool_specs, max_count=len(allowed_tool_names))
     ctx["active_tool_specs"] = tool_specs
     ctx["tool_resolution_report"] = resolution_report
     ctx["all_tool_specs"] = all_tools

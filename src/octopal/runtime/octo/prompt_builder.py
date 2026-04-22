@@ -477,3 +477,66 @@ async def build_octo_prompt(
             messages.append(Message(role="user", content=user_text))
 
     return messages
+
+
+async def build_control_plane_prompt(
+    *,
+    user_text: str,
+    chat_id: int,
+    tool_policy_summary: str = "",
+    wake_notice: str = "",
+    reflection: ReflectionService | None = None,
+    mode_label: str = "control-plane",
+    mode_rules: str = "",
+) -> list[Message]:
+    """Build a bounded prompt for control-plane turns without full workspace/memory context."""
+
+    from octopal.infrastructure.providers.base import Message
+
+    system_prompt = await _load_system_prompt_file()
+    persona_prompt_lines = await build_persona_prompt()
+    datetime_prompt = _current_datetime_prompt()
+
+    messages: list[Message] = [Message(role="system", content=system_prompt)]
+    if persona_prompt_lines:
+        messages.append(Message(role="system", content="\n".join(persona_prompt_lines)))
+    if wake_notice.strip():
+        messages.append(
+            Message(
+                role="system",
+                content=(
+                    "Wake-up directive after context reset:\n"
+                    f"{wake_notice.strip()}\n"
+                    "Do not autopilot; first pick one mode: continue / clarify / replan."
+                ),
+            )
+        )
+        if reflection is not None:
+            try:
+                reflection_context = await asyncio.to_thread(
+                    reflection.build_wakeup_context,
+                    chat_id,
+                )
+            except Exception:
+                reflection_context = ""
+            if reflection_context:
+                messages.append(Message(role="system", content=reflection_context))
+
+    messages.append(Message(role="system", content=datetime_prompt))
+    messages.append(
+        Message(
+            role="system",
+            content=(
+                f"You are operating in bounded {mode_label} mode.\n"
+                "Keep this turn cheap, deterministic, and operationally safe.\n"
+                "Do not behave like a full conversational planning turn unless the route explicitly permits it."
+            ),
+        )
+    )
+    if tool_policy_summary.strip():
+        messages.append(Message(role="system", content=tool_policy_summary.strip()))
+    if mode_rules.strip():
+        messages.append(Message(role="system", content=mode_rules.strip()))
+
+    messages.append(Message(role="user", content=user_text))
+    return messages

@@ -65,6 +65,7 @@ from octopal.runtime.octo.router import (
     _complete_text,
     build_forced_worker_followup,
     normalize_plain_text,
+    route_heartbeat,
     route_or_reply,
     route_worker_results_back_to_octo,
     should_force_worker_followup,
@@ -2566,52 +2567,62 @@ class Octo:
                         "heartbeat": not track_progress,
                     },
                 )
-            bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
-            trace_metadata["bootstrap_chars"] = len(bootstrap_context.content)
-            if bootstrap_context.files:
-                files_summary = ", ".join(
-                    [f"{name} ({size} chars)" for name, size in bootstrap_context.files]
+            bootstrap_context = None
+            if route_request.mode is RouteMode.HEARTBEAT:
+                reply_text = await route_heartbeat(
+                    self,
+                    chat_id,
+                    text,
+                    show_typing=show_typing,
+                    include_wakeup=include_wakeup,
                 )
-                logger.debug(
-                    "Octo bootstrap files",
-                    route_mode=route_request.mode.value,
-                    files=files_summary,
-                    file_count=len(bootstrap_context.files),
-                    total_chars=len(bootstrap_context.content),
-                    hash=bootstrap_context.hash,
-                )
-            route_kwargs: dict[str, Any] = {
-                "show_typing": show_typing,
-                "images": images,
-                "saved_file_paths": saved_file_paths,
-                "include_wakeup": include_wakeup,
-                "route_mode": route_request.mode,
-            }
-            while True:
-                try:
-                    reply_text = await route_or_reply(
-                        self,
-                        self.provider,
-                        self.memory,
-                        text,
-                        chat_id,
-                        bootstrap_context.content,
-                        **route_kwargs,
+            else:
+                bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
+                trace_metadata["bootstrap_chars"] = len(bootstrap_context.content)
+                if bootstrap_context.files:
+                    files_summary = ", ".join(
+                        [f"{name} ({size} chars)" for name, size in bootstrap_context.files]
                     )
-                    break
-                except TypeError as exc:
-                    # Backward-compatible fallback for monkeypatched tests/extensions using older signatures.
-                    msg = str(exc)
-                    if "unexpected keyword argument" not in msg:
-                        raise
-                    removed = False
-                    for key in list(route_kwargs.keys()):
-                        if f"'{key}'" in msg:
-                            route_kwargs.pop(key, None)
-                            removed = True
-                            break
-                    if not removed:
-                        raise
+                    logger.debug(
+                        "Octo bootstrap files",
+                        route_mode=route_request.mode.value,
+                        files=files_summary,
+                        file_count=len(bootstrap_context.files),
+                        total_chars=len(bootstrap_context.content),
+                        hash=bootstrap_context.hash,
+                    )
+                route_kwargs: dict[str, Any] = {
+                    "show_typing": show_typing,
+                    "images": images,
+                    "saved_file_paths": saved_file_paths,
+                    "include_wakeup": include_wakeup,
+                    "route_mode": route_request.mode,
+                }
+                while True:
+                    try:
+                        reply_text = await route_or_reply(
+                            self,
+                            self.provider,
+                            self.memory,
+                            text,
+                            chat_id,
+                            bootstrap_context.content,
+                            **route_kwargs,
+                        )
+                        break
+                    except TypeError as exc:
+                        # Backward-compatible fallback for monkeypatched tests/extensions using older signatures.
+                        msg = str(exc)
+                        if "unexpected keyword argument" not in msg:
+                            raise
+                        removed = False
+                        for key in list(route_kwargs.keys()):
+                            if f"'{key}'" in msg:
+                                route_kwargs.pop(key, None)
+                                removed = True
+                                break
+                        if not removed:
+                            raise
             initial_reaction_emoji, _ = extract_reaction_and_strip(reply_text or "")
             wants_followup = self.consume_structured_followup_required(correlation_id)
             if not track_progress:
@@ -2647,7 +2658,7 @@ class Octo:
                 )
             if include_wakeup:
                 self.clear_context_wakeup(chat_id)
-            if bootstrap_context.hash:
+            if bootstrap_context is not None and bootstrap_context.hash:
                 await asyncio.to_thread(
                     self.store.set_chat_bootstrap_hash, chat_id, bootstrap_context.hash, utc_now()
                 )
