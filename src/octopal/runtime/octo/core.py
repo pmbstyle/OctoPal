@@ -65,6 +65,7 @@ from octopal.runtime.octo.router import (
     _complete_text,
     build_forced_worker_followup,
     normalize_plain_text,
+    route_internal_maintenance,
     route_heartbeat,
     route_or_reply,
     route_worker_results_back_to_octo,
@@ -1655,8 +1656,8 @@ class Octo:
             await self.connector_manager.load_and_start_all()
 
         wake_up_prompt = (
-            "You are waking up. Read AGENTS.md and inspect available workers internally. "
-            "Use tools if needed, but never output a tool name or tool syntax as your final answer. "
+            "You are waking up. Inspect runtime health and available workers internally. "
+            "Use only bounded control-plane tools if needed, but never output a tool name or tool syntax as your final answer. "
             "Then produce a short friendly startup status message for the user in plain language."
         )
         original_send = self.internal_send
@@ -1684,14 +1685,10 @@ class Octo:
             )
             self.internal_send = None
         try:
-            bootstrap_context = await build_bootstrap_context_prompt(self.store, system_chat_id)
-            result = await route_or_reply(
+            result = await route_internal_maintenance(
                 self,
-                self.provider,
-                self.memory,
-                wake_up_prompt,
                 system_chat_id,
-                bootstrap_context.content,
+                wake_up_prompt,
             )
             if should_suppress_user_delivery(result):
                 result = "Octo is online. Initialization is complete and I am ready for your tasks."

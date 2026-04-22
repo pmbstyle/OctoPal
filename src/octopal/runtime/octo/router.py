@@ -153,6 +153,10 @@ _HEARTBEAT_ALLOWED_TOOL_NAMES = {
     "check_schedule",
     "gateway_status",
 }
+_INTERNAL_MAINTENANCE_ALLOWED_TOOL_NAMES = _HEARTBEAT_ALLOWED_TOOL_NAMES | {
+    "list_workers",
+    "list_active_workers",
+}
 _DURABLE_WORKSPACE_ROOTS = ("reports", "artifacts")
 _LEGACY_WORKER_ARTIFACT_KEYS = ("report_path", "output_path", "path", "file")
 _TEXTUAL_TOOL_NAME_RE = re.compile(r"^(?:mcp__[\w-]+__)?[a-z][a-z0-9_]{1,63}$", re.IGNORECASE)
@@ -466,6 +470,60 @@ async def route_heartbeat(
         await octo.set_thinking(False)
         if chat_id > 0 and show_typing:
             await octo.set_typing(chat_id, False)
+
+
+async def route_internal_maintenance(
+    octo: Any,
+    chat_id: int,
+    user_text: str,
+) -> str:
+    """Run a bounded internal maintenance turn without the full conversation planner path."""
+    await octo.set_thinking(True)
+    try:
+        octo_tools, ctx = _get_internal_maintenance_tools(octo, chat_id)
+        resolution_report = ctx.get("tool_resolution_report")
+        available_count = len(getattr(resolution_report, "available_tools", ()) or ())
+        deferred_count = max(0, available_count - len(octo_tools))
+        logger.info(
+            "Internal maintenance tools fetched",
+            route_mode=RouteMode.INTERNAL_MAINTENANCE.value,
+            active_tool_count=len(octo_tools),
+            available_tool_count=available_count,
+            deferred_tool_count=deferred_count,
+        )
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
+            ctx.get("tool_resolution_report"),
+        )
+        messages = await build_control_plane_prompt(
+            user_text=user_text,
+            chat_id=chat_id,
+            tool_policy_summary=tool_policy_summary,
+            reflection=getattr(octo, "reflection", None),
+            mode_label="internal-maintenance",
+            mode_rules=(
+                "Internal maintenance route rules:\n"
+                "- Keep this turn operational and bounded.\n"
+                "- You may inspect runtime health and worker availability.\n"
+                "- Do not start broad orchestration, memory recall, or user-task planning.\n"
+                "- Return a short user-visible readiness/update message in plain language."
+            ),
+        )
+        _log_system_prompt(messages, "internal_maintenance")
+        reply_text = await _complete_route_with_tools(
+            octo=octo,
+            provider=octo.provider,
+            messages=messages,
+            tool_specs=octo_tools,
+            ctx=ctx,
+            internal_followup=False,
+            user_text=user_text,
+            images=None,
+            allow_tool_catalog_expansion=False,
+        )
+        return normalize_plain_text(reply_text)
+    finally:
+        await octo.set_thinking(False)
 
 
 async def _complete_route_with_tools(
@@ -1301,6 +1359,17 @@ def _get_heartbeat_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[
         chat_id,
         allowed_tool_names=_HEARTBEAT_ALLOWED_TOOL_NAMES,
         policy_label="octo.heartbeat_allowlist",
+    )
+
+
+def _get_internal_maintenance_tools(
+    octo: Any, chat_id: int
+) -> tuple[list[ToolSpec], dict[str, object]]:
+    return _get_control_plane_tools(
+        octo,
+        chat_id,
+        allowed_tool_names=_INTERNAL_MAINTENANCE_ALLOWED_TOOL_NAMES,
+        policy_label="octo.internal_maintenance_allowlist",
     )
 
 

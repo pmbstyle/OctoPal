@@ -860,6 +860,90 @@ async def test_route_heartbeat_uses_control_plane_prompt_and_skips_planner(monke
 
 
 @pytest.mark.asyncio
+async def test_route_internal_maintenance_uses_control_plane_prompt_and_skips_planner(
+    monkeypatch,
+):
+    calls = {"control_prompt": 0, "complete_route": 0}
+
+    class DummyOcto:
+        provider = object()
+        reflection = None
+
+        async def set_thinking(self, value):
+            return None
+
+    async def _build_control_plane_prompt(**kwargs):
+        calls["control_prompt"] += 1
+        assert kwargs["mode_label"] == "internal-maintenance"
+        return [octo_router.Message(role="system", content="control plane")]
+
+    async def _complete_route_with_tools(**kwargs):
+        calls["complete_route"] += 1
+        return "Octo is online."
+
+    def _build_octo_prompt_should_not_run(*args, **kwargs):
+        raise AssertionError("build_octo_prompt should not run for internal maintenance")
+
+    def _build_plan_should_not_run(*args, **kwargs):
+        raise AssertionError("_build_plan should not run for internal maintenance")
+
+    monkeypatch.setattr(octo_router, "build_control_plane_prompt", _build_control_plane_prompt)
+    monkeypatch.setattr(octo_router, "_complete_route_with_tools", _complete_route_with_tools)
+    monkeypatch.setattr(octo_router, "build_octo_prompt", _build_octo_prompt_should_not_run)
+    monkeypatch.setattr(octo_router, "_build_plan", _build_plan_should_not_run)
+
+    result = await octo_router.route_internal_maintenance(DummyOcto(), 0, "wake up")
+
+    assert result == "Octo is online."
+    assert calls == {"control_prompt": 1, "complete_route": 1}
+
+
+@pytest.mark.asyncio
+async def test_initialize_system_uses_internal_maintenance_route(monkeypatch):
+    calls = {"internal_maintenance": 0}
+
+    class DummyStore:
+        def list_workers(self):
+            return []
+
+    class DummyMemory:
+        async def add_message(self, role, text, metadata):
+            return None
+
+    async def _route_internal_maintenance(octo, chat_id, user_text):
+        calls["internal_maintenance"] += 1
+        assert chat_id == 0
+        assert "Inspect runtime health and available workers internally." in user_text
+        return "Octo is online."
+
+    async def _bootstrap_should_not_run(*args, **kwargs):
+        raise AssertionError("build_bootstrap_context_prompt should not run during startup")
+
+    async def _route_or_reply_should_not_run(*args, **kwargs):
+        raise AssertionError("route_or_reply should not run during startup")
+
+    monkeypatch.setattr(octo_core.Octo, "start_background_tasks", lambda self: None)
+    monkeypatch.setattr(octo_core, "route_internal_maintenance", _route_internal_maintenance)
+    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_should_not_run)
+    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply_should_not_run)
+
+    octo = Octo(
+        approvals=None,
+        memory=DummyMemory(),
+        canon=None,
+        provider=None,
+        store=DummyStore(),
+        policy=None,
+        runtime=None,
+        internal_send=None,
+    )
+
+    await octo.initialize_system()
+
+    assert calls == {"internal_maintenance": 1}
+
+
+@pytest.mark.asyncio
 async def test_batched_worker_followups_wait_for_pending_internal_results(monkeypatch):
     monkeypatch.setattr(octo_core, "_WORKER_FOLLOWUP_BATCH_WINDOW_SECONDS", 0.01)
     octo_core._WORKER_FOLLOWUP_BATCHES.clear()
