@@ -9,6 +9,7 @@ import structlog
 
 from octopal.channels import normalize_user_channel, user_channel_label
 from octopal.infrastructure.config.settings import load_settings
+from octopal.runtime.scheduler.service import normalize_execution_mode
 from octopal.tools.communication.send_file import send_file_to_user
 from octopal.runtime.memory.memchain import (
     memchain_init,
@@ -649,9 +650,14 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "properties": {
                     "name": {"type": "string", "description": "Human-readable name of the task."},
                     "frequency": {"type": "string", "description": "Frequency (e.g., 'Every 30 minutes', 'Daily at 14:00')."},
-                    "task": {"type": "string", "description": "The task description for the worker or Octo."},
+                    "task": {"type": "string", "description": "The task description for the scheduled action."},
                     "description": {"type": "string", "description": "Brief description of the task purpose."},
-                    "worker_id": {"type": "string", "description": "Optional: Specific worker template ID to use."},
+                    "execution_mode": {
+                        "type": "string",
+                        "enum": ["worker", "octo_control"],
+                        "description": "Execution mode for this scheduled task. Use worker for worker dispatch, or octo_control for future direct Octo control-plane tasks.",
+                    },
+                    "worker_id": {"type": "string", "description": "Specific worker template ID to use when execution_mode=worker."},
                     "inputs": {"type": "object", "description": "Optional: Inputs for the worker."},
                     "notify_user": {
                         "type": "string",
@@ -1606,6 +1612,7 @@ async def _tool_check_schedule(args, ctx) -> str:
                 "task_id": t.get("id"),
                 "name": t.get("name"),
                 "frequency": t.get("frequency"),
+                "execution_mode": t.get("execution_mode"),
                 "worker_id": t.get("worker_id"),
                 "task_text": t.get("task_text"),
                 "description": t.get("description"),
@@ -1657,6 +1664,7 @@ async def _tool_scheduler_status(args, ctx) -> str:
                 "name": next_due.get("name"),
                 "next_run_at": next_due.get("next_run_at"),
                 "due_now": bool(next_due.get("due_now")),
+                "execution_mode": next_due.get("execution_mode"),
             }
             if next_due
             else None
@@ -1666,6 +1674,7 @@ async def _tool_scheduler_status(args, ctx) -> str:
                 "task_id": task.get("id"),
                 "name": task.get("name"),
                 "frequency": task.get("frequency"),
+                "execution_mode": task.get("execution_mode"),
                 "worker_id": task.get("worker_id"),
                 "enabled": bool(int(task.get("enabled", 1) or 0) == 1),
                 "due_now": bool(task.get("due_now")),
@@ -1694,6 +1703,7 @@ def _tool_schedule_task(args, ctx) -> str:
             worker_id=args.get("worker_id"),
             inputs=args.get("inputs"),
             notify_user=args.get("notify_user"),
+            execution_mode=args.get("execution_mode"),
         )
     except ValueError as exc:
         return f"schedule_task error: {exc}"
@@ -1704,6 +1714,10 @@ def _tool_schedule_task(args, ctx) -> str:
             "task_id": task_id,
             "name": args["name"],
             "frequency": args["frequency"],
+            "execution_mode": normalize_execution_mode(
+                args.get("execution_mode"),
+                worker_id=args.get("worker_id"),
+            ),
             "notify_user": args.get("notify_user", "if_significant"),
         },
         ensure_ascii=False,

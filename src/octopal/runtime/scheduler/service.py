@@ -17,6 +17,7 @@ _EVERY_MINUTES_RE = re.compile(r"^every\s+(\d+)\s+minutes?$", re.IGNORECASE)
 _EVERY_HOURS_RE = re.compile(r"^every\s+(\d+)\s+hours?$", re.IGNORECASE)
 _DAILY_AT_RE = re.compile(r"^daily\s+at\s+(\d{1,2}):(\d{2})$", re.IGNORECASE)
 _NOTIFY_USER_POLICIES = {"never", "if_significant", "always"}
+_EXECUTION_MODES = {"worker", "octo_control"}
 
 
 def normalize_notify_user_policy(notify_user: str | None) -> str:
@@ -27,18 +28,49 @@ def normalize_notify_user_policy(notify_user: str | None) -> str:
     return value
 
 
+def normalize_execution_mode(
+    execution_mode: str | None,
+    *,
+    worker_id: str | None = None,
+) -> str:
+    value = str(execution_mode or "").strip().lower()
+    if not value:
+        return "worker" if str(worker_id or "").strip() else "octo_control"
+    if value not in _EXECUTION_MODES:
+        allowed = ", ".join(sorted(_EXECUTION_MODES))
+        raise ValueError(f"execution_mode must be one of: {allowed}.")
+    return value
+
+
 class SchedulerService:
     def __init__(self, store: Store, workspace_dir: Path) -> None:
         self.store = store
         self.workspace_dir = workspace_dir
         self.heartbeat_md = workspace_dir / "HEARTBEAT.md"
 
-    def schedule_task(self, name: str, frequency: str, task_text: str,
-                      description: str | None = None, worker_id: str | None = None,
-                      inputs: dict | None = None, notify_user: str | None = None) -> str:
+    def schedule_task(
+        self,
+        name: str,
+        frequency: str,
+        task_text: str,
+        description: str | None = None,
+        worker_id: str | None = None,
+        inputs: dict | None = None,
+        notify_user: str | None = None,
+        execution_mode: str | None = None,
+    ) -> str:
         """Add or update a scheduled task."""
         normalized_frequency = self._validate_and_normalize_frequency(frequency)
         normalized_notify_user = normalize_notify_user_policy(notify_user)
+        normalized_execution_mode = normalize_execution_mode(
+            execution_mode,
+            worker_id=worker_id,
+        )
+        worker_id_value = str(worker_id or "").strip() or None
+        if normalized_execution_mode == "worker" and not worker_id_value:
+            raise ValueError("worker_id is required when execution_mode=worker.")
+        if normalized_execution_mode == "octo_control" and worker_id_value:
+            raise ValueError("worker_id must be omitted when execution_mode=octo_control.")
         task_id = self._generate_id(name)
         self.store.upsert_scheduled_task(
             task_id=task_id,
@@ -46,9 +78,12 @@ class SchedulerService:
             frequency=normalized_frequency,
             task_text=task_text,
             description=description,
-            worker_id=worker_id,
+            worker_id=worker_id_value,
             inputs=inputs,
-            metadata={"notify_user": normalized_notify_user},
+            metadata={
+                "notify_user": normalized_notify_user,
+                "execution_mode": normalized_execution_mode,
+            },
         )
         self.sync_to_markdown()
         return task_id
@@ -113,6 +148,7 @@ class SchedulerService:
             lines.append(f"- **Frequency**: {t['frequency']}")
             normalized = self._normalize_task_record(t)
             lines.append(f"- **Notify user**: {normalized['notify_user']}")
+            lines.append(f"- **Execution mode**: {normalized['execution_mode']}")
             dispatch_line = "ready"
             if not bool(normalized.get("dispatch_ready")):
                 dispatch_line = f"rejected by policy ({normalized.get('dispatch_policy_reason') or 'unknown'})"
@@ -233,12 +269,26 @@ class SchedulerService:
         except ValueError:
             logger.warning("Invalid scheduled task notify_user policy", task_id=normalized.get("id"))
             normalized["notify_user"] = "if_significant"
+        try:
+            normalized["execution_mode"] = normalize_execution_mode(
+                metadata.get("execution_mode"),
+                worker_id=normalized.get("worker_id"),
+            )
+        except ValueError:
+            logger.warning("Invalid scheduled task execution_mode", task_id=normalized.get("id"))
+            normalized["execution_mode"] = normalize_execution_mode(
+                None,
+                worker_id=normalized.get("worker_id"),
+            )
         dispatch_ready, dispatch_policy_reason = self._dispatch_readiness(normalized)
         normalized["dispatch_ready"] = dispatch_ready
         normalized["dispatch_policy_reason"] = dispatch_policy_reason
         return normalized
 
     def _dispatch_readiness(self, task: dict[str, Any]) -> tuple[bool, str | None]:
+        execution_mode = str(task.get("execution_mode") or "").strip().lower()
+        if execution_mode == "octo_control":
+            return False, "unsupported_execution_mode"
         worker_id = str(task.get("worker_id") or "").strip()
         if not worker_id:
             return False, "missing_worker_id"

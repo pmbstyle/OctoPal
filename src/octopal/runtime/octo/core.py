@@ -1710,9 +1710,25 @@ class Octo:
         summary["due_count"] = len(due_tasks)
         for task in due_tasks[: max(1, int(max_tasks))]:
             task_id = str(task.get("id") or "").strip()
+            execution_mode = str(task.get("execution_mode") or "").strip().lower()
             worker_id = str(task.get("worker_id") or "").strip()
             task_text = str(task.get("task_text") or "").strip()
             inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
+            if execution_mode == "octo_control":
+                summary["rejected_by_policy"] += 1
+                reason = "unsupported_execution_mode"
+                policy_reasons = summary.setdefault("policy_reasons", {})
+                if isinstance(policy_reasons, dict):
+                    policy_reasons[reason] = int(policy_reasons.get(reason, 0) or 0) + 1
+                logger.warning(
+                    "Rejected scheduled task by dispatch policy",
+                    task_id=task_id or None,
+                    execution_mode=execution_mode,
+                    policy_reason=reason,
+                    worker_id=worker_id or None,
+                    has_task_text=bool(task_text),
+                )
+                continue
             if not worker_id or not task_text:
                 summary["rejected_by_policy"] += 1
                 reason = "missing_worker_id" if not worker_id else "missing_task_text"

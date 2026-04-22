@@ -102,12 +102,69 @@ def test_schedule_task_normalizes_valid_frequency(tmp_path: Path) -> None:
         name="Digest",
         frequency="daily at 7:05",
         task_text="Generate digest",
+        worker_id="writer",
         notify_user="always",
+        execution_mode="worker",
     )
     assert task_id == "digest"
     assert store.last_upsert is not None
     assert store.last_upsert["frequency"] == "Daily at 07:05"
-    assert store.last_upsert["metadata"] == {"notify_user": "always"}
+    assert store.last_upsert["metadata"] == {
+        "notify_user": "always",
+        "execution_mode": "worker",
+    }
+
+
+def test_schedule_task_rejects_worker_mode_without_worker_id(tmp_path: Path) -> None:
+    scheduler = SchedulerService(store=_StoreStub(), workspace_dir=tmp_path)
+    result = _tool_schedule_task(
+        {
+            "name": "Digest",
+            "frequency": "Every 30 minutes",
+            "task": "Generate digest",
+            "execution_mode": "worker",
+        },
+        {"octo": SimpleNamespace(scheduler=scheduler)},
+    )
+    assert result == "schedule_task error: worker_id is required when execution_mode=worker."
+
+
+def test_schedule_task_rejects_worker_id_for_octo_control_mode(tmp_path: Path) -> None:
+    scheduler = SchedulerService(store=_StoreStub(), workspace_dir=tmp_path)
+    result = _tool_schedule_task(
+        {
+            "name": "Digest",
+            "frequency": "Every 30 minutes",
+            "task": "Generate digest",
+            "execution_mode": "octo_control",
+            "worker_id": "writer",
+        },
+        {"octo": SimpleNamespace(scheduler=scheduler)},
+    )
+    assert result == "schedule_task error: worker_id must be omitted when execution_mode=octo_control."
+
+
+def test_schedule_task_derives_legacy_octo_control_mode_without_worker_id(tmp_path: Path) -> None:
+    store = _StoreStub()
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+    payload = json.loads(
+        _tool_schedule_task(
+            {
+                "name": "Compact memory",
+                "frequency": "Every 30 minutes",
+                "task": "Compact memory",
+            },
+            {"octo": SimpleNamespace(scheduler=scheduler)},
+        )
+    )
+
+    assert payload["status"] == "scheduled"
+    assert payload["execution_mode"] == "octo_control"
+    assert store.last_upsert is not None
+    assert store.last_upsert["metadata"] == {
+        "notify_user": "if_significant",
+        "execution_mode": "octo_control",
+    }
 
 
 def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
@@ -135,6 +192,7 @@ def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
     assert payload["due_tasks"][0]["task_id"] == "daily_digest"
     assert payload["due_tasks"][0]["inputs"] == {"section": "news", "max_items": 5}
     assert payload["due_tasks"][0]["notify_user"] == "always"
+    assert payload["due_tasks"][0]["execution_mode"] == "worker"
     assert payload["due_tasks"][0]["dispatch_ready"] is True
     assert payload["due_tasks"][0]["dispatch_policy_reason"] is None
 
@@ -180,11 +238,14 @@ def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> No
     assert payload["tasks"][0]["due_now"] is True
     assert payload["tasks"][0]["next_run_at"] is not None
     assert payload["tasks"][0]["notify_user"] == "if_significant"
+    assert payload["tasks"][0]["execution_mode"] == "worker"
     assert payload["tasks"][0]["dispatch_ready"] is True
+    assert payload["tasks"][1]["execution_mode"] == "octo_control"
     assert payload["tasks"][1]["dispatch_ready"] is False
-    assert payload["tasks"][1]["dispatch_policy_reason"] == "missing_worker_id"
+    assert payload["tasks"][1]["dispatch_policy_reason"] == "unsupported_execution_mode"
     assert any("due now" in hint for hint in payload["hints"])
     assert any("not dispatch-ready" in hint for hint in payload["hints"])
+    assert payload["next_due_task"]["execution_mode"] == "worker"
 
 
 def test_scheduler_sync_to_markdown_includes_dispatch_readiness(tmp_path: Path) -> None:
@@ -209,7 +270,8 @@ def test_scheduler_sync_to_markdown_includes_dispatch_readiness(tmp_path: Path) 
     scheduler.sync_to_markdown()
 
     heartbeat = (tmp_path / "HEARTBEAT.md").read_text(encoding="utf-8")
-    assert "**Dispatch**: rejected by policy (missing_worker_id)" in heartbeat
+    assert "**Execution mode**: octo_control" in heartbeat
+    assert "**Dispatch**: rejected by policy (unsupported_execution_mode)" in heartbeat
 
 
 def test_schedule_task_rejects_invalid_notify_user(tmp_path: Path) -> None:
@@ -485,7 +547,7 @@ async def test_octo_dispatch_due_scheduled_tasks_rejects_items_by_policy(monkeyp
         "started": 0,
         "duplicates": 0,
         "rejected_by_policy": 1,
-        "policy_reasons": {"missing_worker_id": 1},
+        "policy_reasons": {"unsupported_execution_mode": 1},
         "errors": 0,
     }
 
