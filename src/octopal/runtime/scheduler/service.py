@@ -288,7 +288,10 @@ class SchedulerService:
     def _dispatch_readiness(self, task: dict[str, Any]) -> tuple[bool, str | None]:
         execution_mode = str(task.get("execution_mode") or "").strip().lower()
         if execution_mode == "octo_control":
-            return False, "unsupported_execution_mode"
+            task_text = str(task.get("task_text") or "").strip()
+            if not task_text:
+                return False, "missing_task_text"
+            return True, None
         worker_id = str(task.get("worker_id") or "").strip()
         if not worker_id:
             return False, "missing_worker_id"

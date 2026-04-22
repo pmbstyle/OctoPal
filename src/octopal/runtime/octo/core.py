@@ -69,6 +69,7 @@ from octopal.runtime.octo.router import (
     route_heartbeat,
     route_or_reply,
     route_scheduler_tick,
+    route_scheduled_octo_control,
     route_worker_results_back_to_octo,
     should_force_worker_followup,
 )
@@ -512,6 +513,7 @@ def _empty_scheduler_metric_counters() -> dict[str, int]:
         "ticks_total": 0,
         "failures_total": 0,
         "started_total": 0,
+        "completed_total": 0,
         "duplicates_total": 0,
         "rejected_by_policy_total": 0,
         "errors_total": 0,
@@ -780,6 +782,98 @@ async def _send_worker_followup(
             chat_id=chat_id,
             text_len=len(text),
             batched_count=batched_count,
+        )
+    except Exception as exc:
+        trace_status = "error"
+        trace_metadata.update(summarize_exception(exc))
+        trace_output = {"status": "failed"}
+        raise
+    finally:
+        trace_metadata["duration_ms"] = round(now_ms() - trace_started_at_ms, 2)
+        await _finish_background_trace_context(
+            octo.trace_sink,
+            trace_ctx,
+            trace_token,
+            is_root_trace=is_root_trace,
+            status=trace_status,
+            output=trace_output,
+            metadata=trace_metadata,
+        )
+
+
+async def _send_scheduler_control_update(
+    octo: Octo,
+    chat_id: int,
+    task_id: str | None,
+    text: str,
+) -> None:
+    trace_started_at_ms = now_ms()
+    trace_metadata: dict[str, Any] = {
+        "delivery_channel": "internal",
+        "delivery_source": "scheduler_octo_control",
+        "scheduled_task_id": task_id,
+        "text_preview": safe_preview(text, limit=240),
+        "text_len": len(text or ""),
+    }
+    trace_ctx, trace_token, is_root_trace = await _start_background_trace_context(
+        octo.trace_sink,
+        name="channel.delivery",
+        chat_id=chat_id,
+        correlation_id=None,
+        metadata=trace_metadata,
+    )
+    trace_status = "ok"
+    trace_output: dict[str, Any] | None = None
+    try:
+        decision = resolve_user_delivery(text)
+        trace_metadata.update(
+            {
+                "delivery_mode": decision.mode,
+                "user_visible": decision.user_visible,
+                "suppressed_reason": decision.reason,
+            }
+        )
+        if not decision.user_visible:
+            trace_output = {"status": "suppressed", "reason": decision.reason}
+            logger.info(
+                "Scheduled Octo control update skipped",
+                chat_id=chat_id,
+                task_id=task_id,
+                reason=decision.reason,
+            )
+            return
+        if octo.internal_send:
+            await octo.internal_send(chat_id, decision.text)
+            octo.note_user_visible_delivery(chat_id, decision.text)
+            trace_output = {
+                "status": "sent",
+                "message_len": len(decision.text),
+            }
+            logger.info(
+                "Scheduled Octo control update sent",
+                chat_id=chat_id,
+                task_id=task_id,
+                text_len=len(decision.text),
+            )
+            await octo.memory.add_message(
+                "assistant",
+                decision.text,
+                {
+                    "chat_id": chat_id,
+                    "background_delivery": True,
+                    "scheduler_octo_control": True,
+                    "scheduled_task_id": task_id,
+                },
+            )
+            return
+        trace_status = "error"
+        trace_metadata["error_type"] = "no_sender_attached"
+        trace_output = {"status": "dropped", "reason": "no_sender_attached"}
+        logger.info(
+            "Scheduled Octo control update produced but no sender attached",
+            chat_id=chat_id,
+            task_id=task_id,
+            text_len=len(text),
         )
     except Exception as exc:
         trace_status = "error"
@@ -1547,6 +1641,7 @@ class Octo:
         if dispatch_summary is not None:
             payload["last_dispatch_attempted"] = int(dispatch_summary.get("attempted") or 0)
             payload["last_dispatch_started"] = int(dispatch_summary.get("started") or 0)
+            payload["last_dispatch_completed"] = int(dispatch_summary.get("completed") or 0)
             payload["last_dispatch_duplicates"] = int(dispatch_summary.get("duplicates") or 0)
             payload["last_dispatch_rejected_by_policy"] = int(
                 dispatch_summary.get("rejected_by_policy") or 0
@@ -1591,6 +1686,7 @@ class Octo:
                     "result_preview": safe_preview(normalized, limit=240),
                     "result_len": len(normalized or ""),
                     "dispatch_started": int(dispatch_summary.get("started") or 0),
+                    "dispatch_completed": int(dispatch_summary.get("completed") or 0),
                     "dispatch_duplicates": int(dispatch_summary.get("duplicates") or 0),
                     "dispatch_rejected_by_policy": int(
                         dispatch_summary.get("rejected_by_policy") or 0
@@ -1605,6 +1701,9 @@ class Octo:
             counters["ticks_total"] = int(counters.get("ticks_total", 0) or 0) + 1
             counters["started_total"] = int(counters.get("started_total", 0) or 0) + int(
                 dispatch_summary.get("started") or 0
+            )
+            counters["completed_total"] = int(counters.get("completed_total", 0) or 0) + int(
+                dispatch_summary.get("completed") or 0
             )
             counters["duplicates_total"] = int(
                 counters.get("duplicates_total", 0) or 0
@@ -1698,6 +1797,7 @@ class Octo:
             "due_count": 0,
             "attempted": 0,
             "started": 0,
+            "completed": 0,
             "duplicates": 0,
             "rejected_by_policy": 0,
             "policy_reasons": {},
@@ -1715,19 +1815,23 @@ class Octo:
             task_text = str(task.get("task_text") or "").strip()
             inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
             if execution_mode == "octo_control":
-                summary["rejected_by_policy"] += 1
-                reason = "unsupported_execution_mode"
-                policy_reasons = summary.setdefault("policy_reasons", {})
-                if isinstance(policy_reasons, dict):
-                    policy_reasons[reason] = int(policy_reasons.get(reason, 0) or 0) + 1
-                logger.warning(
-                    "Rejected scheduled task by dispatch policy",
-                    task_id=task_id or None,
-                    execution_mode=execution_mode,
-                    policy_reason=reason,
-                    worker_id=worker_id or None,
-                    has_task_text=bool(task_text),
-                )
+                summary["attempted"] += 1
+                try:
+                    result = await self._run_scheduled_octo_control_task_once(
+                        task=task,
+                        chat_id=chat_id,
+                    )
+                except Exception:
+                    summary["errors"] += 1
+                    logger.exception(
+                        "Scheduled Octo control task failed",
+                        task_id=task_id or None,
+                    )
+                    continue
+                if bool(result.get("completed")):
+                    summary["completed"] += 1
+                elif str(result.get("status") or "").strip().lower() == "failed":
+                    summary["errors"] += 1
                 continue
             if not worker_id or not task_text:
                 summary["rejected_by_policy"] += 1
@@ -1774,6 +1878,55 @@ class Octo:
                 summary["errors"] += 1
 
         return summary
+
+    async def _run_scheduled_octo_control_task_once(
+        self,
+        *,
+        task: dict[str, Any],
+        chat_id: int = 0,
+    ) -> dict[str, Any]:
+        scheduler = self.scheduler
+        task_id = str(task.get("id") or "").strip()
+        notify_user = normalize_notify_user_policy(task.get("notify_user"))
+        reply_text = await route_scheduled_octo_control(
+            self,
+            task,
+            chat_id=chat_id,
+        )
+        normalized_reply = await _normalize_heartbeat_delivery_reply(self.provider, reply_text)
+        delivery = resolve_user_delivery(normalized_reply)
+        user_visible_sent = False
+        if delivery.user_visible and notify_user != "never":
+            await _send_scheduler_control_update(
+                self,
+                chat_id,
+                task_id or None,
+                delivery.text,
+            )
+            user_visible_sent = True
+        elif delivery.user_visible:
+            logger.info(
+                "Scheduled Octo control update suppressed by notify policy",
+                task_id=task_id or None,
+                notify_user=notify_user,
+                chat_id=chat_id,
+            )
+        if scheduler is not None and task_id:
+            scheduler.mark_executed(task_id)
+        logger.info(
+            "Scheduled Octo control task completed",
+            task_id=task_id or None,
+            notify_user=notify_user,
+            chat_id=chat_id,
+            user_visible_sent=user_visible_sent,
+            delivery_mode=delivery.mode,
+        )
+        return {
+            "status": "completed",
+            "completed": True,
+            "user_visible_sent": user_visible_sent,
+            "delivery_mode": delivery.mode,
+        }
 
     def _reconcile_stale_worker_records(self) -> None:
         """Normalize stale DB worker states that no longer exist in runtime."""

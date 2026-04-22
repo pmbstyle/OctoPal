@@ -241,10 +241,10 @@ def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> No
     assert payload["tasks"][0]["execution_mode"] == "worker"
     assert payload["tasks"][0]["dispatch_ready"] is True
     assert payload["tasks"][1]["execution_mode"] == "octo_control"
-    assert payload["tasks"][1]["dispatch_ready"] is False
-    assert payload["tasks"][1]["dispatch_policy_reason"] == "unsupported_execution_mode"
+    assert payload["tasks"][1]["dispatch_ready"] is True
+    assert payload["tasks"][1]["dispatch_policy_reason"] is None
     assert any("due now" in hint for hint in payload["hints"])
-    assert any("not dispatch-ready" in hint for hint in payload["hints"])
+    assert not any("not dispatch-ready" in hint for hint in payload["hints"])
     assert payload["next_due_task"]["execution_mode"] == "worker"
 
 
@@ -271,7 +271,7 @@ def test_scheduler_sync_to_markdown_includes_dispatch_readiness(tmp_path: Path) 
 
     heartbeat = (tmp_path / "HEARTBEAT.md").read_text(encoding="utf-8")
     assert "**Execution mode**: octo_control" in heartbeat
-    assert "**Dispatch**: rejected by policy (unsupported_execution_mode)" in heartbeat
+    assert "**Dispatch**: ready" in heartbeat
 
 
 def test_schedule_task_rejects_invalid_notify_user(tmp_path: Path) -> None:
@@ -389,6 +389,56 @@ async def test_route_scheduler_tick_uses_control_plane_prompt_and_skips_planner(
 
 
 @pytest.mark.asyncio
+async def test_route_scheduled_octo_control_uses_control_plane_prompt_and_skips_planner(monkeypatch):
+    calls = {"control_prompt": 0, "complete_route": 0}
+
+    class DummyOcto:
+        provider = object()
+        reflection = None
+        mcp_manager = None
+
+        async def set_thinking(self, value):
+            return None
+
+    task = {
+        "id": "memory_compact",
+        "name": "Memory Compact",
+        "frequency": "Every 30 minutes",
+        "execution_mode": "octo_control",
+        "notify_user": "never",
+        "task_text": "Compact memory",
+        "inputs": {"mode": "soft"},
+    }
+
+    async def _build_control_plane_prompt(**kwargs):
+        calls["control_prompt"] += 1
+        assert kwargs["mode_label"] == "scheduled_octo_control"
+        assert "memory_compact" in kwargs["user_text"]
+        assert "octo_control" in kwargs["user_text"]
+        return [octo_router.Message(role="system", content="scheduled octo control")]
+
+    async def _complete_route_with_tools(**kwargs):
+        calls["complete_route"] += 1
+        return "NO_USER_RESPONSE"
+
+    def _build_octo_prompt_should_not_run(*args, **kwargs):
+        raise AssertionError("build_octo_prompt should not run for scheduled octo control route")
+
+    def _build_plan_should_not_run(*args, **kwargs):
+        raise AssertionError("_build_plan should not run for scheduled octo control route")
+
+    monkeypatch.setattr(octo_router, "build_control_plane_prompt", _build_control_plane_prompt)
+    monkeypatch.setattr(octo_router, "_complete_route_with_tools", _complete_route_with_tools)
+    monkeypatch.setattr(octo_router, "build_octo_prompt", _build_octo_prompt_should_not_run)
+    monkeypatch.setattr(octo_router, "_build_plan", _build_plan_should_not_run)
+
+    result = await octo_router.route_scheduled_octo_control(DummyOcto(), task)
+
+    assert result == "NO_USER_RESPONSE"
+    assert calls == {"control_prompt": 1, "complete_route": 1}
+
+
+@pytest.mark.asyncio
 async def test_octo_run_scheduler_tick_once_uses_bounded_scheduler_route(monkeypatch):
     calls = {"scheduler_tick": 0, "dispatch": 0}
 
@@ -406,6 +456,7 @@ async def test_octo_run_scheduler_tick_once_uses_bounded_scheduler_route(monkeyp
             "due_count": 0,
             "attempted": 0,
             "started": 0,
+            "completed": 0,
             "duplicates": 0,
             "rejected_by_policy": 0,
             "policy_reasons": {},
@@ -482,6 +533,7 @@ async def test_octo_dispatch_due_scheduled_tasks_starts_dispatchable_workers(mon
         "due_count": 1,
         "attempted": 1,
         "started": 1,
+        "completed": 0,
         "duplicates": 0,
         "rejected_by_policy": 0,
         "policy_reasons": {},
@@ -502,7 +554,7 @@ async def test_octo_dispatch_due_scheduled_tasks_starts_dispatchable_workers(mon
 
 
 @pytest.mark.asyncio
-async def test_octo_dispatch_due_scheduled_tasks_rejects_items_by_policy(monkeypatch):
+async def test_octo_dispatch_due_scheduled_tasks_runs_octo_control_tasks(monkeypatch):
     scheduler = SchedulerService(
         store=_StoreStub(
             tasks=[
@@ -524,9 +576,19 @@ async def test_octo_dispatch_due_scheduled_tasks_rejects_items_by_policy(monkeyp
     )
 
     async def _start_worker_async(self, **kwargs):
-        raise AssertionError("_start_worker_async should not be called for policy-rejected items")
+        raise AssertionError("_start_worker_async should not be called for octo_control tasks")
 
     monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+    monkeypatch.setattr(
+        octo_router,
+        "route_scheduled_octo_control",
+        lambda octo, task, *, chat_id=0: asyncio.sleep(0, result="NO_USER_RESPONSE"),
+    )
+    monkeypatch.setattr(
+        octo_core,
+        "route_scheduled_octo_control",
+        lambda octo, task, *, chat_id=0: asyncio.sleep(0, result="NO_USER_RESPONSE"),
+    )
 
     octo = Octo(
         provider=object(),
@@ -543,13 +605,83 @@ async def test_octo_dispatch_due_scheduled_tasks_rejects_items_by_policy(monkeyp
 
     assert summary == {
         "due_count": 1,
-        "attempted": 0,
+        "attempted": 1,
         "started": 0,
+        "completed": 1,
         "duplicates": 0,
-        "rejected_by_policy": 1,
-        "policy_reasons": {"unsupported_execution_mode": 1},
+        "rejected_by_policy": 0,
+        "policy_reasons": {},
         "errors": 0,
     }
+    assert scheduler.store.marked_task_ids == ["memory_compact"]
+
+
+@pytest.mark.asyncio
+async def test_octo_dispatch_due_scheduled_tasks_sends_user_visible_octo_control_update(monkeypatch):
+    sent_messages = []
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "daily_digest",
+                    "name": "Daily Digest",
+                    "description": "Build digest",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": None,
+                    "task_text": "Send daily digest",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps(
+                        {"notify_user": "always", "execution_mode": "octo_control"}
+                    ),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+
+    async def _start_worker_async(self, **kwargs):
+        raise AssertionError("_start_worker_async should not be called for octo_control tasks")
+
+    async def _internal_send(chat_id, text):
+        sent_messages.append((chat_id, text))
+
+    async def _route_scheduled_octo_control(octo, task, *, chat_id=0):
+        assert chat_id == 123
+        assert task["id"] == "daily_digest"
+        return "<user_visible>Daily digest is ready.</user_visible>"
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+    monkeypatch.setattr(octo_router, "route_scheduled_octo_control", _route_scheduled_octo_control)
+    monkeypatch.setattr(octo_core, "route_scheduled_octo_control", _route_scheduled_octo_control)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+        internal_send=_internal_send,
+    )
+
+    summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=123, max_tasks=5)
+
+    assert summary == {
+        "due_count": 1,
+        "attempted": 1,
+        "started": 0,
+        "completed": 1,
+        "duplicates": 0,
+        "rejected_by_policy": 0,
+        "policy_reasons": {},
+        "errors": 0,
+    }
+    assert sent_messages == [(123, "Daily digest is ready.")]
+    assert scheduler.store.marked_task_ids == ["daily_digest"]
 
 
 @pytest.mark.asyncio

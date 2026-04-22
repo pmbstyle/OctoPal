@@ -1554,6 +1554,7 @@ def _build_service_health(
     scheduler_rejected = int(
         scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0
     )
+    scheduler_completed = int(scheduler_metrics.get("last_dispatch_completed", 0) or 0)
     scheduler_started = int(scheduler_metrics.get("last_dispatch_started", 0) or 0)
     if not scheduler_metrics:
         scheduler_status = "warning"
@@ -1575,6 +1576,8 @@ def _build_service_health(
         scheduler_reason = (
             f"{scheduler_rejected} scheduled task(s) rejected by policy on last tick"
         )
+    elif scheduler_completed > 0:
+        scheduler_reason = f"completed {scheduler_completed} scheduled Octo task(s) on last tick"
     elif scheduler_started > 0:
         scheduler_reason = f"started {scheduler_started} scheduled task(s) on last tick"
     out.append(
@@ -1589,6 +1592,7 @@ def _build_service_health(
                 "last_tick_status": scheduler_tick_status or None,
                 "last_due_count": int(scheduler_metrics.get("last_due_count", 0) or 0),
                 "last_dispatch_started": scheduler_started,
+                "last_dispatch_completed": scheduler_completed,
                 "last_dispatch_duplicates": int(
                     scheduler_metrics.get("last_dispatch_duplicates", 0) or 0
                 ),

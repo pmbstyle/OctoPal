@@ -1850,6 +1850,9 @@ def _tool_gateway_status(args, ctx) -> str:
                 "last_tick_status": scheduler_metrics.get("last_tick_status"),
                 "last_due_count": int(scheduler_metrics.get("last_due_count", 0) or 0),
                 "last_dispatch_started": int(scheduler_metrics.get("last_dispatch_started", 0) or 0),
+                "last_dispatch_completed": int(
+                    scheduler_metrics.get("last_dispatch_completed", 0) or 0
+                ),
                 "last_dispatch_duplicates": int(scheduler_metrics.get("last_dispatch_duplicates", 0) or 0),
                 "last_dispatch_rejected_by_policy": int(
                     scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0
@@ -1857,6 +1860,7 @@ def _tool_gateway_status(args, ctx) -> str:
                 "last_dispatch_errors": int(scheduler_metrics.get("last_dispatch_errors", 0) or 0),
                 "last_policy_reasons": dict(scheduler_metrics.get("last_policy_reasons", {}) or {}),
                 "ticks_total": int(scheduler_metrics.get("ticks_total", 0) or 0),
+                "completed_total": int(scheduler_metrics.get("completed_total", 0) or 0),
                 "failures_total": int(scheduler_metrics.get("failures_total", 0) or 0),
                 "updated_at": scheduler_metrics.get("updated_at"),
             },
@@ -2000,6 +2004,9 @@ def _gateway_scheduler_reason(scheduler_metrics: dict[str, object]) -> str:
     rejected = int(scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0)
     if rejected > 0:
         return f"{rejected} scheduled task(s) rejected by policy on last tick"
+    completed = int(scheduler_metrics.get("last_dispatch_completed", 0) or 0)
+    if completed > 0:
+        return f"completed {completed} scheduled Octo task(s) on last tick"
     started = int(scheduler_metrics.get("last_dispatch_started", 0) or 0)
     if started > 0:
         return f"started {started} scheduled task(s) on last tick"
