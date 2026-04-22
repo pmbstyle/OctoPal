@@ -507,6 +507,17 @@ def _publish_runtime_metrics(thinking_count: int = 0) -> None:
     )
 
 
+def _empty_scheduler_metric_counters() -> dict[str, int]:
+    return {
+        "ticks_total": 0,
+        "failures_total": 0,
+        "started_total": 0,
+        "duplicates_total": 0,
+        "invalid_total": 0,
+        "errors_total": 0,
+    }
+
+
 async def _followup_worker(chat_id: int, queue: asyncio.Queue) -> None:
     while True:
         try:
@@ -1169,6 +1180,9 @@ class Octo:
     _cleanup_task: asyncio.Task | None = None
     _metrics_task: asyncio.Task | None = None
     _scheduler_task: asyncio.Task | None = None
+    _scheduler_metric_counters: dict[str, int] | None = None
+    _scheduler_interval_seconds: int | None = None
+    _scheduler_max_tasks: int | None = None
     _recent_tasks: dict[tuple[int, str, str], float] = (
         None  # Track in-flight worker launches per chat/correlation scope
     )
@@ -1287,6 +1301,12 @@ class Octo:
                     "OCTOPAL_CANON_EVENTS_KEEP_ARCHIVES", 7, minimum=1
                 ),
             }
+        if self._scheduler_metric_counters is None:
+            self._scheduler_metric_counters = _empty_scheduler_metric_counters()
+        if self._scheduler_interval_seconds is None:
+            self._scheduler_interval_seconds = None
+        if self._scheduler_max_tasks is None:
+            self._scheduler_max_tasks = None
         self._restore_worker_registry_state()
         self._thinking_count = 0
         self._tg_send = self.internal_send
@@ -1491,6 +1511,47 @@ class Octo:
             except Exception:
                 logger.debug("Failed to publish periodic metrics", exc_info=True)
 
+    def _publish_scheduler_metrics(
+        self,
+        *,
+        running: bool,
+        interval_seconds: int | None = None,
+        max_tasks: int | None = None,
+        last_tick_status: str | None = None,
+        due_count: int | None = None,
+        result_preview: str | None = None,
+        dispatch_summary: dict[str, int] | None = None,
+    ) -> None:
+        counters = self._scheduler_metric_counters or _empty_scheduler_metric_counters()
+        payload: dict[str, Any] = {
+            "running": bool(running),
+            "configured": self.scheduler is not None,
+            **counters,
+        }
+        resolved_interval = interval_seconds
+        if resolved_interval is None:
+            resolved_interval = self._scheduler_interval_seconds
+        resolved_max_tasks = max_tasks
+        if resolved_max_tasks is None:
+            resolved_max_tasks = self._scheduler_max_tasks
+        if resolved_interval is not None:
+            payload["interval_seconds"] = int(resolved_interval)
+        if resolved_max_tasks is not None:
+            payload["max_tasks"] = int(resolved_max_tasks)
+        if last_tick_status is not None:
+            payload["last_tick_status"] = str(last_tick_status)
+        if due_count is not None:
+            payload["last_due_count"] = int(due_count)
+        if result_preview is not None:
+            payload["last_result_preview"] = str(result_preview)
+        if dispatch_summary is not None:
+            payload["last_dispatch_attempted"] = int(dispatch_summary.get("attempted") or 0)
+            payload["last_dispatch_started"] = int(dispatch_summary.get("started") or 0)
+            payload["last_dispatch_duplicates"] = int(dispatch_summary.get("duplicates") or 0)
+            payload["last_dispatch_invalid"] = int(dispatch_summary.get("invalid") or 0)
+            payload["last_dispatch_errors"] = int(dispatch_summary.get("errors") or 0)
+        update_component_gauges("scheduler", payload)
+
     async def _run_scheduler_tick_once(self, *, chat_id: int = 0, max_tasks: int = 10) -> None:
         if self.scheduler is None:
             return
@@ -1530,7 +1591,29 @@ class Octo:
                     "dispatch_errors": int(dispatch_summary.get("errors") or 0),
                 }
             )
+            counters = self._scheduler_metric_counters or _empty_scheduler_metric_counters()
+            counters["ticks_total"] = int(counters.get("ticks_total", 0) or 0) + 1
+            counters["started_total"] = int(counters.get("started_total", 0) or 0) + int(
+                dispatch_summary.get("started") or 0
+            )
+            counters["duplicates_total"] = int(
+                counters.get("duplicates_total", 0) or 0
+            ) + int(dispatch_summary.get("duplicates") or 0)
+            counters["invalid_total"] = int(counters.get("invalid_total", 0) or 0) + int(
+                dispatch_summary.get("invalid") or 0
+            )
+            counters["errors_total"] = int(counters.get("errors_total", 0) or 0) + int(
+                dispatch_summary.get("errors") or 0
+            )
+            self._scheduler_metric_counters = counters
             if normalized_upper in {"", "SCHEDULER_IDLE", "NO_USER_RESPONSE"}:
+                self._publish_scheduler_metrics(
+                    running=True,
+                    last_tick_status="idle",
+                    due_count=due_count,
+                    result_preview=safe_preview(normalized, limit=160),
+                    dispatch_summary=dispatch_summary,
+                )
                 trace_output = {
                     "status": "idle",
                     "due_count": due_count,
@@ -1544,6 +1627,13 @@ class Octo:
                 )
                 return
 
+            self._publish_scheduler_metrics(
+                running=True,
+                last_tick_status="decision_ready",
+                due_count=due_count,
+                result_preview=safe_preview(normalized, limit=160),
+                dispatch_summary=dispatch_summary,
+            )
             trace_output = {
                 "status": "decision_ready",
                 "due_count": due_count,
@@ -1557,6 +1647,15 @@ class Octo:
                 result_preview=safe_preview(normalized, limit=160),
             )
         except Exception as exc:
+            counters = self._scheduler_metric_counters or _empty_scheduler_metric_counters()
+            counters["ticks_total"] = int(counters.get("ticks_total", 0) or 0) + 1
+            counters["failures_total"] = int(counters.get("failures_total", 0) or 0) + 1
+            self._scheduler_metric_counters = counters
+            self._publish_scheduler_metrics(
+                running=True,
+                last_tick_status="failed",
+                result_preview=safe_preview(str(exc), limit=160),
+            )
             trace_status = "error"
             trace_metadata.update(summarize_exception(exc))
             trace_output = {"status": "failed"}
@@ -1784,6 +1883,14 @@ class Octo:
                 "OCTOPAL_SCHEDULER_TICK_INTERVAL_SECONDS", 60, minimum=5
             )
             max_tasks = _env_int("OCTOPAL_SCHEDULER_TICK_MAX_TASKS", 10, minimum=1)
+            self._scheduler_interval_seconds = int(resolved_interval)
+            self._scheduler_max_tasks = int(max_tasks)
+            self._publish_scheduler_metrics(
+                running=True,
+                interval_seconds=resolved_interval,
+                max_tasks=max_tasks,
+                last_tick_status="starting",
+            )
             self._scheduler_task = asyncio.create_task(
                 self._periodic_scheduler_tick(resolved_interval, max_tasks=max_tasks)
             )
@@ -1813,6 +1920,8 @@ class Octo:
                 await self._scheduler_task
             except asyncio.CancelledError:
                 logger.info("Stopped periodic scheduler tick task")
+        if self.scheduler is not None:
+            self._publish_scheduler_metrics(running=False, last_tick_status="stopped")
 
         # Shutdown MCP sessions
         if self.mcp_manager:

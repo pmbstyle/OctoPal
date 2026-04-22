@@ -1718,6 +1718,7 @@ def _tool_gateway_status(args, ctx) -> str:
     whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
     exec_metrics = metrics.get("exec_run", {}) if isinstance(metrics, dict) else {}
     connectivity_metrics = metrics.get("connectivity", {}) if isinstance(metrics, dict) else {}
+    scheduler_metrics = metrics.get("scheduler", {}) if isinstance(metrics, dict) else {}
     active_channel_metrics = whatsapp_metrics if active_channel == "whatsapp" else telegram_metrics
 
     octo_status = build_octo_status(octo_metrics)
@@ -1747,6 +1748,12 @@ def _tool_gateway_status(args, ctx) -> str:
             "reason": _gateway_mcp_reason(connectivity_metrics),
             "updated_at": connectivity_metrics.get("updated_at"),
         },
+        {
+            "id": "scheduler",
+            "status": _gateway_scheduler_status(scheduler_metrics),
+            "reason": _gateway_scheduler_reason(scheduler_metrics),
+            "updated_at": scheduler_metrics.get("updated_at"),
+        },
     ]
     hints: list[str] = []
     if not running:
@@ -1759,6 +1766,10 @@ def _tool_gateway_status(args, ctx) -> str:
         hints.append("WhatsApp bridge is not connected; expect delivery issues until it reconnects.")
     if _mcp_connected_count(connectivity_metrics) == 0:
         hints.append("No MCP servers are currently connected; tool availability may be reduced.")
+    if int(scheduler_metrics.get("last_dispatch_invalid", 0) or 0) > 0:
+        hints.append("Some scheduled tasks were skipped as invalid; check worker_id/task_text coverage.")
+    if str(scheduler_metrics.get("last_tick_status", "") or "").strip().lower() == "failed":
+        hints.append("Last scheduler tick failed; inspect scheduler control-plane traces before trusting automation.")
     if not hints:
         hints.append("Gateway control plane looks healthy.")
 
@@ -1808,6 +1819,18 @@ def _tool_gateway_status(args, ctx) -> str:
                 "sessions_running": int(exec_metrics.get("background_sessions_running", 0) or 0),
                 "sessions_total": int(exec_metrics.get("background_sessions_total", 0) or 0),
                 "updated_at": exec_metrics.get("updated_at"),
+            },
+            "scheduler": {
+                "running": bool(scheduler_metrics.get("running")),
+                "last_tick_status": scheduler_metrics.get("last_tick_status"),
+                "last_due_count": int(scheduler_metrics.get("last_due_count", 0) or 0),
+                "last_dispatch_started": int(scheduler_metrics.get("last_dispatch_started", 0) or 0),
+                "last_dispatch_duplicates": int(scheduler_metrics.get("last_dispatch_duplicates", 0) or 0),
+                "last_dispatch_invalid": int(scheduler_metrics.get("last_dispatch_invalid", 0) or 0),
+                "last_dispatch_errors": int(scheduler_metrics.get("last_dispatch_errors", 0) or 0),
+                "ticks_total": int(scheduler_metrics.get("ticks_total", 0) or 0),
+                "failures_total": int(scheduler_metrics.get("failures_total", 0) or 0),
+                "updated_at": scheduler_metrics.get("updated_at"),
             },
             "mcp": {
                 "servers_total": _mcp_server_total(connectivity_metrics),
@@ -1919,6 +1942,41 @@ def _gateway_mcp_reason(connectivity_metrics: dict[str, object]) -> str:
     if total <= 0:
         return "no configured MCP servers reporting metrics"
     return f"{connected}/{total} server(s) connected"
+
+
+def _gateway_scheduler_status(scheduler_metrics: dict[str, object]) -> str:
+    if not isinstance(scheduler_metrics, dict) or not scheduler_metrics:
+        return "warning"
+    if not bool(scheduler_metrics.get("running")):
+        return "warning"
+    if str(scheduler_metrics.get("last_tick_status", "") or "").strip().lower() == "failed":
+        return "critical"
+    if int(scheduler_metrics.get("last_dispatch_errors", 0) or 0) > 0:
+        return "warning"
+    if int(scheduler_metrics.get("last_dispatch_invalid", 0) or 0) > 0:
+        return "warning"
+    return "ok"
+
+
+def _gateway_scheduler_reason(scheduler_metrics: dict[str, object]) -> str:
+    if not isinstance(scheduler_metrics, dict) or not scheduler_metrics:
+        return "scheduler metrics unavailable"
+    if not bool(scheduler_metrics.get("running")):
+        return "scheduler loop is not running"
+    last_status = str(scheduler_metrics.get("last_tick_status", "") or "").strip().lower()
+    if last_status == "failed":
+        return "last scheduler tick failed"
+    dispatch_errors = int(scheduler_metrics.get("last_dispatch_errors", 0) or 0)
+    if dispatch_errors > 0:
+        return f"{dispatch_errors} dispatch error(s) on last tick"
+    invalid = int(scheduler_metrics.get("last_dispatch_invalid", 0) or 0)
+    if invalid > 0:
+        return f"{invalid} invalid scheduled task(s) on last tick"
+    started = int(scheduler_metrics.get("last_dispatch_started", 0) or 0)
+    if started > 0:
+        return f"started {started} scheduled task(s) on last tick"
+    due_count = int(scheduler_metrics.get("last_due_count", 0) or 0)
+    return f"idle ({due_count} due task(s) on last tick)"
 
 
 async def _tool_octo_memchain_status(args, ctx) -> str:

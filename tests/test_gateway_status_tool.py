@@ -49,6 +49,18 @@ def test_gateway_status_summarizes_runtime_and_channel_state(monkeypatch, tmp_pa
                 "background_sessions_total": 3,
                 "updated_at": "2026-03-20T10:05:03+00:00",
             },
+            "scheduler": {
+                "running": True,
+                "last_tick_status": "idle",
+                "last_due_count": 2,
+                "last_dispatch_started": 1,
+                "last_dispatch_duplicates": 0,
+                "last_dispatch_invalid": 1,
+                "last_dispatch_errors": 0,
+                "ticks_total": 8,
+                "failures_total": 0,
+                "updated_at": "2026-03-20T10:05:03+00:00",
+            },
             "connectivity": {
                 "mcp_servers": {
                     "docs": {"connected": True},
@@ -69,6 +81,9 @@ def test_gateway_status_summarizes_runtime_and_channel_state(monkeypatch, tmp_pa
     assert payload["octo"]["followup_queues"] == 2
     assert payload["channel"]["queue_depth"] == 4
     assert payload["exec"]["sessions_running"] == 1
+    assert payload["scheduler"]["last_dispatch_started"] == 1
+    assert any(service["id"] == "scheduler" and service["status"] == "warning" for service in payload["services"])
     assert payload["mcp"]["servers_connected"] == 1
     assert any(service["id"] == "gateway" and service["status"] == "ok" for service in payload["services"])
+    assert any("invalid" in hint for hint in payload["hints"])
     assert any("follow-up queue" in hint for hint in payload["hints"])
