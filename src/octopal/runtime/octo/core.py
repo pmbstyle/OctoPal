@@ -513,7 +513,7 @@ def _empty_scheduler_metric_counters() -> dict[str, int]:
         "failures_total": 0,
         "started_total": 0,
         "duplicates_total": 0,
-        "invalid_total": 0,
+        "rejected_by_policy_total": 0,
         "errors_total": 0,
     }
 
@@ -1548,8 +1548,13 @@ class Octo:
             payload["last_dispatch_attempted"] = int(dispatch_summary.get("attempted") or 0)
             payload["last_dispatch_started"] = int(dispatch_summary.get("started") or 0)
             payload["last_dispatch_duplicates"] = int(dispatch_summary.get("duplicates") or 0)
-            payload["last_dispatch_invalid"] = int(dispatch_summary.get("invalid") or 0)
+            payload["last_dispatch_rejected_by_policy"] = int(
+                dispatch_summary.get("rejected_by_policy") or 0
+            )
             payload["last_dispatch_errors"] = int(dispatch_summary.get("errors") or 0)
+            payload["last_policy_reasons"] = dict(
+                dispatch_summary.get("policy_reasons") or {}
+            )
         update_component_gauges("scheduler", payload)
 
     async def _run_scheduler_tick_once(self, *, chat_id: int = 0, max_tasks: int = 10) -> None:
@@ -1587,7 +1592,12 @@ class Octo:
                     "result_len": len(normalized or ""),
                     "dispatch_started": int(dispatch_summary.get("started") or 0),
                     "dispatch_duplicates": int(dispatch_summary.get("duplicates") or 0),
-                    "dispatch_invalid": int(dispatch_summary.get("invalid") or 0),
+                    "dispatch_rejected_by_policy": int(
+                        dispatch_summary.get("rejected_by_policy") or 0
+                    ),
+                    "dispatch_policy_reasons": dict(
+                        dispatch_summary.get("policy_reasons") or {}
+                    ),
                     "dispatch_errors": int(dispatch_summary.get("errors") or 0),
                 }
             )
@@ -1599,9 +1609,9 @@ class Octo:
             counters["duplicates_total"] = int(
                 counters.get("duplicates_total", 0) or 0
             ) + int(dispatch_summary.get("duplicates") or 0)
-            counters["invalid_total"] = int(counters.get("invalid_total", 0) or 0) + int(
-                dispatch_summary.get("invalid") or 0
-            )
+            counters["rejected_by_policy_total"] = int(
+                counters.get("rejected_by_policy_total", 0) or 0
+            ) + int(dispatch_summary.get("rejected_by_policy") or 0)
             counters["errors_total"] = int(counters.get("errors_total", 0) or 0) + int(
                 dispatch_summary.get("errors") or 0
             )
@@ -1682,14 +1692,15 @@ class Octo:
         *,
         chat_id: int = 0,
         max_tasks: int = 10,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         scheduler = self.scheduler
-        summary = {
+        summary: dict[str, Any] = {
             "due_count": 0,
             "attempted": 0,
             "started": 0,
             "duplicates": 0,
-            "invalid": 0,
+            "rejected_by_policy": 0,
+            "policy_reasons": {},
             "errors": 0,
         }
         if scheduler is None:
@@ -1703,10 +1714,15 @@ class Octo:
             task_text = str(task.get("task_text") or "").strip()
             inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
             if not worker_id or not task_text:
-                summary["invalid"] += 1
+                summary["rejected_by_policy"] += 1
+                reason = "missing_worker_id" if not worker_id else "missing_task_text"
+                policy_reasons = summary.setdefault("policy_reasons", {})
+                if isinstance(policy_reasons, dict):
+                    policy_reasons[reason] = int(policy_reasons.get(reason, 0) or 0) + 1
                 logger.warning(
-                    "Skipped scheduled task without dispatchable worker payload",
+                    "Rejected scheduled task by dispatch policy",
                     task_id=task_id or None,
+                    policy_reason=reason,
                     worker_id=worker_id or None,
                     has_task_text=bool(task_text),
                 )

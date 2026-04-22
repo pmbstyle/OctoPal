@@ -55,8 +55,9 @@ def test_gateway_status_summarizes_runtime_and_channel_state(monkeypatch, tmp_pa
                 "last_due_count": 2,
                 "last_dispatch_started": 1,
                 "last_dispatch_duplicates": 0,
-                "last_dispatch_invalid": 1,
+                "last_dispatch_rejected_by_policy": 1,
                 "last_dispatch_errors": 0,
+                "last_policy_reasons": {"missing_worker_id": 1},
                 "ticks_total": 8,
                 "failures_total": 0,
                 "updated_at": "2026-03-20T10:05:03+00:00",
@@ -85,5 +86,5 @@ def test_gateway_status_summarizes_runtime_and_channel_state(monkeypatch, tmp_pa
     assert any(service["id"] == "scheduler" and service["status"] == "warning" for service in payload["services"])
     assert payload["mcp"]["servers_connected"] == 1
     assert any(service["id"] == "gateway" and service["status"] == "ok" for service in payload["services"])
-    assert any("invalid" in hint for hint in payload["hints"])
+    assert any("rejected by policy" in hint for hint in payload["hints"])
     assert any("follow-up queue" in hint for hint in payload["hints"])

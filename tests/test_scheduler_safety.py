@@ -314,7 +314,8 @@ async def test_octo_run_scheduler_tick_once_uses_bounded_scheduler_route(monkeyp
             "attempted": 0,
             "started": 0,
             "duplicates": 0,
-            "invalid": 0,
+            "rejected_by_policy": 0,
+            "policy_reasons": {},
             "errors": 0,
         }
 
@@ -389,7 +390,8 @@ async def test_octo_dispatch_due_scheduled_tasks_starts_dispatchable_workers(mon
         "attempted": 1,
         "started": 1,
         "duplicates": 0,
-        "invalid": 0,
+        "rejected_by_policy": 0,
+        "policy_reasons": {},
         "errors": 0,
     }
     assert started_calls == [
@@ -407,7 +409,7 @@ async def test_octo_dispatch_due_scheduled_tasks_starts_dispatchable_workers(mon
 
 
 @pytest.mark.asyncio
-async def test_octo_dispatch_due_scheduled_tasks_skips_invalid_items(monkeypatch):
+async def test_octo_dispatch_due_scheduled_tasks_rejects_items_by_policy(monkeypatch):
     scheduler = SchedulerService(
         store=_StoreStub(
             tasks=[
@@ -429,7 +431,7 @@ async def test_octo_dispatch_due_scheduled_tasks_skips_invalid_items(monkeypatch
     )
 
     async def _start_worker_async(self, **kwargs):
-        raise AssertionError("_start_worker_async should not be called for invalid scheduled items")
+        raise AssertionError("_start_worker_async should not be called for policy-rejected items")
 
     monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
 
@@ -451,7 +453,8 @@ async def test_octo_dispatch_due_scheduled_tasks_skips_invalid_items(monkeypatch
         "attempted": 0,
         "started": 0,
         "duplicates": 0,
-        "invalid": 1,
+        "rejected_by_policy": 1,
+        "policy_reasons": {"missing_worker_id": 1},
         "errors": 0,
     }
 

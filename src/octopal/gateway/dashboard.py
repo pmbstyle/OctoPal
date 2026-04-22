@@ -1551,7 +1551,9 @@ def _build_service_health(
     scheduler_tick_status = str(scheduler_metrics.get("last_tick_status", "") or "").lower()
     scheduler_age = _age_seconds(str(scheduler_updated_at or ""), now)
     scheduler_dispatch_errors = int(scheduler_metrics.get("last_dispatch_errors", 0) or 0)
-    scheduler_invalid = int(scheduler_metrics.get("last_dispatch_invalid", 0) or 0)
+    scheduler_rejected = int(
+        scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0
+    )
     scheduler_started = int(scheduler_metrics.get("last_dispatch_started", 0) or 0)
     if not scheduler_metrics:
         scheduler_status = "warning"
@@ -1568,9 +1570,11 @@ def _build_service_health(
     elif scheduler_dispatch_errors > 0:
         scheduler_status = "warning"
         scheduler_reason = f"{scheduler_dispatch_errors} scheduler dispatch error(s) on last tick"
-    elif scheduler_invalid > 0:
+    elif scheduler_rejected > 0:
         scheduler_status = "warning"
-        scheduler_reason = f"{scheduler_invalid} scheduled task(s) skipped as invalid on last tick"
+        scheduler_reason = (
+            f"{scheduler_rejected} scheduled task(s) rejected by policy on last tick"
+        )
     elif scheduler_started > 0:
         scheduler_reason = f"started {scheduler_started} scheduled task(s) on last tick"
     out.append(
@@ -1588,8 +1592,9 @@ def _build_service_health(
                 "last_dispatch_duplicates": int(
                     scheduler_metrics.get("last_dispatch_duplicates", 0) or 0
                 ),
-                "last_dispatch_invalid": scheduler_invalid,
+                "last_dispatch_rejected_by_policy": scheduler_rejected,
                 "last_dispatch_errors": scheduler_dispatch_errors,
+                "last_policy_reasons": dict(scheduler_metrics.get("last_policy_reasons", {}) or {}),
             },
         }
     )

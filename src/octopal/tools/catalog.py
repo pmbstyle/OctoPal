@@ -1766,8 +1766,10 @@ def _tool_gateway_status(args, ctx) -> str:
         hints.append("WhatsApp bridge is not connected; expect delivery issues until it reconnects.")
     if _mcp_connected_count(connectivity_metrics) == 0:
         hints.append("No MCP servers are currently connected; tool availability may be reduced.")
-    if int(scheduler_metrics.get("last_dispatch_invalid", 0) or 0) > 0:
-        hints.append("Some scheduled tasks were skipped as invalid; check worker_id/task_text coverage.")
+    if int(scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0) > 0:
+        hints.append(
+            "Some scheduled tasks were rejected by policy; check worker_id/task_text coverage."
+        )
     if str(scheduler_metrics.get("last_tick_status", "") or "").strip().lower() == "failed":
         hints.append("Last scheduler tick failed; inspect scheduler control-plane traces before trusting automation.")
     if not hints:
@@ -1826,8 +1828,11 @@ def _tool_gateway_status(args, ctx) -> str:
                 "last_due_count": int(scheduler_metrics.get("last_due_count", 0) or 0),
                 "last_dispatch_started": int(scheduler_metrics.get("last_dispatch_started", 0) or 0),
                 "last_dispatch_duplicates": int(scheduler_metrics.get("last_dispatch_duplicates", 0) or 0),
-                "last_dispatch_invalid": int(scheduler_metrics.get("last_dispatch_invalid", 0) or 0),
+                "last_dispatch_rejected_by_policy": int(
+                    scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0
+                ),
                 "last_dispatch_errors": int(scheduler_metrics.get("last_dispatch_errors", 0) or 0),
+                "last_policy_reasons": dict(scheduler_metrics.get("last_policy_reasons", {}) or {}),
                 "ticks_total": int(scheduler_metrics.get("ticks_total", 0) or 0),
                 "failures_total": int(scheduler_metrics.get("failures_total", 0) or 0),
                 "updated_at": scheduler_metrics.get("updated_at"),
@@ -1953,7 +1958,7 @@ def _gateway_scheduler_status(scheduler_metrics: dict[str, object]) -> str:
         return "critical"
     if int(scheduler_metrics.get("last_dispatch_errors", 0) or 0) > 0:
         return "warning"
-    if int(scheduler_metrics.get("last_dispatch_invalid", 0) or 0) > 0:
+    if int(scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0) > 0:
         return "warning"
     return "ok"
 
@@ -1969,9 +1974,9 @@ def _gateway_scheduler_reason(scheduler_metrics: dict[str, object]) -> str:
     dispatch_errors = int(scheduler_metrics.get("last_dispatch_errors", 0) or 0)
     if dispatch_errors > 0:
         return f"{dispatch_errors} dispatch error(s) on last tick"
-    invalid = int(scheduler_metrics.get("last_dispatch_invalid", 0) or 0)
-    if invalid > 0:
-        return f"{invalid} invalid scheduled task(s) on last tick"
+    rejected = int(scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0)
+    if rejected > 0:
+        return f"{rejected} scheduled task(s) rejected by policy on last tick"
     started = int(scheduler_metrics.get("last_dispatch_started", 0) or 0)
     if started > 0:
         return f"started {started} scheduled task(s) on last tick"
