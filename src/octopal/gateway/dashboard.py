@@ -1557,7 +1557,6 @@ def _build_service_health(
     scheduler_completed = int(scheduler_metrics.get("last_dispatch_completed", 0) or 0)
     scheduler_started = int(scheduler_metrics.get("last_dispatch_started", 0) or 0)
     if not scheduler_metrics:
-        scheduler_status = "warning"
         scheduler_reason = "scheduler metrics unavailable"
     elif not scheduler_running:
         scheduler_status = "warning"
