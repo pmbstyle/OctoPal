@@ -68,6 +68,7 @@ from octopal.runtime.octo.router import (
     route_internal_maintenance,
     route_heartbeat,
     route_or_reply,
+    route_scheduler_tick,
     route_worker_results_back_to_octo,
     should_force_worker_followup,
 )
@@ -1167,6 +1168,7 @@ class Octo:
     internal_typing_control: callable | None = None
     _cleanup_task: asyncio.Task | None = None
     _metrics_task: asyncio.Task | None = None
+    _scheduler_task: asyncio.Task | None = None
     _recent_tasks: dict[tuple[int, str, str], float] = (
         None  # Track in-flight worker launches per chat/correlation scope
     )
@@ -1489,6 +1491,82 @@ class Octo:
             except Exception:
                 logger.debug("Failed to publish periodic metrics", exc_info=True)
 
+    async def _run_scheduler_tick_once(self, *, chat_id: int = 0, max_tasks: int = 10) -> None:
+        if self.scheduler is None:
+            return
+        trace_started_at_ms = now_ms()
+        trace_metadata: dict[str, Any] = {
+            "route_mode": RouteMode.SCHEDULER.value,
+            "chat_id": chat_id,
+            "dry_run": True,
+            "max_tasks": max_tasks,
+        }
+        trace_ctx, trace_token, is_root_trace = await _start_background_trace_context(
+            self.trace_sink,
+            name="octo.scheduler_tick",
+            chat_id=chat_id,
+            correlation_id=None,
+            metadata=trace_metadata,
+        )
+        trace_status = "ok"
+        trace_output: dict[str, Any] | None = None
+        try:
+            result = await route_scheduler_tick(self, chat_id=chat_id, max_tasks=max_tasks)
+            normalized = normalize_plain_text(result)
+            normalized_upper = normalized.strip().upper()
+            due_count = 0
+            try:
+                due_count = len(self.scheduler.get_actionable_tasks())
+            except Exception:
+                due_count = 0
+            trace_metadata.update(
+                {
+                    "due_count": due_count,
+                    "result_preview": safe_preview(normalized, limit=240),
+                    "result_len": len(normalized or ""),
+                }
+            )
+            if normalized_upper in {"", "SCHEDULER_IDLE", "NO_USER_RESPONSE"}:
+                trace_output = {"status": "idle", "due_count": due_count}
+                logger.debug(
+                    "Scheduler dry-run tick idle",
+                    due_count=due_count,
+                    result=normalized_upper or "EMPTY",
+                )
+                return
+
+            trace_output = {
+                "status": "decision_ready",
+                "due_count": due_count,
+                "result_preview": safe_preview(normalized, limit=160),
+            }
+            logger.info(
+                "Scheduler dry-run tick produced decision",
+                due_count=due_count,
+                result_preview=safe_preview(normalized, limit=160),
+            )
+        except Exception as exc:
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
+            trace_output = {"status": "failed"}
+            logger.exception("Scheduler dry-run tick failed")
+        finally:
+            trace_metadata["duration_ms"] = round(now_ms() - trace_started_at_ms, 2)
+            await _finish_background_trace_context(
+                self.trace_sink,
+                trace_ctx,
+                trace_token,
+                is_root_trace=is_root_trace,
+                status=trace_status,
+                output=trace_output,
+                metadata=trace_metadata,
+            )
+
+    async def _periodic_scheduler_tick(self, interval_seconds: int, *, max_tasks: int = 10) -> None:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            await self._run_scheduler_tick_once(chat_id=0, max_tasks=max_tasks)
+
     def _reconcile_stale_worker_records(self) -> None:
         """Normalize stale DB worker states that no longer exist in runtime."""
         runtime = self.runtime
@@ -1610,7 +1688,12 @@ class Octo:
             reconciled += 1
         return reconciled
 
-    def start_background_tasks(self, cleanup_interval_seconds: int = 3600):
+    def start_background_tasks(
+        self,
+        cleanup_interval_seconds: int = 3600,
+        *,
+        scheduler_interval_seconds: int | None = None,
+    ):
         if self._cleanup_task is None or self._cleanup_task.done():
             self._cleanup_task = asyncio.create_task(
                 self._periodic_cleanup(cleanup_interval_seconds)
@@ -1619,6 +1702,19 @@ class Octo:
         if self._metrics_task is None or self._metrics_task.done():
             self._metrics_task = asyncio.create_task(self._periodic_metrics_publish(10))
             logger.info("Started periodic metrics publishing task")
+        if self.scheduler and (self._scheduler_task is None or self._scheduler_task.done()):
+            resolved_interval = scheduler_interval_seconds or _env_int(
+                "OCTOPAL_SCHEDULER_TICK_INTERVAL_SECONDS", 60, minimum=5
+            )
+            max_tasks = _env_int("OCTOPAL_SCHEDULER_TICK_MAX_TASKS", 10, minimum=1)
+            self._scheduler_task = asyncio.create_task(
+                self._periodic_scheduler_tick(resolved_interval, max_tasks=max_tasks)
+            )
+            logger.info(
+                "Started periodic scheduler tick task",
+                interval_seconds=resolved_interval,
+                max_tasks=max_tasks,
+            )
 
     async def stop_background_tasks(self):
         if self._cleanup_task and not self._cleanup_task.done():
@@ -1634,6 +1730,12 @@ class Octo:
                 await self._metrics_task
             except asyncio.CancelledError:
                 logger.info("Stopped periodic metrics publishing task")
+        if self._scheduler_task and not self._scheduler_task.done():
+            self._scheduler_task.cancel()
+            try:
+                await self._scheduler_task
+            except asyncio.CancelledError:
+                logger.info("Stopped periodic scheduler tick task")
 
         # Shutdown MCP sessions
         if self.mcp_manager:

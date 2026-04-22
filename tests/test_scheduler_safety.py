@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from octopal.runtime.octo import core as octo_core
 from octopal.runtime.octo.core import Octo
 from octopal.runtime.octo import router as octo_router
 from octopal.runtime.scheduler.service import SchedulerService
@@ -74,6 +75,11 @@ class _ApprovalsStub:
 class _RuntimeStub:
     async def run_task(self, task_request, approval_requester=None):
         return WorkerResult(summary="ok", output={"ok": True})
+
+
+class _BrowserStub:
+    async def shutdown(self) -> None:
+        return None
 
 
 def test_schedule_task_rejects_invalid_frequency(tmp_path: Path) -> None:
@@ -287,3 +293,83 @@ async def test_route_scheduler_tick_uses_control_plane_prompt_and_skips_planner(
 
     assert result == "SCHEDULER_IDLE"
     assert calls == {"control_prompt": 1, "complete_route": 1}
+
+
+@pytest.mark.asyncio
+async def test_octo_run_scheduler_tick_once_uses_bounded_scheduler_route(monkeypatch):
+    calls = {"scheduler_tick": 0}
+
+    async def _route_scheduler_tick(octo, chat_id=0, *, max_tasks=10):
+        calls["scheduler_tick"] += 1
+        assert chat_id == 0
+        assert max_tasks == 7
+        return "SCHEDULER_IDLE"
+
+    monkeypatch.setattr(octo_router, "route_scheduler_tick", _route_scheduler_tick)
+    monkeypatch.setattr(octo_core, "route_scheduler_tick", _route_scheduler_tick)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=SchedulerService(store=_StoreStub(), workspace_dir=Path(".")),
+    )
+
+    await octo._run_scheduler_tick_once(max_tasks=7)
+
+    assert calls == {"scheduler_tick": 1}
+
+
+@pytest.mark.asyncio
+async def test_octo_background_tasks_start_and_stop_scheduler_loop(monkeypatch):
+    started = {
+        "cleanup": 0,
+        "metrics": 0,
+        "scheduler": 0,
+    }
+
+    async def _periodic_cleanup(self, interval_seconds):
+        started["cleanup"] += 1
+        await asyncio.Event().wait()
+
+    async def _periodic_metrics_publish(self, interval_seconds):
+        started["metrics"] += 1
+        await asyncio.Event().wait()
+
+    async def _periodic_scheduler_tick(self, interval_seconds, *, max_tasks=10):
+        started["scheduler"] += 1
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(octo_core.Octo, "_periodic_cleanup", _periodic_cleanup)
+    monkeypatch.setattr(octo_core.Octo, "_periodic_metrics_publish", _periodic_metrics_publish)
+    monkeypatch.setattr(octo_core.Octo, "_periodic_scheduler_tick", _periodic_scheduler_tick)
+    monkeypatch.setattr(octo_core, "get_browser_manager", lambda: _BrowserStub())
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=SchedulerService(store=_StoreStub(), workspace_dir=Path(".")),
+    )
+
+    octo.start_background_tasks(cleanup_interval_seconds=30, scheduler_interval_seconds=15)
+    await asyncio.sleep(0)
+
+    assert octo._cleanup_task is not None
+    assert octo._metrics_task is not None
+    assert octo._scheduler_task is not None
+    assert started == {"cleanup": 1, "metrics": 1, "scheduler": 1}
+
+    await octo.stop_background_tasks()
+
+    assert octo._cleanup_task.cancelled() is True
+    assert octo._metrics_task.cancelled() is True
+    assert octo._scheduler_task.cancelled() is True
