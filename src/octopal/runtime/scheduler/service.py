@@ -113,6 +113,10 @@ class SchedulerService:
             lines.append(f"- **Frequency**: {t['frequency']}")
             normalized = self._normalize_task_record(t)
             lines.append(f"- **Notify user**: {normalized['notify_user']}")
+            dispatch_line = "ready"
+            if not bool(normalized.get("dispatch_ready")):
+                dispatch_line = f"rejected by policy ({normalized.get('dispatch_policy_reason') or 'unknown'})"
+            lines.append(f"- **Dispatch**: {dispatch_line}")
             if t['worker_id']:
                 lines.append(f"- **Worker**: {t['worker_id']}")
             lines.append(f"- **Task**: {t['task_text']}")
@@ -229,7 +233,19 @@ class SchedulerService:
         except ValueError:
             logger.warning("Invalid scheduled task notify_user policy", task_id=normalized.get("id"))
             normalized["notify_user"] = "if_significant"
+        dispatch_ready, dispatch_policy_reason = self._dispatch_readiness(normalized)
+        normalized["dispatch_ready"] = dispatch_ready
+        normalized["dispatch_policy_reason"] = dispatch_policy_reason
         return normalized
+
+    def _dispatch_readiness(self, task: dict[str, Any]) -> tuple[bool, str | None]:
+        worker_id = str(task.get("worker_id") or "").strip()
+        if not worker_id:
+            return False, "missing_worker_id"
+        task_text = str(task.get("task_text") or "").strip()
+        if not task_text:
+            return False, "missing_task_text"
+        return True, None
 
     def _build_task_preview(self, task: dict[str, Any], now: datetime) -> dict[str, Any]:
         due_now = bool(int(task.get("enabled", 1)) == 1 and self._should_run(task, now))

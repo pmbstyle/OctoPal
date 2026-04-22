@@ -135,6 +135,8 @@ def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
     assert payload["due_tasks"][0]["task_id"] == "daily_digest"
     assert payload["due_tasks"][0]["inputs"] == {"section": "news", "max_items": 5}
     assert payload["due_tasks"][0]["notify_user"] == "always"
+    assert payload["due_tasks"][0]["dispatch_ready"] is True
+    assert payload["due_tasks"][0]["dispatch_policy_reason"] is None
 
 
 def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> None:
@@ -178,7 +180,36 @@ def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> No
     assert payload["tasks"][0]["due_now"] is True
     assert payload["tasks"][0]["next_run_at"] is not None
     assert payload["tasks"][0]["notify_user"] == "if_significant"
+    assert payload["tasks"][0]["dispatch_ready"] is True
+    assert payload["tasks"][1]["dispatch_ready"] is False
+    assert payload["tasks"][1]["dispatch_policy_reason"] == "missing_worker_id"
     assert any("due now" in hint for hint in payload["hints"])
+    assert any("not dispatch-ready" in hint for hint in payload["hints"])
+
+
+def test_scheduler_sync_to_markdown_includes_dispatch_readiness(tmp_path: Path) -> None:
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "nightly_cleanup",
+                "name": "Nightly Cleanup",
+                "description": "Compact memory",
+                "frequency": "Daily at 23:30",
+                "worker_id": None,
+                "task_text": "Compact memory",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps({"notify_user": "never"}),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    scheduler.sync_to_markdown()
+
+    heartbeat = (tmp_path / "HEARTBEAT.md").read_text(encoding="utf-8")
+    assert "**Dispatch**: rejected by policy (missing_worker_id)" in heartbeat
 
 
 def test_schedule_task_rejects_invalid_notify_user(tmp_path: Path) -> None:

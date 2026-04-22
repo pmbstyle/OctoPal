@@ -1612,6 +1612,8 @@ async def _tool_check_schedule(args, ctx) -> str:
                 "inputs": t.get("inputs") if isinstance(t.get("inputs"), dict) else {},
                 "last_run_at": t.get("last_run_at"),
                 "notify_user": t.get("notify_user"),
+                "dispatch_ready": bool(t.get("dispatch_ready")),
+                "dispatch_policy_reason": t.get("dispatch_policy_reason"),
             }
             for t in due_tasks
         ],
@@ -1634,6 +1636,11 @@ async def _tool_scheduler_status(args, ctx) -> str:
         hints.append(f"{disabled_count} scheduled task(s) are disabled and will not run until re-enabled.")
     if any(task.get("overdue") for task in described):
         hints.append("At least one scheduled task looks overdue; inspect execution flow or worker failures.")
+    not_dispatch_ready = [task for task in described if not bool(task.get("dispatch_ready", True))]
+    if not_dispatch_ready:
+        hints.append(
+            f"{len(not_dispatch_ready)} scheduled task(s) are not dispatch-ready for the current worker loop."
+        )
     if not hints:
         hints.append("Scheduler looks healthy. Use next-run previews to plan follow-up work.")
 
@@ -1667,6 +1674,8 @@ async def _tool_scheduler_status(args, ctx) -> str:
                 "last_run_at": task.get("last_run_at"),
                 "description": task.get("description"),
                 "notify_user": task.get("notify_user"),
+                "dispatch_ready": bool(task.get("dispatch_ready")),
+                "dispatch_policy_reason": task.get("dispatch_policy_reason"),
             }
             for task in preview
         ],
