@@ -153,6 +153,13 @@ _HEARTBEAT_ALLOWED_TOOL_NAMES = {
     "check_schedule",
     "gateway_status",
 }
+_SCHEDULER_ALLOWED_TOOL_NAMES = {
+    "check_schedule",
+    "scheduler_status",
+    "octo_context_health",
+    "list_workers",
+    "list_active_workers",
+}
 _INTERNAL_MAINTENANCE_ALLOWED_TOOL_NAMES = _HEARTBEAT_ALLOWED_TOOL_NAMES | {
     "list_workers",
     "list_active_workers",
@@ -518,6 +525,62 @@ async def route_internal_maintenance(
             ctx=ctx,
             internal_followup=False,
             user_text=user_text,
+            images=None,
+            allow_tool_catalog_expansion=False,
+        )
+        return normalize_plain_text(reply_text)
+    finally:
+        await octo.set_thinking(False)
+
+
+async def route_scheduler_tick(
+    octo: Any,
+    chat_id: int = 0,
+    *,
+    max_tasks: int = 10,
+) -> str:
+    """Run a bounded scheduler control-plane turn without the full conversation planner path."""
+    await octo.set_thinking(True)
+    try:
+        octo_tools, ctx = _get_scheduler_tools(octo, chat_id)
+        resolution_report = ctx.get("tool_resolution_report")
+        available_count = len(getattr(resolution_report, "available_tools", ()) or ())
+        deferred_count = max(0, available_count - len(octo_tools))
+        logger.info(
+            "Scheduler tick tools fetched",
+            route_mode=RouteMode.SCHEDULER.value,
+            active_tool_count=len(octo_tools),
+            available_tool_count=available_count,
+            deferred_tool_count=deferred_count,
+        )
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
+            ctx.get("tool_resolution_report"),
+        )
+        scheduler_tick_text = _build_scheduler_tick_input(octo, max_tasks=max_tasks)
+        messages = await build_control_plane_prompt(
+            user_text=scheduler_tick_text,
+            chat_id=chat_id,
+            tool_policy_summary=tool_policy_summary,
+            reflection=getattr(octo, "reflection", None),
+            mode_label="scheduler",
+            mode_rules=(
+                "Scheduler route rules:\n"
+                "- Keep this turn operational and bounded.\n"
+                "- You may inspect schedule state and worker availability.\n"
+                "- Do not dispatch workers directly from this route.\n"
+                "- Return one of: SCHEDULER_IDLE, NO_USER_RESPONSE, or <user_visible>...</user_visible>."
+            ),
+        )
+        _log_system_prompt(messages, "scheduler")
+        reply_text = await _complete_route_with_tools(
+            octo=octo,
+            provider=octo.provider,
+            messages=messages,
+            tool_specs=octo_tools,
+            ctx=ctx,
+            internal_followup=False,
+            user_text=scheduler_tick_text,
             images=None,
             allow_tool_catalog_expansion=False,
         )
@@ -1362,6 +1425,15 @@ def _get_heartbeat_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[
     )
 
 
+def _get_scheduler_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, object]]:
+    return _get_control_plane_tools(
+        octo,
+        chat_id,
+        allowed_tool_names=_SCHEDULER_ALLOWED_TOOL_NAMES,
+        policy_label="octo.scheduler_allowlist",
+    )
+
+
 def _get_internal_maintenance_tools(
     octo: Any, chat_id: int
 ) -> tuple[list[ToolSpec], dict[str, object]]:
@@ -1404,6 +1476,57 @@ def _get_control_plane_tools(
     ctx["tool_resolution_report"] = resolution_report
     ctx["all_tool_specs"] = all_tools
     return tool_specs, ctx
+
+
+def _build_scheduler_tick_input(octo: Any, *, max_tasks: int = 10) -> str:
+    scheduler = getattr(octo, "scheduler", None)
+    if scheduler is None:
+        return (
+            "Scheduler tick requested, but no scheduler service is attached.\n"
+            "Return SCHEDULER_IDLE unless there is a clear user-visible issue to report."
+        )
+
+    due_tasks: list[dict[str, Any]] = []
+    described_tasks: list[dict[str, Any]] = []
+    try:
+        due_tasks = list(getattr(scheduler, "get_actionable_tasks")() or [])
+    except Exception:
+        due_tasks = []
+    try:
+        described_tasks = list(getattr(scheduler, "describe_tasks")(enabled_only=False) or [])
+    except Exception:
+        described_tasks = []
+
+    preview_tasks = described_tasks[: max(1, int(max_tasks))]
+    payload = {
+        "due_count": len(due_tasks),
+        "due_tasks": [
+            {
+                "task_id": task.get("id"),
+                "name": task.get("name"),
+                "worker_id": task.get("worker_id"),
+                "frequency": task.get("frequency"),
+                "notify_user": task.get("notify_user"),
+                "task_text": task.get("task_text"),
+            }
+            for task in due_tasks[: max(1, int(max_tasks))]
+        ],
+        "preview_tasks": [
+            {
+                "task_id": task.get("id"),
+                "name": task.get("name"),
+                "due_now": bool(task.get("due_now")),
+                "next_run_at": task.get("next_run_at"),
+                "notify_user": task.get("notify_user"),
+            }
+            for task in preview_tasks
+        ],
+    }
+    return (
+        "Scheduler tick snapshot:\n"
+        f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
+        "Decide whether scheduler state is idle, needs quiet follow-up, or merits a user-visible update."
+    )
 
 
 def _ensure_mandatory_octo_tools(

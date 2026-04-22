@@ -5,7 +5,10 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from octopal.runtime.octo.core import Octo
+from octopal.runtime.octo import router as octo_router
 from octopal.runtime.scheduler.service import SchedulerService
 from octopal.runtime.workers.contracts import WorkerResult
 from octopal.tools.tools import _tool_check_schedule, _tool_schedule_task, _tool_scheduler_status
@@ -220,3 +223,67 @@ def test_octo_marks_scheduled_task_after_successful_worker_run_even_if_store_lag
     assert marked_completed == ["daily_digest"]
     assert marked_missing == ["daily_digest"]
     assert marked_failed == []
+
+
+@pytest.mark.asyncio
+async def test_route_scheduler_tick_uses_control_plane_prompt_and_skips_planner(monkeypatch):
+    calls = {"control_prompt": 0, "complete_route": 0}
+
+    class SchedulerStub:
+        def get_actionable_tasks(self) -> list[dict]:
+            return [
+                {
+                    "id": "daily_digest",
+                    "name": "Daily Digest",
+                    "worker_id": "writer",
+                    "frequency": "Every 30 minutes",
+                    "notify_user": "always",
+                    "task_text": "Generate digest",
+                }
+            ]
+
+        def describe_tasks(self, *, enabled_only: bool = False) -> list[dict]:
+            return [
+                {
+                    "id": "daily_digest",
+                    "name": "Daily Digest",
+                    "due_now": True,
+                    "next_run_at": "2026-04-22T12:00:00+00:00",
+                    "notify_user": "always",
+                }
+            ]
+
+    class DummyOcto:
+        provider = object()
+        reflection = None
+        mcp_manager = None
+        scheduler = SchedulerStub()
+
+        async def set_thinking(self, value):
+            return None
+
+    async def _build_control_plane_prompt(**kwargs):
+        calls["control_prompt"] += 1
+        assert kwargs["mode_label"] == "scheduler"
+        assert "daily_digest" in kwargs["user_text"]
+        return [octo_router.Message(role="system", content="scheduler control plane")]
+
+    async def _complete_route_with_tools(**kwargs):
+        calls["complete_route"] += 1
+        return "SCHEDULER_IDLE"
+
+    def _build_octo_prompt_should_not_run(*args, **kwargs):
+        raise AssertionError("build_octo_prompt should not run for scheduler route")
+
+    def _build_plan_should_not_run(*args, **kwargs):
+        raise AssertionError("_build_plan should not run for scheduler route")
+
+    monkeypatch.setattr(octo_router, "build_control_plane_prompt", _build_control_plane_prompt)
+    monkeypatch.setattr(octo_router, "_complete_route_with_tools", _complete_route_with_tools)
+    monkeypatch.setattr(octo_router, "build_octo_prompt", _build_octo_prompt_should_not_run)
+    monkeypatch.setattr(octo_router, "_build_plan", _build_plan_should_not_run)
+
+    result = await octo_router.route_scheduler_tick(DummyOcto())
+
+    assert result == "SCHEDULER_IDLE"
+    assert calls == {"control_prompt": 1, "complete_route": 1}
