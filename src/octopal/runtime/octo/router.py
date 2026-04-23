@@ -29,8 +29,8 @@ from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.octo.control_plane import RouteMode
 from octopal.runtime.octo.delivery import resolve_user_delivery
 from octopal.runtime.octo.prompt_builder import (
-    build_control_plane_prompt,
     build_bootstrap_context_prompt,
+    build_control_plane_prompt,
     build_octo_prompt,
 )
 from octopal.runtime.tool_loop import (
@@ -453,6 +453,7 @@ async def route_heartbeat(
             active_tool_count=len(octo_tools),
             available_tool_count=available_count,
             deferred_tool_count=deferred_count,
+            mcp_refresh_attempted=bool(ctx.get("mcp_refresh_attempted")),
         )
         tool_policy_summary = _build_octo_tool_policy_summary(
             octo_tools,
@@ -510,6 +511,7 @@ async def route_internal_maintenance(
             active_tool_count=len(octo_tools),
             available_tool_count=available_count,
             deferred_tool_count=deferred_count,
+            mcp_refresh_attempted=bool(ctx.get("mcp_refresh_attempted")),
         )
         tool_policy_summary = _build_octo_tool_policy_summary(
             octo_tools,
@@ -565,6 +567,7 @@ async def route_scheduler_tick(
             active_tool_count=len(octo_tools),
             available_tool_count=available_count,
             deferred_tool_count=deferred_count,
+            mcp_refresh_attempted=bool(ctx.get("mcp_refresh_attempted")),
         )
         tool_policy_summary = _build_octo_tool_policy_summary(
             octo_tools,
@@ -621,6 +624,7 @@ async def route_scheduled_octo_control(
             active_tool_count=len(octo_tools),
             available_tool_count=available_count,
             deferred_tool_count=deferred_count,
+            mcp_refresh_attempted=bool(ctx.get("mcp_refresh_attempted")),
             execution_mode="octo_control",
             task_id=str(task.get("id") or "").strip() or None,
         )
@@ -1136,7 +1140,6 @@ async def route_worker_results_back_to_octo(
 
     await octo.set_thinking(True)
     try:
-        await _ensure_mcp_connected_for_routing(octo)
         octo_tools, ctx = _get_worker_followup_tools(octo, chat_id)
         tool_policy_summary = _build_octo_tool_policy_summary(
             octo_tools,
@@ -1469,14 +1472,13 @@ def _get_worker_followup_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec],
         "octo": octo,
         "chat_id": chat_id,
     }
-    mcp_manager = getattr(octo, "mcp_manager", None)
     policy_steps = [
         ToolPolicyPipelineStep(
             label="octo.worker_followup_allowlist",
             policy=ToolPolicy(allow=sorted(_WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES)),
         )
     ]
-    all_tools = get_tools(mcp_manager=mcp_manager)
+    all_tools = _get_static_mode_tool_candidates(_WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES)
     resolution_report = resolve_tool_diagnostics(
         all_tools,
         permissions=perms,
@@ -1487,6 +1489,7 @@ def _get_worker_followup_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec],
     ctx["active_tool_specs"] = tool_specs
     ctx["tool_resolution_report"] = resolution_report
     ctx["all_tool_specs"] = all_tools
+    ctx["mcp_refresh_attempted"] = False
     return tool_specs, ctx
 
 
@@ -1542,14 +1545,13 @@ def _get_control_plane_tools(
         "service_read": True,
     }
     ctx = {"octo": octo, "chat_id": chat_id}
-    mcp_manager = getattr(octo, "mcp_manager", None)
     policy_steps = [
         ToolPolicyPipelineStep(
             label=policy_label,
             policy=ToolPolicy(allow=sorted(allowed_tool_names)),
         )
     ]
-    all_tools = get_tools(mcp_manager=mcp_manager)
+    all_tools = _get_static_mode_tool_candidates(allowed_tool_names)
     resolution_report = resolve_tool_diagnostics(
         all_tools,
         permissions=perms,
@@ -1560,7 +1562,20 @@ def _get_control_plane_tools(
     ctx["active_tool_specs"] = tool_specs
     ctx["tool_resolution_report"] = resolution_report
     ctx["all_tool_specs"] = all_tools
+    ctx["mcp_refresh_attempted"] = False
     return tool_specs, ctx
+
+
+def _get_static_mode_tool_candidates(allowed_tool_names: set[str]) -> list[ToolSpec]:
+    """Return only static tools needed by a bounded route mode.
+
+    Control-plane paths must not hydrate dynamic MCP tools just to discard them
+    through an allowlist. Passing no MCP manager keeps these routes cheap and
+    avoids reconnecting or injecting the full external tool registry.
+    """
+
+    allowed = {str(name).strip().lower() for name in allowed_tool_names if str(name).strip()}
+    return [tool for tool in get_tools(mcp_manager=None) if str(tool.name).strip().lower() in allowed]
 
 
 def _build_scheduler_tick_input(octo: Any, *, max_tasks: int = 10) -> str:
@@ -1574,11 +1589,11 @@ def _build_scheduler_tick_input(octo: Any, *, max_tasks: int = 10) -> str:
     due_tasks: list[dict[str, Any]] = []
     described_tasks: list[dict[str, Any]] = []
     try:
-        due_tasks = list(getattr(scheduler, "get_actionable_tasks")() or [])
+        due_tasks = list(scheduler.get_actionable_tasks() or [])
     except Exception:
         due_tasks = []
     try:
-        described_tasks = list(getattr(scheduler, "describe_tasks")(enabled_only=False) or [])
+        described_tasks = list(scheduler.describe_tasks(enabled_only=False) or [])
     except Exception:
         described_tasks = []
 

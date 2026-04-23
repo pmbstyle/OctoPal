@@ -8,8 +8,10 @@ from octopal.runtime.octo.router import (
     _build_worker_result_payload,
     _expand_active_tool_specs_from_catalog_result,
     _finalize_response,
-    _get_worker_followup_tools,
+    _get_heartbeat_tools,
     _get_octo_tools,
+    _get_scheduler_tools,
+    _get_worker_followup_tools,
     _recover_textual_tool_call,
     _sanitize_messages_for_complete,
     _shrink_tool_specs_for_retry,
@@ -129,6 +131,117 @@ def test_worker_followup_tools_are_narrow(monkeypatch) -> None:
 
     tools, _ctx = _get_worker_followup_tools(DummyOcto(), 123)
 
+    assert {tool.name for tool in tools} == {"manage_canon", "get_worker_output_path"}
+
+
+def test_control_plane_tools_do_not_hydrate_dynamic_mcp_catalog(monkeypatch) -> None:
+    import octopal.runtime.octo.router as router
+
+    calls: list[object] = []
+
+    def fake_get_tools(mcp_manager=None):
+        calls.append(mcp_manager)
+        return [
+            ToolSpec(
+                name="octo_context_health",
+                description="health",
+                parameters={"type": "object", "properties": {}},
+                permission="service_read",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="scheduler_status",
+                description="scheduler",
+                parameters={"type": "object", "properties": {}},
+                permission="service_read",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="check_schedule",
+                description="schedule",
+                parameters={"type": "object", "properties": {}},
+                permission="service_read",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="gateway_status",
+                description="gateway",
+                parameters={"type": "object", "properties": {}},
+                permission="service_read",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="mcp_agentmail_list_inboxes",
+                description="dynamic mcp",
+                parameters={"type": "object", "properties": {}},
+                permission="mcp_exec",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+        ]
+
+    class NoisyMCPManager:
+        def get_all_tools(self):
+            raise AssertionError("control-plane route should not inspect dynamic MCP tools")
+
+    class DummyOcto:
+        mcp_manager = NoisyMCPManager()
+
+    monkeypatch.setattr(router, "get_tools", fake_get_tools)
+
+    heartbeat_tools, heartbeat_ctx = _get_heartbeat_tools(DummyOcto(), 123)
+    scheduler_tools, scheduler_ctx = _get_scheduler_tools(DummyOcto(), 123)
+
+    assert calls == [None, None]
+    assert heartbeat_ctx["mcp_refresh_attempted"] is False
+    assert scheduler_ctx["mcp_refresh_attempted"] is False
+    assert "mcp_agentmail_list_inboxes" not in {tool.name for tool in heartbeat_tools}
+    assert "mcp_agentmail_list_inboxes" not in {tool.name for tool in scheduler_tools}
+
+
+def test_worker_followup_tools_do_not_hydrate_dynamic_mcp_catalog(monkeypatch) -> None:
+    import octopal.runtime.octo.router as router
+
+    calls: list[object] = []
+
+    def fake_get_tools(mcp_manager=None):
+        calls.append(mcp_manager)
+        return [
+            ToolSpec(
+                name="manage_canon",
+                description="canon",
+                parameters={"type": "object", "properties": {}},
+                permission="canon_manage",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="get_worker_output_path",
+                description="worker output",
+                parameters={"type": "object", "properties": {}},
+                permission="worker_manage",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+            ToolSpec(
+                name="mcp_agentmail_list_inboxes",
+                description="dynamic mcp",
+                parameters={"type": "object", "properties": {}},
+                permission="mcp_exec",
+                handler=lambda args, ctx: {"ok": True},
+            ),
+        ]
+
+    class NoisyMCPManager:
+        def get_all_tools(self):
+            raise AssertionError("worker follow-up should not inspect dynamic MCP tools")
+
+    class DummyOcto:
+        mcp_manager = NoisyMCPManager()
+
+    monkeypatch.setattr(router, "get_tools", fake_get_tools)
+
+    tools, ctx = _get_worker_followup_tools(DummyOcto(), 123)
+
+    assert calls == [None]
+    assert ctx["mcp_refresh_attempted"] is False
     assert {tool.name for tool in tools} == {"manage_canon", "get_worker_output_path"}
 
 
