@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <strong>SECURE MULTI-AGENT EXECUTION RUNTIME</strong>
+  <strong>AI AGENT THAT DON'T GET YOUR MACHINE COMPROMISED</strong>
 </p>
 
 <p align="center">
@@ -39,9 +39,9 @@ Projects like OpenClaw, Hermes Agent, and NanoClaw show that people want agents 
 
 That is the part I agree with. I love smart agentic systems.
 
-What I did not like in many agent setups was the default trust model: the same agent that sees your memory, instructions, and secrets can often also walk outside of your system and take unrestricted actions.
+What I did not like in many agent setups was the default trust model: the same agent that can see your memory, instructions, and secrets can often also walk outside your system and take unrestricted actions.
 
-It will be exposed to many sorts of attacks, like prompt injection, unsafe scripts, skills, websites that only purpose is to attack AI agents and get controll ower them. After the original OpenClaw release, the web became a much more dangerous place for AI agents.
+It will be exposed to many kinds of attacks, such as prompt injection, unsafe scripts, skills, and websites whose sole purpose is to attack AI agents and gain control over them. After the original OpenClaw release, the web became a much more dangerous place for AI agents.
 
 This can lead to sensitive data exposure, identity theft, system compromise, and generally produce a lot of issues. 
 
@@ -54,9 +54,9 @@ Octopal tries to make that simpler and safer to reason about.
 
 Why this is better in practice:
 
-- It is easier to trust, because the agent doing the work is not automatically sitting on top of your whole machine
-- It is easier to understand, because there is a clear line between thinking and acting
-- It is easier to control, because file access is shared deliberately instead of being wide open by default
+- **easier to trust**, because the agent doing the work is not automatically sitting on top of your whole machine
+- **easier to understand**, because there is a clear line between thinking and acting
+- **easier to control**, because file access is shared deliberately instead of being wide open by default
 
 OpenClaw and Hermes Agent both support sandboxed/containerized execution, but their documented defaults still allow host-side execution in common setups. Octopal takes the opposite approach: isolation first, host-style execution only as a fallback.
 
