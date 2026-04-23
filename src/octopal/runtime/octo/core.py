@@ -289,6 +289,23 @@ async def _normalize_heartbeat_delivery_reply(provider: InferenceProvider | None
 
 
 _SCHEDULED_OCTO_CONTROL_DONE = "SCHEDULED_TASK_DONE"
+_SCHEDULED_OCTO_CONTROL_BLOCKED = "SCHEDULED_TASK_BLOCKED"
+_SCHEDULED_OCTO_CONTROL_BLOCKED_MARKERS = (
+    "bounded `octo_control` route",
+    "bounded octo_control route",
+    "requires external network access",
+    "cannot be performed from the bounded",
+    "no workers may be launched",
+    "no direct weather tools available",
+    "requires a worker",
+)
+
+
+def _looks_like_scheduled_octo_control_route_block(text: str) -> bool:
+    value = normalize_plain_text(text or "").casefold()
+    if not value:
+        return False
+    return any(marker in value for marker in _SCHEDULED_OCTO_CONTROL_BLOCKED_MARKERS)
 
 
 def _coerce_scheduled_octo_control_reply(text: str) -> str:
@@ -299,6 +316,8 @@ def _coerce_scheduled_octo_control_reply(text: str) -> str:
     normalized_upper = value.strip().upper()
     if normalized_upper == _SCHEDULED_OCTO_CONTROL_DONE:
         return _SCHEDULED_OCTO_CONTROL_DONE
+    if normalized_upper == _SCHEDULED_OCTO_CONTROL_BLOCKED:
+        return _SCHEDULED_OCTO_CONTROL_BLOCKED
     if normalized_upper == "NO_USER_RESPONSE" or has_no_user_response_suffix(value):
         return "NO_USER_RESPONSE"
     return "NO_USER_RESPONSE"
@@ -315,6 +334,8 @@ async def _normalize_scheduled_octo_control_reply(
     normalized_upper = value.strip().upper()
     if normalized_upper == _SCHEDULED_OCTO_CONTROL_DONE:
         return _SCHEDULED_OCTO_CONTROL_DONE
+    if normalized_upper == _SCHEDULED_OCTO_CONTROL_BLOCKED:
+        return _SCHEDULED_OCTO_CONTROL_BLOCKED
     if normalized_upper == "NO_USER_RESPONSE" or has_no_user_response_suffix(value):
         return "NO_USER_RESPONSE"
     if provider is None:
@@ -324,9 +345,11 @@ async def _normalize_scheduled_octo_control_reply(
         "Rewrite the draft scheduled Octo control reply into the strict completion contract.\n"
         "Return exactly one of:\n"
         "- SCHEDULED_TASK_DONE\n"
+        "- SCHEDULED_TASK_BLOCKED\n"
         "- NO_USER_RESPONSE\n"
         "- <user_visible>...</user_visible>\n"
         "Use SCHEDULED_TASK_DONE only if the task completed successfully with no user-visible update.\n"
+        "Use SCHEDULED_TASK_BLOCKED when the task cannot complete from the bounded route because it needs workers, external access, or unavailable tools.\n"
         "Use <user_visible> only for a concise completed user-facing update.\n"
         "Use NO_USER_RESPONSE if the task did not complete or there is no completion signal.\n"
         "Do not include any extra text outside the token or wrapper."
@@ -400,6 +423,13 @@ _RECENT_WORKER_TASK_TTL_SECONDS = float(
         "OCTOPAL_RECENT_WORKER_TASK_TTL_SECONDS",
         1800,
         minimum=60,
+    )
+)
+_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS = float(
+    _env_int(
+        "OCTOPAL_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS",
+        1800,
+        minimum=0,
     )
 )
 
@@ -1343,6 +1373,7 @@ class Octo:
     _scheduler_metric_counters: dict[str, int] | None = None
     _scheduler_interval_seconds: int | None = None
     _scheduler_max_tasks: int | None = None
+    _scheduled_octo_control_backoff_by_task: dict[str, tuple[float, str]] | None = None
     _recent_tasks: dict[tuple[int, str, str], float] = (
         None  # Track in-flight worker launches per chat/correlation scope
     )
@@ -1385,6 +1416,8 @@ class Octo:
     def __post_init__(self):
         if self.trace_sink is None:
             self.trace_sink = NoopTraceSink()
+        if self._scheduled_octo_control_backoff_by_task is None:
+            self._scheduled_octo_control_backoff_by_task = {}
         if self._recent_tasks is None:
             self._recent_tasks = {}
         if self._approval_requesters is None:
@@ -1852,6 +1885,36 @@ class Octo:
             await asyncio.sleep(interval_seconds)
             await self._run_scheduler_tick_once(chat_id=0, max_tasks=max_tasks)
 
+    def _get_scheduled_octo_control_backoff(self, task_id: str) -> tuple[float, str] | None:
+        task_id_value = str(task_id or "").strip()
+        if not task_id_value:
+            return None
+        backoff_map = self._scheduled_octo_control_backoff_by_task
+        if not isinstance(backoff_map, dict):
+            return None
+        entry = backoff_map.get(task_id_value)
+        if not entry:
+            return None
+        deadline, reason = entry
+        remaining = float(deadline) - time.monotonic()
+        if remaining <= 0:
+            backoff_map.pop(task_id_value, None)
+            return None
+        return remaining, str(reason or "").strip() or "runtime_backoff"
+
+    def _set_scheduled_octo_control_backoff(self, task_id: str, *, reason: str) -> None:
+        task_id_value = str(task_id or "").strip()
+        if not task_id_value or _SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS <= 0:
+            return
+        backoff_map = self._scheduled_octo_control_backoff_by_task
+        if backoff_map is None:
+            backoff_map = {}
+            self._scheduled_octo_control_backoff_by_task = backoff_map
+        backoff_map[task_id_value] = (
+            time.monotonic() + _SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS,
+            str(reason or "").strip() or "runtime_backoff",
+        )
+
     async def _dispatch_due_scheduled_tasks_once(
         self,
         *,
@@ -1881,6 +1944,17 @@ class Octo:
             task_text = str(task.get("task_text") or "").strip()
             inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
             if execution_mode == "octo_control":
+                backoff = self._get_scheduled_octo_control_backoff(task_id)
+                if backoff is not None:
+                    remaining_seconds, backoff_reason = backoff
+                    logger.info(
+                        "Skipping scheduled Octo control task during runtime backoff",
+                        task_id=task_id or None,
+                        chat_id=chat_id,
+                        backoff_reason=backoff_reason,
+                        cooldown_seconds=round(remaining_seconds, 1),
+                    )
+                    continue
                 summary["attempted"] += 1
                 try:
                     result = await self._run_scheduled_octo_control_task_once(
@@ -1960,6 +2034,25 @@ class Octo:
             chat_id=chat_id,
         )
         normalized_reply = await _normalize_scheduled_octo_control_reply(self.provider, reply_text)
+        route_blocked = normalized_reply == _SCHEDULED_OCTO_CONTROL_BLOCKED or (
+            normalized_reply == "NO_USER_RESPONSE"
+            and _looks_like_scheduled_octo_control_route_block(reply_text)
+        )
+        if route_blocked:
+            self._set_scheduled_octo_control_backoff(task_id, reason="blocked_by_route")
+            logger.warning(
+                "Scheduled Octo control task blocked by bounded route",
+                task_id=task_id or None,
+                chat_id=chat_id,
+                raw_reply_preview=safe_preview(reply_text, limit=200),
+                cooldown_seconds=_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS,
+            )
+            return {
+                "status": "failed",
+                "completed": False,
+                "reason": "blocked_by_route",
+                "cooldown_seconds": _SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS,
+            }
         if normalized_reply == "NO_USER_RESPONSE":
             logger.warning(
                 "Scheduled Octo control task missing explicit completion signal",

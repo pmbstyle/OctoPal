@@ -274,7 +274,7 @@ def has_non_tool_control_token(text: str) -> bool:
     if not trimmed:
         return False
     normalized = re.sub(r"[\s_-]+", "", trimmed).upper()
-    return normalized in {"SCHEDULEDTASKDONE", "SCHEDULERIDLE"}
+    return normalized in {"SCHEDULEDTASKDONE", "SCHEDULERIDLE", "SCHEDULEDTASKBLOCKED"}
 
 
 def looks_like_textual_tool_invocation(text: str) -> bool:

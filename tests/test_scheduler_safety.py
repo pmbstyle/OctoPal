@@ -681,6 +681,81 @@ async def test_octo_dispatch_due_scheduled_tasks_requires_explicit_octo_control_
 
 
 @pytest.mark.asyncio
+async def test_octo_dispatch_due_scheduled_tasks_backs_off_blocked_octo_control_task(monkeypatch):
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "weather_check",
+                    "name": "Weather Check",
+                    "description": "Check weather",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": None,
+                    "task_text": "Check the weather",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps({"notify_user": "never"}),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+    route_calls = {"count": 0}
+
+    async def _start_worker_async(self, **kwargs):
+        raise AssertionError("_start_worker_async should not be called for octo_control tasks")
+
+    async def _route_scheduled_octo_control(octo, task, *, chat_id=0):
+        route_calls["count"] += 1
+        return (
+            "This task requires external network access which cannot be performed "
+            "from the bounded `octo_control` route."
+        )
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+    monkeypatch.setattr(octo_router, "route_scheduled_octo_control", _route_scheduled_octo_control)
+    monkeypatch.setattr(octo_core, "route_scheduled_octo_control", _route_scheduled_octo_control)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+    )
+
+    first_summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
+    second_summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
+
+    assert first_summary == {
+        "due_count": 1,
+        "attempted": 1,
+        "started": 0,
+        "completed": 0,
+        "duplicates": 0,
+        "rejected_by_policy": 0,
+        "policy_reasons": {},
+        "errors": 1,
+    }
+    assert second_summary == {
+        "due_count": 1,
+        "attempted": 0,
+        "started": 0,
+        "completed": 0,
+        "duplicates": 0,
+        "rejected_by_policy": 0,
+        "policy_reasons": {},
+        "errors": 0,
+    }
+    assert route_calls["count"] == 1
+    assert scheduler.store.marked_task_ids == []
+
+
+@pytest.mark.asyncio
 async def test_octo_dispatch_due_scheduled_tasks_sends_user_visible_octo_control_update(monkeypatch):
     sent_messages = []
     scheduler = SchedulerService(

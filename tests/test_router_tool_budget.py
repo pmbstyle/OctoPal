@@ -1047,6 +1047,23 @@ def test_finalize_response_preserves_scheduler_idle_token_without_rewrite() -> N
     asyncio.run(scenario())
 
 
+def test_finalize_response_preserves_scheduled_blocked_token_without_rewrite() -> None:
+    class DummyProvider:
+        async def complete(self, messages, **kwargs):
+            raise AssertionError("scheduled blocked token should not trigger rewrite")
+
+    async def scenario() -> None:
+        result = await _finalize_response(
+            DummyProvider(),
+            [Message(role="system", content="Rewrite if needed.")],
+            "SCHEDULED_TASK_BLOCKED",
+            internal_followup=False,
+        )
+        assert result == "SCHEDULED_TASK_BLOCKED"
+
+    asyncio.run(scenario())
+
+
 def test_route_can_expand_toolset_after_catalog_search(monkeypatch) -> None:
     hidden_tool = ToolSpec(
         name="hidden_tool",
