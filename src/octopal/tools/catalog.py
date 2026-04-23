@@ -692,6 +692,32 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             is_async=True,
         ),
         ToolSpec(
+            name="repair_scheduled_tasks",
+            description="Preview or apply safe repairs for scheduled tasks with known route-compatibility suggestions.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "apply": {
+                        "type": "boolean",
+                        "description": "If true, apply repairs that are safe and unambiguous. Otherwise only preview candidates.",
+                    },
+                    "task_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional subset of scheduled task IDs to inspect or repair.",
+                    },
+                    "worker_id": {
+                        "type": "string",
+                        "description": "Optional worker template ID to use when repairing tasks suggested to move to worker mode.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=_tool_repair_scheduled_tasks,
+            is_async=True,
+        ),
+        ToolSpec(
             name="run_llm_subtask",
             description="Run a generic, JSON-only LLM sub-task. Ideal for tasks requiring structured data generation or analysis based on a prompt.",
             parameters={
@@ -1704,6 +1730,16 @@ async def _tool_scheduler_status(args, ctx) -> str:
         ],
         "hints": hints,
     }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _tool_repair_scheduled_tasks(args, ctx) -> str:
+    scheduler = ctx["octo"].scheduler
+    payload = scheduler.repair_suggested_tasks(
+        apply=bool((args or {}).get("apply", False)),
+        task_ids=list((args or {}).get("task_ids") or []),
+        worker_id=(args or {}).get("worker_id"),
+    )
     return json.dumps(payload, ensure_ascii=False)
 
 

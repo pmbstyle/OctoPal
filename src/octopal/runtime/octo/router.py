@@ -109,6 +109,7 @@ _ALWAYS_INCLUDE_TOOL_NAMES = {
     "list_schedule",
     "schedule_task",
     "remove_task",
+    "repair_scheduled_tasks",
     # Worker lifecycle essentials
     "list_workers",
     "start_worker",
@@ -169,6 +170,7 @@ _SCHEDULED_OCTO_CONTROL_ALLOWED_TOOL_NAMES = _SCHEDULER_ALLOWED_TOOL_NAMES | {
     "list_schedule",
     "schedule_task",
     "remove_task",
+    "repair_scheduled_tasks",
     "gateway_status",
 }
 _INTERNAL_MAINTENANCE_ALLOWED_TOOL_NAMES = _HEARTBEAT_ALLOWED_TOOL_NAMES | {

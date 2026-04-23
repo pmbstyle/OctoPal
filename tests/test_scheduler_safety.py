@@ -13,7 +13,12 @@ from octopal.runtime.octo import router as octo_router
 from octopal.runtime.octo.core import Octo
 from octopal.runtime.scheduler.service import SchedulerService
 from octopal.runtime.workers.contracts import WorkerResult
-from octopal.tools.tools import _tool_check_schedule, _tool_schedule_task, _tool_scheduler_status
+from octopal.tools.tools import (
+    _tool_check_schedule,
+    _tool_repair_scheduled_tasks,
+    _tool_schedule_task,
+    _tool_scheduler_status,
+)
 from octopal.utils import utc_now
 
 
@@ -48,6 +53,25 @@ class _StoreStub:
             "enabled": enabled,
             "metadata": metadata,
         }
+        metadata_json = json.dumps(metadata) if metadata else None
+        for index, task in enumerate(self.tasks):
+            if str(task.get("id")) != task_id:
+                continue
+            updated = dict(task)
+            updated.update(
+                {
+                    "name": name,
+                    "description": description,
+                    "frequency": frequency,
+                    "worker_id": worker_id,
+                    "task_text": task_text,
+                    "inputs_json": json.dumps(inputs) if inputs else None,
+                    "enabled": 1 if enabled else 0,
+                    "metadata_json": metadata_json,
+                }
+            )
+            self.tasks[index] = updated
+            break
 
     def get_scheduled_tasks(self, enabled_only: bool = False) -> list[dict]:
         if not enabled_only:
@@ -409,6 +433,118 @@ def test_scheduler_status_reports_suggested_execution_mode_for_blocked_tasks(tmp
     assert payload["tasks"][0]["dispatch_policy_reason"] == "blocked_by_route"
     assert payload["tasks"][0]["suggested_execution_mode"] == "worker"
     assert any("suggested execution mode" in hint for hint in payload["hints"])
+
+
+def test_repair_scheduled_tasks_previews_candidates_without_applying(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": None,
+                "task_text": "Check the weather",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "blocked_by_route",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    payload = json.loads(
+        _tool_repair_scheduled_tasks({}, {"octo": SimpleNamespace(scheduler=scheduler)})
+    )
+
+    assert payload["status"] == "preview"
+    assert payload["candidate_count"] == 1
+    assert payload["applied_count"] == 0
+    assert payload["candidates"][0]["task_id"] == "weather_check"
+    assert payload["candidates"][0]["suggested_execution_mode"] == "worker"
+    assert payload["candidates"][0]["can_apply"] is False
+    assert payload["candidates"][0]["skip_reason"] == "missing_worker_id"
+    assert store.last_upsert is None
+
+
+def test_repair_scheduled_tasks_applies_worker_migration_with_valid_worker_id(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    worker_dir = tmp_path / "workers" / "weather_worker"
+    worker_dir.mkdir(parents=True)
+    (worker_dir / "worker.json").write_text(
+        json.dumps(
+            {
+                "id": "weather_worker",
+                "name": "Weather Worker",
+                "description": "Fetches weather",
+                "system_prompt": "Do weather work.",
+                "available_tools": ["web_search"],
+                "required_permissions": ["network"],
+                "max_thinking_steps": 8,
+                "default_timeout_seconds": 300,
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": None,
+                "task_text": "Check the weather",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "blocked_by_route",
+                        "suggested_execution_mode": "worker",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    payload = json.loads(
+        _tool_repair_scheduled_tasks(
+            {"apply": True, "task_ids": ["weather_check"], "worker_id": "weather_worker"},
+            {"octo": SimpleNamespace(scheduler=scheduler)},
+        )
+    )
+
+    assert payload["status"] == "applied"
+    assert payload["candidate_count"] == 1
+    assert payload["applied_count"] == 1
+    assert payload["skipped_count"] == 0
+    assert payload["applied"][0] == {
+        "task_id": "weather_check",
+        "name": "Weather Check",
+        "execution_mode": "worker",
+        "worker_id": "weather_worker",
+    }
+    assert store.last_upsert is not None
+    assert store.last_upsert["task_id"] == "weather_check"
+    assert store.last_upsert["worker_id"] == "weather_worker"
+    assert store.last_upsert["metadata"] == {
+        "notify_user": "never",
+        "execution_mode": "worker",
+    }
 
 
 def test_octo_marks_scheduled_task_after_successful_worker_run_even_if_store_lags() -> None:

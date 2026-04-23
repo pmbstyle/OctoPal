@@ -9,6 +9,7 @@ from typing import Any
 import structlog
 
 from octopal.infrastructure.store.base import Store
+from octopal.runtime.workers.loader import get_worker_template
 from octopal.utils import utc_now
 
 logger = structlog.get_logger(__name__)
@@ -119,6 +120,104 @@ class SchedulerService:
     def remove_task(self, task_id: str) -> None:
         self.store.delete_scheduled_task(task_id)
         self.sync_to_markdown()
+
+    def repair_suggested_tasks(
+        self,
+        *,
+        apply: bool = False,
+        task_ids: list[str] | None = None,
+        worker_id: str | None = None,
+    ) -> dict[str, Any]:
+        selected_ids = {str(item or "").strip() for item in (task_ids or []) if str(item or "").strip()}
+        provided_worker_id = str(worker_id or "").strip() or None
+        described = self.describe_tasks(enabled_only=False)
+        candidates: list[dict[str, Any]] = []
+        applied_items: list[dict[str, Any]] = []
+        skipped_items: list[dict[str, Any]] = []
+
+        for task in described:
+            task_id = str(task.get("id") or "").strip()
+            if selected_ids and task_id not in selected_ids:
+                continue
+            suggested_mode = str(task.get("suggested_execution_mode") or "").strip().lower()
+            if not suggested_mode:
+                continue
+            resolved_worker_id = str(task.get("worker_id") or "").strip() or provided_worker_id
+            can_apply = True
+            skip_reason = None
+            if suggested_mode == "worker":
+                if not resolved_worker_id:
+                    can_apply = False
+                    skip_reason = "missing_worker_id"
+                elif get_worker_template(self.workspace_dir, resolved_worker_id) is None:
+                    can_apply = False
+                    skip_reason = "unknown_worker_id"
+            candidate = {
+                "task_id": task_id,
+                "name": task.get("name"),
+                "execution_mode": task.get("execution_mode"),
+                "suggested_execution_mode": suggested_mode,
+                "worker_id": task.get("worker_id"),
+                "resolved_worker_id": resolved_worker_id,
+                "dispatch_policy_reason": task.get("dispatch_policy_reason"),
+                "blocked_reason": task.get("blocked_reason"),
+                "can_apply": can_apply,
+            }
+            if skip_reason:
+                candidate["skip_reason"] = skip_reason
+            candidates.append(candidate)
+            if not apply:
+                continue
+            if not can_apply:
+                skipped_items.append(
+                    {
+                        "task_id": task_id,
+                        "name": task.get("name"),
+                        "reason": skip_reason or "cannot_apply",
+                    }
+                )
+                continue
+
+            metadata = dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
+            metadata["notify_user"] = task.get("notify_user")
+            metadata["execution_mode"] = suggested_mode
+            metadata.pop(SCHEDULED_TASK_BLOCKED_UNTIL_KEY, None)
+            metadata.pop(SCHEDULED_TASK_BLOCKED_REASON_KEY, None)
+            metadata.pop(SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY, None)
+
+            repaired_worker_id = resolved_worker_id if suggested_mode == "worker" else None
+            self.store.upsert_scheduled_task(
+                task_id=task_id,
+                name=str(task.get("name") or ""),
+                frequency=str(task.get("frequency") or ""),
+                task_text=str(task.get("task_text") or ""),
+                description=str(task.get("description") or "").strip() or None,
+                worker_id=repaired_worker_id,
+                inputs=task.get("inputs") if isinstance(task.get("inputs"), dict) else None,
+                enabled=bool(int(task.get("enabled", 1) or 0) == 1),
+                metadata=metadata or None,
+            )
+            applied_items.append(
+                {
+                    "task_id": task_id,
+                    "name": task.get("name"),
+                    "execution_mode": suggested_mode,
+                    "worker_id": repaired_worker_id,
+                }
+            )
+
+        if apply and applied_items:
+            self.sync_to_markdown()
+
+        return {
+            "status": "applied" if apply else "preview",
+            "candidate_count": len(candidates),
+            "applied_count": len(applied_items),
+            "skipped_count": len(skipped_items),
+            "candidates": candidates,
+            "applied": applied_items,
+            "skipped": skipped_items,
+        }
 
     def get_actionable_tasks(self) -> list[dict[str, Any]]:
         """Find tasks that are due to run."""
