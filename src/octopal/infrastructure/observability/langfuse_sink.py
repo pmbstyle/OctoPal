@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextvars import Context, copy_context
+from dataclasses import dataclass
 from typing import Any
 
 import structlog
@@ -7,6 +9,13 @@ import structlog
 from octopal.infrastructure.observability.base import TraceContext, new_span_id
 
 logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class _ObservationHandle:
+    cm: Any
+    observation: Any
+    enter_context: Context
 
 
 class LangfuseTraceSink:
@@ -28,7 +37,7 @@ class LangfuseTraceSink:
             sample_rate=sample_rate,
             tracing_enabled=tracing_enabled,
         )
-        self._active_handles: dict[str, tuple[Any, Any]] = {}
+        self._active_handles: dict[str, _ObservationHandle] = {}
 
     async def start_trace(
         self,
@@ -108,12 +117,11 @@ class LangfuseTraceSink:
         handle = self._active_handles.get(ctx.span_id)
         if handle is None:
             return
-        _, observation = handle
         try:
             update_payload = {"last_annotation": name}
             if metadata:
                 update_payload["annotation"] = metadata
-            observation.update(metadata=update_payload)
+            handle.enter_context.run(handle.observation.update, metadata=update_payload)
         except Exception:
             logger.debug("Langfuse annotate failed", span_id=ctx.span_id, exc_info=True)
 
@@ -161,16 +169,20 @@ class LangfuseTraceSink:
         if parent_span_id is not None:
             parent_handle = self._active_handles.get(parent_span_id)
             if parent_handle is not None:
-                _, parent_observation = parent_handle
-                cm_factory = parent_observation.start_as_current_observation
+                cm_factory = parent_handle.observation.start_as_current_observation
         cm = cm_factory(
             name=name,
             as_type=as_type,
             input=input,
             metadata=metadata,
         )
-        observation = cm.__enter__()
-        self._active_handles[span_id] = (cm, observation)
+        enter_context = copy_context()
+        observation = enter_context.run(cm.__enter__)
+        self._active_handles[span_id] = _ObservationHandle(
+            cm=cm,
+            observation=observation,
+            enter_context=enter_context,
+        )
 
     def _close_observation(
         self,
@@ -183,11 +195,11 @@ class LangfuseTraceSink:
         handle = self._active_handles.pop(span_id, None)
         if handle is None:
             return
-        cm, observation = handle
         try:
             update_payload = dict(metadata or {})
             update_payload.setdefault("status", status)
-            observation.update(
+            handle.enter_context.run(
+                handle.observation.update,
                 output=output,
                 metadata=update_payload or None,
                 level="ERROR" if status == "error" else "DEFAULT",
@@ -199,7 +211,7 @@ class LangfuseTraceSink:
             logger.debug("Langfuse observation update failed", span_id=span_id, exc_info=True)
         finally:
             try:
-                cm.__exit__(None, None, None)
+                handle.enter_context.run(handle.cm.__exit__, None, None, None)
             except Exception:
                 logger.debug("Langfuse observation close failed", span_id=span_id, exc_info=True)
 

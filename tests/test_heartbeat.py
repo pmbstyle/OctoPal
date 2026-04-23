@@ -381,6 +381,8 @@ def test_detect_textual_tool_invocation():
     assert looks_like_textual_tool_invocation("fs_read, file: memory/2026-03-11.md")
     assert not looks_like_textual_tool_invocation("NO_USER_RESPONSE")
     assert not looks_like_textual_tool_invocation("HEARTBEAT_OK")
+    assert not looks_like_textual_tool_invocation("SCHEDULED_TASK_DONE")
+    assert not looks_like_textual_tool_invocation("SCHEDULER_IDLE")
     assert not looks_like_textual_tool_invocation("Result ready. NO_USER_RESPONSE")
     assert not looks_like_textual_tool_invocation("Проверяю расписание:")
     assert not looks_like_textual_tool_invocation("Checking schedule... check_schedule")

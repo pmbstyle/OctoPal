@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import types
 
 from octopal.infrastructure.config.settings import Settings
@@ -39,16 +40,24 @@ def test_build_trace_sink_falls_back_to_noop_when_langfuse_init_fails(monkeypatc
 
 def test_langfuse_trace_sink_uses_current_python_sdk_api(monkeypatch) -> None:
     created_clients: list[FakeLangfuse] = []
+    active_observation_var: contextvars.ContextVar[FakeObservation | None] = contextvars.ContextVar(
+        "fake_langfuse_observation",
+        default=None,
+    )
 
     class FakeContextManager:
         def __init__(self, observation: FakeObservation) -> None:
             self.observation = observation
             self.exited = False
+            self._token = None
 
         def __enter__(self) -> FakeObservation:
+            self._token = active_observation_var.set(self.observation)
             return self.observation
 
         def __exit__(self, exc_type, exc, tb) -> None:
+            if self._token is not None:
+                active_observation_var.reset(self._token)
             self.exited = True
 
     class FakeObservation:
@@ -124,3 +133,97 @@ def test_langfuse_trace_sink_uses_current_python_sdk_api(monkeypatch) -> None:
     assert client.root_observations[0].name == "octo.turn"
     assert client.root_observations[0].children[0].name == "worker.run"
     assert client.root_observations[0].children[0].as_type == "agent"
+
+
+def test_langfuse_trace_sink_closes_observation_in_original_context(monkeypatch) -> None:
+    created_clients: list[FakeLangfuse] = []
+    active_observation_var: contextvars.ContextVar[FakeObservation | None] = contextvars.ContextVar(
+        "fake_langfuse_observation_cross_task",
+        default=None,
+    )
+
+    class FakeContextManager:
+        def __init__(self, observation: FakeObservation) -> None:
+            self.observation = observation
+            self.exited = False
+            self._token = None
+
+        def __enter__(self) -> FakeObservation:
+            self._token = active_observation_var.set(self.observation)
+            return self.observation
+
+        def __exit__(self, exc_type, exc, tb) -> None:
+            if self._token is not None:
+                active_observation_var.reset(self._token)
+            self.exited = True
+
+    class FakeObservation:
+        def __init__(self, name: str, as_type: str, metadata=None, input=None) -> None:
+            self.name = name
+            self.as_type = as_type
+            self.metadata = metadata
+            self.input = input
+            self.children: list[FakeObservation] = []
+            self.updates: list[dict[str, object]] = []
+
+        def start_as_current_observation(self, **kwargs) -> FakeContextManager:
+            child = FakeObservation(
+                kwargs.get("name", ""),
+                kwargs.get("as_type", "span"),
+                metadata=kwargs.get("metadata"),
+                input=kwargs.get("input"),
+            )
+            self.children.append(child)
+            return FakeContextManager(child)
+
+        def update(self, **kwargs) -> None:
+            self.updates.append(kwargs)
+
+    class FakeLangfuse:
+        def __init__(self, **kwargs) -> None:
+            self.kwargs = kwargs
+            self.root_observations: list[FakeObservation] = []
+            created_clients.append(self)
+
+        def start_as_current_observation(self, **kwargs) -> FakeContextManager:
+            observation = FakeObservation(
+                kwargs.get("name", ""),
+                kwargs.get("as_type", "span"),
+                metadata=kwargs.get("metadata"),
+                input=kwargs.get("input"),
+            )
+            self.root_observations.append(observation)
+            return FakeContextManager(observation)
+
+    fake_module = types.ModuleType("langfuse")
+    fake_module.Langfuse = FakeLangfuse
+    monkeypatch.setitem(__import__("sys").modules, "langfuse", fake_module)
+
+    async def scenario() -> None:
+        sink = LangfuseTraceSink(
+            public_key="pk-test",
+            secret_key="sk-test",
+            host="https://example.com",
+            sample_rate=1.0,
+        )
+        trace = await sink.start_trace(
+            name="octo.turn",
+            trace_id="turn-123",
+            root_trace_id="turn-123",
+            session_id="chat:1",
+            chat_id=1,
+            input={"text": "hello"},
+        )
+        child = await sink.start_span(
+            trace,
+            name="worker.run",
+            metadata={"stage": "child"},
+        )
+        await asyncio.create_task(sink.finish_span(child, output={"status": "ok"}))
+        await asyncio.create_task(sink.finish_trace(trace, output={"status": "ok"}))
+
+    asyncio.run(scenario())
+
+    client = created_clients[0]
+    assert client.root_observations[0].children[0].updates
+    assert client.root_observations[0].updates

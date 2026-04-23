@@ -1013,6 +1013,40 @@ def test_finalize_response_preserves_control_token_without_rewrite() -> None:
     asyncio.run(scenario())
 
 
+def test_finalize_response_preserves_scheduled_completion_token_without_rewrite() -> None:
+    class DummyProvider:
+        async def complete(self, messages, **kwargs):
+            raise AssertionError("scheduled completion token should not trigger rewrite")
+
+    async def scenario() -> None:
+        result = await _finalize_response(
+            DummyProvider(),
+            [Message(role="system", content="Rewrite if needed.")],
+            "SCHEDULED_TASK_DONE",
+            internal_followup=False,
+        )
+        assert result == "SCHEDULED_TASK_DONE"
+
+    asyncio.run(scenario())
+
+
+def test_finalize_response_preserves_scheduler_idle_token_without_rewrite() -> None:
+    class DummyProvider:
+        async def complete(self, messages, **kwargs):
+            raise AssertionError("scheduler idle token should not trigger rewrite")
+
+    async def scenario() -> None:
+        result = await _finalize_response(
+            DummyProvider(),
+            [Message(role="system", content="Rewrite if needed.")],
+            "SCHEDULER_IDLE",
+            internal_followup=False,
+        )
+        assert result == "SCHEDULER_IDLE"
+
+    asyncio.run(scenario())
+
+
 def test_route_can_expand_toolset_after_catalog_search(monkeypatch) -> None:
     hidden_tool = ToolSpec(
         name="hidden_tool",

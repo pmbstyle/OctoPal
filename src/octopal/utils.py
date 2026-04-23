@@ -264,11 +264,26 @@ def has_heartbeat_ok_edge(text: str) -> bool:
     return normalized.startswith("HEARTBEATOK") or normalized.endswith("HEARTBEATOK")
 
 
+def has_non_tool_control_token(text: str) -> bool:
+    """Return True for internal control tokens that must never be treated as tool names."""
+    value = (text or "").strip()
+    if not value:
+        return False
+    trimmed = re.sub(r"^[^\w]+", "", value)
+    trimmed = re.sub(r"[^\w]+$", "", trimmed).strip()
+    if not trimmed:
+        return False
+    normalized = re.sub(r"[\s_-]+", "", trimmed).upper()
+    return normalized in {"SCHEDULEDTASKDONE", "SCHEDULERIDLE"}
+
+
 def looks_like_textual_tool_invocation(text: str) -> bool:
     value = (text or "").strip()
     if not value or "\n" in value or len(value) > 300:
         return False
     if is_control_response(value):
+        return False
+    if has_non_tool_control_token(value):
         return False
     if has_heartbeat_ok_edge(value):
         return False

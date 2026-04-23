@@ -262,18 +262,20 @@ class OpenRouterProvider:
         output: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
     ) -> None:
-        if span_ctx is not None and self._trace_sink is not None:
-            finish_meta = dict(metadata or {})
-            if started_at_ms is not None:
-                finish_meta["duration_ms"] = round(now_ms() - started_at_ms, 2)
-            await self._trace_sink.finish_span(
-                span_ctx,
-                status=status,
-                output=output,
-                metadata=finish_meta,
-            )
-        if token is not None:
-            reset_trace_context(token)
+        try:
+            if span_ctx is not None and self._trace_sink is not None:
+                finish_meta = dict(metadata or {})
+                if started_at_ms is not None:
+                    finish_meta["duration_ms"] = round(now_ms() - started_at_ms, 2)
+                await self._trace_sink.finish_span(
+                    span_ctx,
+                    status=status,
+                    output=output,
+                    metadata=finish_meta,
+                )
+        finally:
+            if token is not None:
+                reset_trace_context(token)
 
 
 def _serialize_message(message: Message | dict) -> dict:
