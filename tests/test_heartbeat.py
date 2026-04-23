@@ -5,6 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 from octopal.runtime.octo import core as octo_core
+from octopal.runtime.octo import router as octo_router
+from octopal.runtime.octo.control_plane import RouteMode, RouteRequest, resolve_turn_route_mode
 from octopal.runtime.octo.core import (
     Octo,
     _build_forced_worker_followup_batch,
@@ -34,6 +36,23 @@ from octopal.utils import (
     should_suppress_user_delivery,
     utc_now,
 )
+
+
+def test_resolve_turn_route_mode():
+    assert resolve_turn_route_mode(track_progress=True, background_delivery=False) is RouteMode.CONVERSATION
+    assert resolve_turn_route_mode(track_progress=False, background_delivery=True) is RouteMode.HEARTBEAT
+    assert (
+        resolve_turn_route_mode(track_progress=False, background_delivery=False)
+        is RouteMode.INTERNAL_MAINTENANCE
+    )
+
+
+def test_route_request_marks_control_plane_modes():
+    conversation = RouteRequest(mode=RouteMode.CONVERSATION, user_text="hi", chat_id=1)
+    heartbeat = RouteRequest(mode=RouteMode.HEARTBEAT, user_text="tick", chat_id=1)
+
+    assert conversation.is_control_plane is False
+    assert heartbeat.is_control_plane is True
 
 
 def test_is_heartbeat_ok():
@@ -362,6 +381,9 @@ def test_detect_textual_tool_invocation():
     assert looks_like_textual_tool_invocation("fs_read, file: memory/2026-03-11.md")
     assert not looks_like_textual_tool_invocation("NO_USER_RESPONSE")
     assert not looks_like_textual_tool_invocation("HEARTBEAT_OK")
+    assert not looks_like_textual_tool_invocation("SCHEDULED_TASK_DONE")
+    assert not looks_like_textual_tool_invocation("SCHEDULED_TASK_BLOCKED")
+    assert not looks_like_textual_tool_invocation("SCHEDULER_IDLE")
     assert not looks_like_textual_tool_invocation("Result ready. NO_USER_RESPONSE")
     assert not looks_like_textual_tool_invocation("Проверяю расписание:")
     assert not looks_like_textual_tool_invocation("Checking schedule... check_schedule")
@@ -601,14 +623,9 @@ async def test_background_delivery_keeps_user_visible_heartbeat_reply_and_record
         async def add_message(self, role, text, metadata):
             memory_messages.append((role, text, metadata))
 
-    async def _route_or_reply(*args, **kwargs):
+    async def _route_heartbeat(*args, **kwargs):
         return "<user_visible>Утренний брифинг готов.</user_visible>"
-
-    async def _bootstrap_context(*args, **kwargs):
-        return SimpleNamespace(content="", hash="", files=[])
-
-    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply)
-    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_context)
+    monkeypatch.setattr(octo_core, "route_heartbeat", _route_heartbeat)
 
     octo = Octo(
         approvals=None,
@@ -651,14 +668,9 @@ async def test_background_delivery_rewrites_unwrapped_heartbeat_result_to_explic
         async def complete(self, _messages):
             return "<user_visible>Утренний брифинг готов.</user_visible>"
 
-    async def _route_or_reply(*args, **kwargs):
+    async def _route_heartbeat(*args, **kwargs):
         return "Утренний брифинг готов."
-
-    async def _bootstrap_context(*args, **kwargs):
-        return SimpleNamespace(content="", hash="", files=[])
-
-    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply)
-    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_context)
+    monkeypatch.setattr(octo_core, "route_heartbeat", _route_heartbeat)
 
     octo = Octo(
         approvals=None,
@@ -697,14 +709,9 @@ async def test_background_delivery_suppresses_low_signal_heartbeat_update(monkey
         async def add_message(self, role, text, metadata):
             memory_messages.append((role, text, metadata))
 
-    async def _route_or_reply(*args, **kwargs):
+    async def _route_heartbeat(*args, **kwargs):
         return "Worker still running. Yielding."
-
-    async def _bootstrap_context(*args, **kwargs):
-        return SimpleNamespace(content="", hash="", files=[])
-
-    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply)
-    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_context)
+    monkeypatch.setattr(octo_core, "route_heartbeat", _route_heartbeat)
 
     octo = Octo(
         approvals=None,
@@ -738,17 +745,12 @@ async def test_background_delivery_suppresses_unwrapped_internal_heartbeat_text(
         async def add_message(self, role, text, metadata):
             memory_messages.append((role, text, metadata))
 
-    async def _route_or_reply(*args, **kwargs):
+    async def _route_heartbeat(*args, **kwargs):
         return (
             "Ладно, canonical memory не подходит для файлов за пределами canon. "
             "Мне нужно использовать tools для записи в research/."
         )
-
-    async def _bootstrap_context(*args, **kwargs):
-        return SimpleNamespace(content="", hash="", files=[])
-
-    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply)
-    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_context)
+    monkeypatch.setattr(octo_core, "route_heartbeat", _route_heartbeat)
 
     octo = Octo(
         approvals=None,
@@ -782,14 +784,9 @@ async def test_recent_visible_delivery_suppresses_following_heartbeat_send(monke
         async def add_message(self, role, text, metadata):
             memory_messages.append((role, text, metadata))
 
-    async def _route_or_reply(*args, **kwargs):
+    async def _route_heartbeat(*args, **kwargs):
         return "<user_visible>Свежий heartbeat-апдейт.</user_visible>"
-
-    async def _bootstrap_context(*args, **kwargs):
-        return SimpleNamespace(content="", hash="", files=[])
-
-    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply)
-    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_context)
+    monkeypatch.setattr(octo_core, "route_heartbeat", _route_heartbeat)
     monkeypatch.setattr(octo_core, "_HEARTBEAT_USER_VISIBLE_COOLDOWN_SECONDS", 300)
 
     octo = Octo(
@@ -815,6 +812,138 @@ async def test_recent_visible_delivery_suppresses_following_heartbeat_send(monke
     assert reply.delivery_mode == DeliveryMode.IMMEDIATE
     assert reply.immediate == "Свежий heartbeat-апдейт."
     assert octo.should_suppress_heartbeat_delivery(123, reply.immediate) is True
+
+
+@pytest.mark.asyncio
+async def test_route_heartbeat_uses_control_plane_prompt_and_skips_planner(monkeypatch):
+    calls = {"control_prompt": 0, "complete_route": 0}
+
+    class DummyProvider:
+        async def complete(self, _messages):
+            return "HEARTBEAT_OK"
+
+    class DummyOcto:
+        provider = DummyProvider()
+        reflection = None
+        mcp_manager = None
+        is_ws_active = False
+
+        async def set_typing(self, _chat_id, _active):
+            return None
+
+        async def set_thinking(self, _active):
+            return None
+
+        def peek_context_wakeup(self, _chat_id):
+            return ""
+
+    async def _build_control_plane_prompt(**kwargs):
+        calls["control_prompt"] += 1
+        return [octo_router.Message(role="user", content=str(kwargs["user_text"]))]
+
+    async def _complete_route_with_tools(**kwargs):
+        calls["complete_route"] += 1
+        return "HEARTBEAT_OK"
+
+    def _build_octo_prompt_should_not_run(*args, **kwargs):
+        raise AssertionError("build_octo_prompt should not run for heartbeat route")
+
+    def _build_plan_should_not_run(*args, **kwargs):
+        raise AssertionError("_build_plan should not run for heartbeat route")
+
+    monkeypatch.setattr(octo_router, "build_control_plane_prompt", _build_control_plane_prompt)
+    monkeypatch.setattr(octo_router, "_complete_route_with_tools", _complete_route_with_tools)
+    monkeypatch.setattr(octo_router, "build_octo_prompt", _build_octo_prompt_should_not_run)
+    monkeypatch.setattr(octo_router, "_build_plan", _build_plan_should_not_run)
+
+    result = await octo_router.route_heartbeat(DummyOcto(), 123, "heartbeat task")
+
+    assert result == "HEARTBEAT_OK"
+    assert calls == {"control_prompt": 1, "complete_route": 1}
+
+
+@pytest.mark.asyncio
+async def test_route_internal_maintenance_uses_control_plane_prompt_and_skips_planner(
+    monkeypatch,
+):
+    calls = {"control_prompt": 0, "complete_route": 0}
+
+    class DummyOcto:
+        provider = object()
+        reflection = None
+
+        async def set_thinking(self, value):
+            return None
+
+    async def _build_control_plane_prompt(**kwargs):
+        calls["control_prompt"] += 1
+        assert kwargs["mode_label"] == "internal-maintenance"
+        return [octo_router.Message(role="system", content="control plane")]
+
+    async def _complete_route_with_tools(**kwargs):
+        calls["complete_route"] += 1
+        return "Octo is online."
+
+    def _build_octo_prompt_should_not_run(*args, **kwargs):
+        raise AssertionError("build_octo_prompt should not run for internal maintenance")
+
+    def _build_plan_should_not_run(*args, **kwargs):
+        raise AssertionError("_build_plan should not run for internal maintenance")
+
+    monkeypatch.setattr(octo_router, "build_control_plane_prompt", _build_control_plane_prompt)
+    monkeypatch.setattr(octo_router, "_complete_route_with_tools", _complete_route_with_tools)
+    monkeypatch.setattr(octo_router, "build_octo_prompt", _build_octo_prompt_should_not_run)
+    monkeypatch.setattr(octo_router, "_build_plan", _build_plan_should_not_run)
+
+    result = await octo_router.route_internal_maintenance(DummyOcto(), 0, "wake up")
+
+    assert result == "Octo is online."
+    assert calls == {"control_prompt": 1, "complete_route": 1}
+
+
+@pytest.mark.asyncio
+async def test_initialize_system_uses_internal_maintenance_route(monkeypatch):
+    calls = {"internal_maintenance": 0}
+
+    class DummyStore:
+        def list_workers(self):
+            return []
+
+    class DummyMemory:
+        async def add_message(self, role, text, metadata):
+            return None
+
+    async def _route_internal_maintenance(octo, chat_id, user_text):
+        calls["internal_maintenance"] += 1
+        assert chat_id == 0
+        assert "Inspect runtime health and available workers internally." in user_text
+        return "Octo is online."
+
+    async def _bootstrap_should_not_run(*args, **kwargs):
+        raise AssertionError("build_bootstrap_context_prompt should not run during startup")
+
+    async def _route_or_reply_should_not_run(*args, **kwargs):
+        raise AssertionError("route_or_reply should not run during startup")
+
+    monkeypatch.setattr(octo_core.Octo, "start_background_tasks", lambda self: None)
+    monkeypatch.setattr(octo_core, "route_internal_maintenance", _route_internal_maintenance)
+    monkeypatch.setattr(octo_core, "build_bootstrap_context_prompt", _bootstrap_should_not_run)
+    monkeypatch.setattr(octo_core, "route_or_reply", _route_or_reply_should_not_run)
+
+    octo = Octo(
+        approvals=None,
+        memory=DummyMemory(),
+        canon=None,
+        provider=None,
+        store=DummyStore(),
+        policy=None,
+        runtime=None,
+        internal_send=None,
+    )
+
+    await octo.initialize_system()
+
+    assert calls == {"internal_maintenance": 1}
 
 
 @pytest.mark.asyncio

@@ -26,8 +26,10 @@ from octopal.infrastructure.observability.helpers import (
 )
 from octopal.infrastructure.providers.base import InferenceProvider, Message
 from octopal.runtime.memory.service import MemoryService
+from octopal.runtime.octo.control_plane import RouteMode
 from octopal.runtime.octo.delivery import resolve_user_delivery
 from octopal.runtime.octo.prompt_builder import (
+    build_control_plane_prompt,
     build_bootstrap_context_prompt,
     build_octo_prompt,
 )
@@ -107,6 +109,7 @@ _ALWAYS_INCLUDE_TOOL_NAMES = {
     "list_schedule",
     "schedule_task",
     "remove_task",
+    "repair_scheduled_tasks",
     # Worker lifecycle essentials
     "list_workers",
     "start_worker",
@@ -144,6 +147,35 @@ _INITIAL_OCTO_TOOL_NAMES = _ALWAYS_INCLUDE_TOOL_NAMES | {
 _WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES = {
     "get_worker_output_path",
     "manage_canon",
+}
+_HEARTBEAT_ALLOWED_TOOL_NAMES = {
+    "octo_context_health",
+    "scheduler_status",
+    "check_schedule",
+    "gateway_status",
+}
+_SCHEDULER_ALLOWED_TOOL_NAMES = {
+    "check_schedule",
+    "scheduler_status",
+    "octo_context_health",
+    "list_workers",
+    "list_active_workers",
+}
+_SCHEDULED_OCTO_CONTROL_ALLOWED_TOOL_NAMES = _SCHEDULER_ALLOWED_TOOL_NAMES | {
+    "octo_context_reset",
+    "octo_memchain_status",
+    "octo_memchain_verify",
+    "manage_canon",
+    "search_canon",
+    "list_schedule",
+    "schedule_task",
+    "remove_task",
+    "repair_scheduled_tasks",
+    "gateway_status",
+}
+_INTERNAL_MAINTENANCE_ALLOWED_TOOL_NAMES = _HEARTBEAT_ALLOWED_TOOL_NAMES | {
+    "list_workers",
+    "list_active_workers",
 }
 _DURABLE_WORKSPACE_ROOTS = ("reports", "artifacts")
 _LEGACY_WORKER_ARTIFACT_KEYS = ("report_path", "output_path", "path", "file")
@@ -227,6 +259,7 @@ async def route_or_reply(
     images: list[str] | None = None,
     saved_file_paths: list[str] | None = None,
     include_wakeup: bool = True,
+    route_mode: str | RouteMode = RouteMode.CONVERSATION,
 ) -> str:
     """Core routing logic: decide whether to use tools or reply to user."""
     # Internal chat_id (<= 0) should not trigger typing indicators.
@@ -237,13 +270,19 @@ async def route_or_reply(
     routing_trace_started_ms = now_ms()
     routing_trace_status = "ok"
     routing_trace_output: dict[str, Any] | None = None
+    route_mode_value = (
+        route_mode.value if isinstance(route_mode, RouteMode) else str(route_mode or "unknown").strip() or "unknown"
+    )
     routing_trace_metadata: dict[str, Any] = {
         "internal_followup": internal_followup,
         "show_typing": show_typing,
         "include_wakeup": include_wakeup,
         "has_images": bool(images),
         "saved_file_paths_count": len(saved_file_paths or []),
-        "route_mode": "unknown",
+        "route_mode": route_mode_value,
+        "bootstrap_chars": len(bootstrap_context or ""),
+        "planner_used": False,
+        "mcp_refresh_attempted": False,
     }
     if trace_sink is not None and parent_trace_ctx is not None:
         routing_trace_ctx = await trace_sink.start_span(
@@ -262,6 +301,7 @@ async def route_or_reply(
         wake_notice = ""
         if include_wakeup and hasattr(octo, "peek_context_wakeup"):
             wake_notice = str(octo.peek_context_wakeup(chat_id) or "")
+        routing_trace_metadata["mcp_refresh_attempted"] = True
         await _ensure_mcp_connected_for_routing(octo)
 
         octo_tools, ctx = _get_octo_tools(octo, chat_id)
@@ -270,6 +310,7 @@ async def route_or_reply(
         deferred_count = max(0, available_count - len(octo_tools))
         logger.info(
             "Octo tools fetched",
+            route_mode=route_mode_value,
             active_tool_count=len(octo_tools),
             available_tool_count=available_count,
             deferred_tool_count=deferred_count,
@@ -279,6 +320,7 @@ async def route_or_reply(
                 routing_trace_ctx,
                 name="octo.routing.tools",
                 metadata={
+                    "route_mode": route_mode_value,
                     "active_tool_count": len(octo_tools),
                     "available_tool_count": available_count,
                     "deferred_tool_count": deferred_count,
@@ -307,15 +349,17 @@ async def route_or_reply(
 
         plan = await _build_plan(provider, messages, bool(octo_tools))
         if plan:
+            routing_trace_metadata["planner_used"] = True
             await _persist_plan(memory, chat_id, plan)
             logger.info(
                 "Octo plan ready",
+                route_mode=route_mode_value,
                 mode=plan["mode"],
                 steps=len(plan.get("steps", [])),
             )
             if plan["mode"] == "reply":
-                routing_trace_metadata["route_mode"] = "reply"
                 routing_trace_output = {
+                    "route_mode": route_mode_value,
                     "planner_mode": plan["mode"],
                     "steps_count": len(plan.get("steps", [])),
                 }
@@ -341,7 +385,11 @@ async def route_or_reply(
                         ),
                     )
                 )
-        routing_trace_metadata["route_mode"] = "tools"
+        routing_trace_output = {
+            "route_mode": route_mode_value,
+            "planner_mode": "execute" if routing_trace_metadata["planner_used"] else "none",
+            "steps_count": len(plan.get("steps", [])) if plan else 0,
+        }
         return await _complete_route_with_tools(
             octo=octo,
             provider=provider,
@@ -375,6 +423,244 @@ async def route_or_reply(
             )
         if routing_trace_token is not None:
             reset_trace_context(routing_trace_token)
+
+
+async def route_heartbeat(
+    octo: Any,
+    chat_id: int,
+    user_text: str,
+    *,
+    show_typing: bool = True,
+    include_wakeup: bool = True,
+) -> str:
+    """Run a bounded heartbeat/control-plane turn without the full conversation planner path."""
+    if chat_id > 0 and show_typing:
+        await octo.set_typing(chat_id, True)
+
+    await octo.set_thinking(True)
+    try:
+        wake_notice = ""
+        if include_wakeup and hasattr(octo, "peek_context_wakeup"):
+            wake_notice = str(octo.peek_context_wakeup(chat_id) or "")
+
+        octo_tools, ctx = _get_heartbeat_tools(octo, chat_id)
+        resolution_report = ctx.get("tool_resolution_report")
+        available_count = len(getattr(resolution_report, "available_tools", ()) or ())
+        deferred_count = max(0, available_count - len(octo_tools))
+        logger.info(
+            "Heartbeat tools fetched",
+            route_mode=RouteMode.HEARTBEAT.value,
+            active_tool_count=len(octo_tools),
+            available_tool_count=available_count,
+            deferred_tool_count=deferred_count,
+        )
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
+            ctx.get("tool_resolution_report"),
+        )
+        messages = await build_control_plane_prompt(
+            user_text=user_text,
+            chat_id=chat_id,
+            tool_policy_summary=tool_policy_summary,
+            wake_notice=wake_notice,
+            reflection=getattr(octo, "reflection", None),
+            mode_label="heartbeat",
+            mode_rules=(
+                "Heartbeat route rules:\n"
+                "- Return exactly one of: HEARTBEAT_OK, NO_USER_RESPONSE, or <user_visible>...</user_visible>.\n"
+                "- Use tools only if they are clearly necessary for current heartbeat/scheduler state.\n"
+                "- Do not start broad orchestration from heartbeat mode.\n"
+                "- Do not rely on full workspace bootstrap, recent chat history, or rich memory recall."
+            ),
+        )
+        _log_system_prompt(messages, "heartbeat")
+        reply_text = await _complete_route_with_tools(
+            octo=octo,
+            provider=octo.provider,
+            messages=messages,
+            tool_specs=octo_tools,
+            ctx=ctx,
+            internal_followup=False,
+            user_text=user_text,
+            images=None,
+            allow_tool_catalog_expansion=False,
+        )
+        return normalize_plain_text(reply_text)
+    finally:
+        await octo.set_thinking(False)
+        if chat_id > 0 and show_typing:
+            await octo.set_typing(chat_id, False)
+
+
+async def route_internal_maintenance(
+    octo: Any,
+    chat_id: int,
+    user_text: str,
+) -> str:
+    """Run a bounded internal maintenance turn without the full conversation planner path."""
+    await octo.set_thinking(True)
+    try:
+        octo_tools, ctx = _get_internal_maintenance_tools(octo, chat_id)
+        resolution_report = ctx.get("tool_resolution_report")
+        available_count = len(getattr(resolution_report, "available_tools", ()) or ())
+        deferred_count = max(0, available_count - len(octo_tools))
+        logger.info(
+            "Internal maintenance tools fetched",
+            route_mode=RouteMode.INTERNAL_MAINTENANCE.value,
+            active_tool_count=len(octo_tools),
+            available_tool_count=available_count,
+            deferred_tool_count=deferred_count,
+        )
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
+            ctx.get("tool_resolution_report"),
+        )
+        messages = await build_control_plane_prompt(
+            user_text=user_text,
+            chat_id=chat_id,
+            tool_policy_summary=tool_policy_summary,
+            reflection=getattr(octo, "reflection", None),
+            mode_label="internal-maintenance",
+            mode_rules=(
+                "Internal maintenance route rules:\n"
+                "- Keep this turn operational and bounded.\n"
+                "- You may inspect runtime health and worker availability.\n"
+                "- Do not start broad orchestration, memory recall, or user-task planning.\n"
+                "- Return a short user-visible readiness/update message in plain language."
+            ),
+        )
+        _log_system_prompt(messages, "internal_maintenance")
+        reply_text = await _complete_route_with_tools(
+            octo=octo,
+            provider=octo.provider,
+            messages=messages,
+            tool_specs=octo_tools,
+            ctx=ctx,
+            internal_followup=False,
+            user_text=user_text,
+            images=None,
+            allow_tool_catalog_expansion=False,
+        )
+        return normalize_plain_text(reply_text)
+    finally:
+        await octo.set_thinking(False)
+
+
+async def route_scheduler_tick(
+    octo: Any,
+    chat_id: int = 0,
+    *,
+    max_tasks: int = 10,
+) -> str:
+    """Run a bounded scheduler control-plane turn without the full conversation planner path."""
+    await octo.set_thinking(True)
+    try:
+        octo_tools, ctx = _get_scheduler_tools(octo, chat_id)
+        resolution_report = ctx.get("tool_resolution_report")
+        available_count = len(getattr(resolution_report, "available_tools", ()) or ())
+        deferred_count = max(0, available_count - len(octo_tools))
+        logger.info(
+            "Scheduler tick tools fetched",
+            route_mode=RouteMode.SCHEDULER.value,
+            active_tool_count=len(octo_tools),
+            available_tool_count=available_count,
+            deferred_tool_count=deferred_count,
+        )
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
+            ctx.get("tool_resolution_report"),
+        )
+        scheduler_tick_text = _build_scheduler_tick_input(octo, max_tasks=max_tasks)
+        messages = await build_control_plane_prompt(
+            user_text=scheduler_tick_text,
+            chat_id=chat_id,
+            tool_policy_summary=tool_policy_summary,
+            reflection=getattr(octo, "reflection", None),
+            mode_label="scheduler",
+            mode_rules=(
+                "Scheduler route rules:\n"
+                "- Keep this turn operational and bounded.\n"
+                "- You may inspect schedule state and worker availability.\n"
+                "- Do not dispatch workers directly from this route.\n"
+                "- Return one of: SCHEDULER_IDLE, NO_USER_RESPONSE, or <user_visible>...</user_visible>."
+            ),
+        )
+        _log_system_prompt(messages, "scheduler")
+        reply_text = await _complete_route_with_tools(
+            octo=octo,
+            provider=octo.provider,
+            messages=messages,
+            tool_specs=octo_tools,
+            ctx=ctx,
+            internal_followup=False,
+            user_text=scheduler_tick_text,
+            images=None,
+            allow_tool_catalog_expansion=False,
+        )
+        return normalize_plain_text(reply_text)
+    finally:
+        await octo.set_thinking(False)
+
+
+async def route_scheduled_octo_control(
+    octo: Any,
+    task: dict[str, Any],
+    *,
+    chat_id: int = 0,
+) -> str:
+    """Run a bounded control-plane turn for one scheduled Octo task."""
+    await octo.set_thinking(True)
+    try:
+        octo_tools, ctx = _get_scheduled_octo_control_tools(octo, chat_id)
+        resolution_report = ctx.get("tool_resolution_report")
+        available_count = len(getattr(resolution_report, "available_tools", ()) or ())
+        deferred_count = max(0, available_count - len(octo_tools))
+        logger.info(
+            "Scheduled Octo control tools fetched",
+            route_mode=RouteMode.SCHEDULER.value,
+            active_tool_count=len(octo_tools),
+            available_tool_count=available_count,
+            deferred_tool_count=deferred_count,
+            execution_mode="octo_control",
+            task_id=str(task.get("id") or "").strip() or None,
+        )
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
+            ctx.get("tool_resolution_report"),
+        )
+        scheduled_task_text = _build_scheduled_octo_control_input(task)
+        messages = await build_control_plane_prompt(
+            user_text=scheduled_task_text,
+            chat_id=chat_id,
+            tool_policy_summary=tool_policy_summary,
+            reflection=getattr(octo, "reflection", None),
+            mode_label="scheduled_octo_control",
+            mode_rules=(
+                "Scheduled Octo control route rules:\n"
+                "- Keep this turn bounded to the single scheduled task in the payload.\n"
+                "- You may use allowed control-plane and maintenance tools when necessary.\n"
+                "- Do not start workers or broad orchestration from this route.\n"
+                "- Return exactly one of: SCHEDULED_TASK_DONE, SCHEDULED_TASK_BLOCKED, NO_USER_RESPONSE, or <user_visible>...</user_visible>.\n"
+                "- Use SCHEDULED_TASK_DONE only if the task completed successfully with no user-visible update.\n"
+                "- Use SCHEDULED_TASK_BLOCKED when the task cannot complete from this bounded route because it needs workers, external access, or unavailable tools.\n"
+                "- Use <user_visible> only for a concise user-facing update after the task is complete."
+            ),
+        )
+        _log_system_prompt(messages, "scheduled_octo_control")
+        reply_text = await _complete_route_with_tools(
+            octo=octo,
+            provider=octo.provider,
+            messages=messages,
+            tool_specs=octo_tools,
+            ctx=ctx,
+            internal_followup=False,
+            user_text=scheduled_task_text,
+            images=None,
+            allow_tool_catalog_expansion=False,
+        )
+        return normalize_plain_text(reply_text)
+    finally:
+        await octo.set_thinking(False)
 
 
 async def _complete_route_with_tools(
@@ -1202,6 +1488,149 @@ def _get_worker_followup_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec],
     ctx["tool_resolution_report"] = resolution_report
     ctx["all_tool_specs"] = all_tools
     return tool_specs, ctx
+
+
+def _get_heartbeat_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, object]]:
+    return _get_control_plane_tools(
+        octo,
+        chat_id,
+        allowed_tool_names=_HEARTBEAT_ALLOWED_TOOL_NAMES,
+        policy_label="octo.heartbeat_allowlist",
+    )
+
+
+def _get_scheduler_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, object]]:
+    return _get_control_plane_tools(
+        octo,
+        chat_id,
+        allowed_tool_names=_SCHEDULER_ALLOWED_TOOL_NAMES,
+        policy_label="octo.scheduler_allowlist",
+    )
+
+
+def _get_scheduled_octo_control_tools(
+    octo: Any, chat_id: int
+) -> tuple[list[ToolSpec], dict[str, object]]:
+    return _get_control_plane_tools(
+        octo,
+        chat_id,
+        allowed_tool_names=_SCHEDULED_OCTO_CONTROL_ALLOWED_TOOL_NAMES,
+        policy_label="octo.scheduler_octo_control_allowlist",
+    )
+
+
+def _get_internal_maintenance_tools(
+    octo: Any, chat_id: int
+) -> tuple[list[ToolSpec], dict[str, object]]:
+    return _get_control_plane_tools(
+        octo,
+        chat_id,
+        allowed_tool_names=_INTERNAL_MAINTENANCE_ALLOWED_TOOL_NAMES,
+        policy_label="octo.internal_maintenance_allowlist",
+    )
+
+
+def _get_control_plane_tools(
+    octo: Any,
+    chat_id: int,
+    *,
+    allowed_tool_names: set[str],
+    policy_label: str,
+) -> tuple[list[ToolSpec], dict[str, object]]:
+    perms = {
+        "self_control": True,
+        "service_read": True,
+    }
+    ctx = {"octo": octo, "chat_id": chat_id}
+    mcp_manager = getattr(octo, "mcp_manager", None)
+    policy_steps = [
+        ToolPolicyPipelineStep(
+            label=policy_label,
+            policy=ToolPolicy(allow=sorted(allowed_tool_names)),
+        )
+    ]
+    all_tools = get_tools(mcp_manager=mcp_manager)
+    resolution_report = resolve_tool_diagnostics(
+        all_tools,
+        permissions=perms,
+        policy_pipeline_steps=policy_steps,
+    )
+    tool_specs = list(resolution_report.available_tools)
+    tool_specs = _budget_tool_specs(tool_specs, max_count=len(allowed_tool_names))
+    ctx["active_tool_specs"] = tool_specs
+    ctx["tool_resolution_report"] = resolution_report
+    ctx["all_tool_specs"] = all_tools
+    return tool_specs, ctx
+
+
+def _build_scheduler_tick_input(octo: Any, *, max_tasks: int = 10) -> str:
+    scheduler = getattr(octo, "scheduler", None)
+    if scheduler is None:
+        return (
+            "Scheduler tick requested, but no scheduler service is attached.\n"
+            "Return SCHEDULER_IDLE unless there is a clear user-visible issue to report."
+        )
+
+    due_tasks: list[dict[str, Any]] = []
+    described_tasks: list[dict[str, Any]] = []
+    try:
+        due_tasks = list(getattr(scheduler, "get_actionable_tasks")() or [])
+    except Exception:
+        due_tasks = []
+    try:
+        described_tasks = list(getattr(scheduler, "describe_tasks")(enabled_only=False) or [])
+    except Exception:
+        described_tasks = []
+
+    preview_tasks = described_tasks[: max(1, int(max_tasks))]
+    payload = {
+        "due_count": len(due_tasks),
+        "due_tasks": [
+            {
+                "task_id": task.get("id"),
+                "name": task.get("name"),
+                "worker_id": task.get("worker_id"),
+                "frequency": task.get("frequency"),
+                "notify_user": task.get("notify_user"),
+                "task_text": task.get("task_text"),
+            }
+            for task in due_tasks[: max(1, int(max_tasks))]
+        ],
+        "preview_tasks": [
+            {
+                "task_id": task.get("id"),
+                "name": task.get("name"),
+                "due_now": bool(task.get("due_now")),
+                "next_run_at": task.get("next_run_at"),
+                "notify_user": task.get("notify_user"),
+            }
+            for task in preview_tasks
+        ],
+    }
+    return (
+        "Scheduler tick snapshot:\n"
+        f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
+        "Decide whether scheduler state is idle, needs quiet follow-up, or merits a user-visible update."
+    )
+
+
+def _build_scheduled_octo_control_input(task: dict[str, Any]) -> str:
+    payload = {
+        "task_id": task.get("id"),
+        "name": task.get("name"),
+        "frequency": task.get("frequency"),
+        "execution_mode": task.get("execution_mode"),
+        "notify_user": task.get("notify_user"),
+        "description": task.get("description"),
+        "task_text": task.get("task_text"),
+        "inputs": task.get("inputs") if isinstance(task.get("inputs"), dict) else {},
+        "last_run_at": task.get("last_run_at"),
+    }
+    return (
+        "Run this scheduled Octo control task:\n"
+        f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
+        "Complete the task in a bounded way and return only the strict control-plane delivery result."
+    )
 
 
 def _ensure_mandatory_octo_tools(

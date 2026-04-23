@@ -1172,6 +1172,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
     whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
     exec_metrics = metrics.get("exec_run", {}) if isinstance(metrics, dict) else {}
     connectivity_metrics = metrics.get("connectivity", {}) if isinstance(metrics, dict) else {}
+    scheduler_metrics = metrics.get("scheduler", {}) if isinstance(metrics, dict) else {}
     launcher_status = get_worker_launcher_status(settings)
     active_channel = _resolve_active_channel(status_data, settings)
     active_channel_label = user_channel_label(active_channel)
@@ -1226,6 +1227,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         telegram_metrics=telegram_metrics,
         whatsapp_metrics=whatsapp_metrics,
         exec_metrics=exec_metrics,
+        scheduler_metrics=scheduler_metrics,
         mcp_servers=mcp_servers if isinstance(mcp_servers, dict) else {},
     )
     services = [s for s in services_all if _service_matches_filter(str(s.get("id", "all")), filters.service)]
@@ -1288,6 +1290,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
                 "available": launcher_status.available,
                 "reason": launcher_status.reason,
             },
+            "scheduler": dict(scheduler_metrics) if isinstance(scheduler_metrics, dict) else {},
         },
         "octo": {
             "state": octo_state,
@@ -1400,6 +1403,7 @@ def _build_service_health(
     telegram_metrics: dict[str, Any],
     whatsapp_metrics: dict[str, Any],
     exec_metrics: dict[str, Any],
+    scheduler_metrics: dict[str, Any],
     mcp_servers: dict[str, Any],
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
@@ -1537,6 +1541,64 @@ def _build_service_health(
             "reason": exec_reason,
             "updated_at": exec_metrics.get("updated_at"),
             "metrics": {"background_sessions_running": sessions_running},
+        }
+    )
+
+    scheduler_status = "ok"
+    scheduler_reason = "scheduler loop idle"
+    scheduler_updated_at = scheduler_metrics.get("updated_at")
+    scheduler_running = bool(scheduler_metrics.get("running"))
+    scheduler_tick_status = str(scheduler_metrics.get("last_tick_status", "") or "").lower()
+    scheduler_age = _age_seconds(str(scheduler_updated_at or ""), now)
+    scheduler_dispatch_errors = int(scheduler_metrics.get("last_dispatch_errors", 0) or 0)
+    scheduler_rejected = int(
+        scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0
+    )
+    scheduler_completed = int(scheduler_metrics.get("last_dispatch_completed", 0) or 0)
+    scheduler_started = int(scheduler_metrics.get("last_dispatch_started", 0) or 0)
+    if not scheduler_metrics:
+        scheduler_reason = "scheduler metrics unavailable"
+    elif not scheduler_running:
+        scheduler_status = "warning"
+        scheduler_reason = "scheduler loop is not running"
+    elif scheduler_tick_status == "failed":
+        scheduler_status = "critical"
+        scheduler_reason = "last scheduler tick failed"
+    elif scheduler_age is not None and scheduler_age > 180:
+        scheduler_status = "warning"
+        scheduler_reason = f"scheduler metrics stale for {int(scheduler_age)}s"
+    elif scheduler_dispatch_errors > 0:
+        scheduler_status = "warning"
+        scheduler_reason = f"{scheduler_dispatch_errors} scheduler dispatch error(s) on last tick"
+    elif scheduler_rejected > 0:
+        scheduler_status = "warning"
+        scheduler_reason = (
+            f"{scheduler_rejected} scheduled task(s) rejected by policy on last tick"
+        )
+    elif scheduler_completed > 0:
+        scheduler_reason = f"completed {scheduler_completed} scheduled Octo task(s) on last tick"
+    elif scheduler_started > 0:
+        scheduler_reason = f"started {scheduler_started} scheduled task(s) on last tick"
+    out.append(
+        {
+            "id": "scheduler",
+            "name": "Scheduler",
+            "status": scheduler_status,
+            "reason": scheduler_reason,
+            "updated_at": scheduler_updated_at,
+            "metrics": {
+                "running": scheduler_running,
+                "last_tick_status": scheduler_tick_status or None,
+                "last_due_count": int(scheduler_metrics.get("last_due_count", 0) or 0),
+                "last_dispatch_started": scheduler_started,
+                "last_dispatch_completed": scheduler_completed,
+                "last_dispatch_duplicates": int(
+                    scheduler_metrics.get("last_dispatch_duplicates", 0) or 0
+                ),
+                "last_dispatch_rejected_by_policy": scheduler_rejected,
+                "last_dispatch_errors": scheduler_dispatch_errors,
+                "last_policy_reasons": dict(scheduler_metrics.get("last_policy_reasons", {}) or {}),
+            },
         }
     )
 

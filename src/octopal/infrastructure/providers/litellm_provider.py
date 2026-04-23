@@ -517,18 +517,20 @@ class LiteLLMProvider:
         output: dict[str, Any] | None,
         metadata: dict[str, Any] | None,
     ) -> None:
-        if span_ctx is not None and self._trace_sink is not None:
-            finish_meta = dict(metadata or {})
-            if started_at_ms is not None:
-                finish_meta["duration_ms"] = round(now_ms() - started_at_ms, 2)
-            await self._trace_sink.finish_span(
-                span_ctx,
-                status=status,
-                output=output,
-                metadata=finish_meta,
-            )
-        if token is not None:
-            reset_trace_context(token)
+        try:
+            if span_ctx is not None and self._trace_sink is not None:
+                finish_meta = dict(metadata or {})
+                if started_at_ms is not None:
+                    finish_meta["duration_ms"] = round(now_ms() - started_at_ms, 2)
+                await self._trace_sink.finish_span(
+                    span_ctx,
+                    status=status,
+                    output=output,
+                    metadata=finish_meta,
+                )
+        finally:
+            if token is not None:
+                reset_trace_context(token)
 
     async def _complete_with_tools_adaptive_response_format(
         self,

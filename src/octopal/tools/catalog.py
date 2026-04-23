@@ -4,12 +4,12 @@ import asyncio
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import structlog
 
 from octopal.channels import normalize_user_channel, user_channel_label
 from octopal.infrastructure.config.settings import load_settings
-from octopal.tools.communication.send_file import send_file_to_user
 from octopal.runtime.memory.memchain import (
     memchain_init,
     memchain_record,
@@ -18,6 +18,10 @@ from octopal.runtime.memory.memchain import (
 )
 from octopal.runtime.metrics import read_metrics_snapshot
 from octopal.runtime.octo_status import build_octo_status
+from octopal.runtime.scheduler.service import (
+    normalize_execution_mode,
+    normalize_notify_user_policy,
+)
 from octopal.runtime.state import is_pid_running, read_status
 from octopal.tools.browser.actions import (
     browser_click,
@@ -33,10 +37,11 @@ from octopal.tools.browser.actions import (
     browser_wait_for,
     browser_workflow,
 )
+from octopal.tools.communication.send_file import send_file_to_user
 from octopal.tools.connectors.calendar import get_calendar_connector_tools
 from octopal.tools.connectors.drive import get_drive_connector_tools
-from octopal.tools.connectors.gmail import get_gmail_connector_tools
 from octopal.tools.connectors.github import get_github_connector_tools
+from octopal.tools.connectors.gmail import get_gmail_connector_tools
 from octopal.tools.connectors.status import get_connector_status_tools
 from octopal.tools.filesystem.download import download_file
 from octopal.tools.filesystem.files import fs_delete, fs_list, fs_move, fs_read, fs_write
@@ -234,7 +239,7 @@ def _tool_catalog_search(args, ctx) -> str:
                 "capabilities": list(getattr(metadata, "capabilities", ()) or ()),
                 "profile_tags": list(getattr(metadata, "profile_tags", ()) or ()),
                 "required_arguments": [str(item) for item in required if str(item).strip()],
-                "argument_names": sorted(str(key) for key in properties.keys()),
+                "argument_names": sorted(str(key) for key in properties),
                 "server_id": str(getattr(spec, "server_id", "") or "") or None,
                 "remote_name": str(getattr(spec, "remote_tool_name", "") or "") or None,
                 "is_mcp": str(getattr(metadata, "category", "") or "").strip().lower() == "mcp",
@@ -649,9 +654,14 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "properties": {
                     "name": {"type": "string", "description": "Human-readable name of the task."},
                     "frequency": {"type": "string", "description": "Frequency (e.g., 'Every 30 minutes', 'Daily at 14:00')."},
-                    "task": {"type": "string", "description": "The task description for the worker or Octo."},
+                    "task": {"type": "string", "description": "The task description for the scheduled action."},
                     "description": {"type": "string", "description": "Brief description of the task purpose."},
-                    "worker_id": {"type": "string", "description": "Optional: Specific worker template ID to use."},
+                    "execution_mode": {
+                        "type": "string",
+                        "enum": ["worker", "octo_control"],
+                        "description": "Execution mode for this scheduled task. Use worker for worker dispatch, or octo_control for future direct Octo control-plane tasks.",
+                    },
+                    "worker_id": {"type": "string", "description": "Specific worker template ID to use when execution_mode=worker."},
                     "inputs": {"type": "object", "description": "Optional: Inputs for the worker."},
                     "notify_user": {
                         "type": "string",
@@ -679,6 +689,32 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             },
             permission="self_control",
             handler=lambda args, ctx: (ctx["octo"].scheduler.remove_task(args["task_id"]), "Task removed.")[1],
+            is_async=True,
+        ),
+        ToolSpec(
+            name="repair_scheduled_tasks",
+            description="Preview or apply safe repairs for scheduled tasks with known route-compatibility suggestions.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "apply": {
+                        "type": "boolean",
+                        "description": "If true, apply repairs that are safe and unambiguous. Otherwise only preview candidates.",
+                    },
+                    "task_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional subset of scheduled task IDs to inspect or repair.",
+                    },
+                    "worker_id": {
+                        "type": "string",
+                        "description": "Optional worker template ID to use when repairing tasks suggested to move to worker mode.",
+                    },
+                },
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=_tool_repair_scheduled_tasks,
             is_async=True,
         ),
         ToolSpec(
@@ -1606,12 +1642,16 @@ async def _tool_check_schedule(args, ctx) -> str:
                 "task_id": t.get("id"),
                 "name": t.get("name"),
                 "frequency": t.get("frequency"),
+                "execution_mode": t.get("execution_mode"),
                 "worker_id": t.get("worker_id"),
                 "task_text": t.get("task_text"),
                 "description": t.get("description"),
                 "inputs": t.get("inputs") if isinstance(t.get("inputs"), dict) else {},
                 "last_run_at": t.get("last_run_at"),
                 "notify_user": t.get("notify_user"),
+                "dispatch_ready": bool(t.get("dispatch_ready")),
+                "dispatch_policy_reason": t.get("dispatch_policy_reason"),
+                "suggested_execution_mode": t.get("suggested_execution_mode"),
             }
             for t in due_tasks
         ],
@@ -1634,6 +1674,19 @@ async def _tool_scheduler_status(args, ctx) -> str:
         hints.append(f"{disabled_count} scheduled task(s) are disabled and will not run until re-enabled.")
     if any(task.get("overdue") for task in described):
         hints.append("At least one scheduled task looks overdue; inspect execution flow or worker failures.")
+    not_dispatch_ready = [task for task in described if not bool(task.get("dispatch_ready", True))]
+    if not_dispatch_ready:
+        hints.append(
+            f"{len(not_dispatch_ready)} scheduled task(s) are not dispatch-ready for the current worker loop."
+        )
+    suggested_migrations = [
+        task for task in not_dispatch_ready if str(task.get("suggested_execution_mode") or "").strip()
+    ]
+    if suggested_migrations:
+        hints.append(
+            f"{len(suggested_migrations)} scheduled task(s) have a suggested execution mode; "
+            "consider migrating incompatible tasks to that route."
+        )
     if not hints:
         hints.append("Scheduler looks healthy. Use next-run previews to plan follow-up work.")
 
@@ -1650,6 +1703,7 @@ async def _tool_scheduler_status(args, ctx) -> str:
                 "name": next_due.get("name"),
                 "next_run_at": next_due.get("next_run_at"),
                 "due_now": bool(next_due.get("due_now")),
+                "execution_mode": next_due.get("execution_mode"),
             }
             if next_due
             else None
@@ -1659,6 +1713,7 @@ async def _tool_scheduler_status(args, ctx) -> str:
                 "task_id": task.get("id"),
                 "name": task.get("name"),
                 "frequency": task.get("frequency"),
+                "execution_mode": task.get("execution_mode"),
                 "worker_id": task.get("worker_id"),
                 "enabled": bool(int(task.get("enabled", 1) or 0) == 1),
                 "due_now": bool(task.get("due_now")),
@@ -1667,11 +1722,24 @@ async def _tool_scheduler_status(args, ctx) -> str:
                 "last_run_at": task.get("last_run_at"),
                 "description": task.get("description"),
                 "notify_user": task.get("notify_user"),
+                "dispatch_ready": bool(task.get("dispatch_ready")),
+                "dispatch_policy_reason": task.get("dispatch_policy_reason"),
+                "suggested_execution_mode": task.get("suggested_execution_mode"),
             }
             for task in preview
         ],
         "hints": hints,
     }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _tool_repair_scheduled_tasks(args, ctx) -> str:
+    scheduler = ctx["octo"].scheduler
+    payload = scheduler.repair_suggested_tasks(
+        apply=bool((args or {}).get("apply", False)),
+        task_ids=list((args or {}).get("task_ids") or []),
+        worker_id=(args or {}).get("worker_id"),
+    )
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -1685,9 +1753,18 @@ def _tool_schedule_task(args, ctx) -> str:
             worker_id=args.get("worker_id"),
             inputs=args.get("inputs"),
             notify_user=args.get("notify_user"),
+            execution_mode=args.get("execution_mode"),
         )
     except ValueError as exc:
         return f"schedule_task error: {exc}"
+
+    execution_mode = normalize_execution_mode(
+        args.get("execution_mode"),
+        worker_id=args.get("worker_id"),
+    )
+    notify_user = normalize_notify_user_policy(args.get("notify_user"))
+    if execution_mode == "octo_control" and notify_user == "if_significant":
+        notify_user = "never"
 
     return json.dumps(
         {
@@ -1695,7 +1772,8 @@ def _tool_schedule_task(args, ctx) -> str:
             "task_id": task_id,
             "name": args["name"],
             "frequency": args["frequency"],
-            "notify_user": args.get("notify_user", "if_significant"),
+            "execution_mode": execution_mode,
+            "notify_user": notify_user,
         },
         ensure_ascii=False,
     )
@@ -1718,6 +1796,7 @@ def _tool_gateway_status(args, ctx) -> str:
     whatsapp_metrics = metrics.get("whatsapp", {}) if isinstance(metrics, dict) else {}
     exec_metrics = metrics.get("exec_run", {}) if isinstance(metrics, dict) else {}
     connectivity_metrics = metrics.get("connectivity", {}) if isinstance(metrics, dict) else {}
+    scheduler_metrics = metrics.get("scheduler", {}) if isinstance(metrics, dict) else {}
     active_channel_metrics = whatsapp_metrics if active_channel == "whatsapp" else telegram_metrics
 
     octo_status = build_octo_status(octo_metrics)
@@ -1747,6 +1826,12 @@ def _tool_gateway_status(args, ctx) -> str:
             "reason": _gateway_mcp_reason(connectivity_metrics),
             "updated_at": connectivity_metrics.get("updated_at"),
         },
+        {
+            "id": "scheduler",
+            "status": _gateway_scheduler_status(scheduler_metrics),
+            "reason": _gateway_scheduler_reason(scheduler_metrics),
+            "updated_at": scheduler_metrics.get("updated_at"),
+        },
     ]
     hints: list[str] = []
     if not running:
@@ -1759,6 +1844,12 @@ def _tool_gateway_status(args, ctx) -> str:
         hints.append("WhatsApp bridge is not connected; expect delivery issues until it reconnects.")
     if _mcp_connected_count(connectivity_metrics) == 0:
         hints.append("No MCP servers are currently connected; tool availability may be reduced.")
+    if int(scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0) > 0:
+        hints.append(
+            "Some scheduled tasks were rejected by policy; check worker_id/task_text coverage."
+        )
+    if str(scheduler_metrics.get("last_tick_status", "") or "").strip().lower() == "failed":
+        hints.append("Last scheduler tick failed; inspect scheduler control-plane traces before trusting automation.")
     if not hints:
         hints.append("Gateway control plane looks healthy.")
 
@@ -1808,6 +1899,25 @@ def _tool_gateway_status(args, ctx) -> str:
                 "sessions_running": int(exec_metrics.get("background_sessions_running", 0) or 0),
                 "sessions_total": int(exec_metrics.get("background_sessions_total", 0) or 0),
                 "updated_at": exec_metrics.get("updated_at"),
+            },
+            "scheduler": {
+                "running": bool(scheduler_metrics.get("running")),
+                "last_tick_status": scheduler_metrics.get("last_tick_status"),
+                "last_due_count": int(scheduler_metrics.get("last_due_count", 0) or 0),
+                "last_dispatch_started": int(scheduler_metrics.get("last_dispatch_started", 0) or 0),
+                "last_dispatch_completed": int(
+                    scheduler_metrics.get("last_dispatch_completed", 0) or 0
+                ),
+                "last_dispatch_duplicates": int(scheduler_metrics.get("last_dispatch_duplicates", 0) or 0),
+                "last_dispatch_rejected_by_policy": int(
+                    scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0
+                ),
+                "last_dispatch_errors": int(scheduler_metrics.get("last_dispatch_errors", 0) or 0),
+                "last_policy_reasons": dict(scheduler_metrics.get("last_policy_reasons", {}) or {}),
+                "ticks_total": int(scheduler_metrics.get("ticks_total", 0) or 0),
+                "completed_total": int(scheduler_metrics.get("completed_total", 0) or 0),
+                "failures_total": int(scheduler_metrics.get("failures_total", 0) or 0),
+                "updated_at": scheduler_metrics.get("updated_at"),
             },
             "mcp": {
                 "servers_total": _mcp_server_total(connectivity_metrics),
@@ -1919,6 +2029,44 @@ def _gateway_mcp_reason(connectivity_metrics: dict[str, object]) -> str:
     if total <= 0:
         return "no configured MCP servers reporting metrics"
     return f"{connected}/{total} server(s) connected"
+
+
+def _gateway_scheduler_status(scheduler_metrics: dict[str, object]) -> str:
+    if not isinstance(scheduler_metrics, dict) or not scheduler_metrics:
+        return "ok"
+    if not bool(scheduler_metrics.get("running")):
+        return "warning"
+    if str(scheduler_metrics.get("last_tick_status", "") or "").strip().lower() == "failed":
+        return "critical"
+    if int(scheduler_metrics.get("last_dispatch_errors", 0) or 0) > 0:
+        return "warning"
+    if int(scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0) > 0:
+        return "warning"
+    return "ok"
+
+
+def _gateway_scheduler_reason(scheduler_metrics: dict[str, object]) -> str:
+    if not isinstance(scheduler_metrics, dict) or not scheduler_metrics:
+        return "scheduler metrics unavailable"
+    if not bool(scheduler_metrics.get("running")):
+        return "scheduler loop is not running"
+    last_status = str(scheduler_metrics.get("last_tick_status", "") or "").strip().lower()
+    if last_status == "failed":
+        return "last scheduler tick failed"
+    dispatch_errors = int(scheduler_metrics.get("last_dispatch_errors", 0) or 0)
+    if dispatch_errors > 0:
+        return f"{dispatch_errors} dispatch error(s) on last tick"
+    rejected = int(scheduler_metrics.get("last_dispatch_rejected_by_policy", 0) or 0)
+    if rejected > 0:
+        return f"{rejected} scheduled task(s) rejected by policy on last tick"
+    completed = int(scheduler_metrics.get("last_dispatch_completed", 0) or 0)
+    if completed > 0:
+        return f"completed {completed} scheduled Octo task(s) on last tick"
+    started = int(scheduler_metrics.get("last_dispatch_started", 0) or 0)
+    if started > 0:
+        return f"started {started} scheduled task(s) on last tick"
+    due_count = int(scheduler_metrics.get("last_due_count", 0) or 0)
+    return f"idle ({due_count} due task(s) on last tick)"
 
 
 async def _tool_octo_memchain_status(args, ctx) -> str:

@@ -29,6 +29,27 @@ type LogItem = { timestamp?: string; level?: string; event?: string; service?: s
 type Connectivity = {
   mcp_servers?: Record<string, { status?: string; tool_count?: number; name?: string; reason?: string; transport?: string; reconnect_attempts?: number; error?: string | null }>;
 };
+type SchedulerMetrics = {
+  running?: boolean;
+  interval_seconds?: number;
+  max_tasks?: number;
+  last_tick_status?: string;
+  last_due_count?: number;
+  last_dispatch_started?: number;
+  last_dispatch_completed?: number;
+  last_dispatch_duplicates?: number;
+  last_dispatch_rejected_by_policy?: number;
+  last_dispatch_errors?: number;
+  last_policy_reasons?: Record<string, number>;
+  ticks_total?: number;
+  started_total?: number;
+  completed_total?: number;
+  duplicates_total?: number;
+  rejected_by_policy_total?: number;
+  errors_total?: number;
+  failures_total?: number;
+  updated_at?: string;
+};
 
 type FormState = {
   user_channel: string;
@@ -661,11 +682,30 @@ export function SystemPage() {
     return <section className="rounded-[30px] border border-rose-400/30 bg-rose-950/20 p-8 text-rose-100"><h2 className="text-2xl font-semibold text-white">System</h2><p className="mt-2 text-sm">Failed to load system diagnostics: {error}</p></section>;
   }
 
-  const system = (data?.system ?? {}) as { running?: boolean; pid?: number; uptime?: string; active_channel?: string; worker_launcher?: { configured?: string; effective?: string; available?: boolean; reason?: string } };
+  const system = (data?.system ?? {}) as {
+    running?: boolean;
+    pid?: number;
+    uptime?: string;
+    active_channel?: string;
+    worker_launcher?: { configured?: string; effective?: string; available?: boolean; reason?: string };
+    scheduler?: SchedulerMetrics;
+  };
   const services = ((data?.services ?? []) as ServiceItem[]).slice(0, 10);
   const logs = ((data?.logs ?? []) as LogItem[]).slice(0, 10);
   const connectivity = (data?.connectivity ?? {}) as Connectivity;
   const mcpServers = connectivity.mcp_servers ?? {};
+  const scheduler = (system.scheduler ?? {}) as SchedulerMetrics;
+  const schedulerAvailable = Object.keys(scheduler).length > 0;
+  const schedulerBadgeStatus = !schedulerAvailable
+    ? "ok"
+    : scheduler.running
+      ? (scheduler.last_tick_status === "failed" ? "critical" : "running")
+      : "warning";
+  const schedulerBadgeLabel = !schedulerAvailable
+    ? "not reporting"
+    : scheduler.running
+      ? (scheduler.last_tick_status ?? "running")
+      : "stopped";
   const launcher = configData?.worker_launcher ?? { configured: "n/a", effective: "n/a", available: false, reason: "No data", docker_image: "n/a" };
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((current) => (current ? { ...current, [key]: value } : current));
 
@@ -762,6 +802,27 @@ export function SystemPage() {
             <div className="rounded-2xl border border-white/6 bg-[var(--surface-panel-strong)] p-4"><div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Configured</div><div className="mt-2 text-lg font-semibold text-white">{launcher.configured}</div></div>
             <div className="rounded-2xl border border-white/6 bg-[var(--surface-panel-strong)] p-4"><div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Effective</div><div className="mt-2 text-lg font-semibold text-white">{launcher.effective}</div></div>
             <div className="rounded-2xl border border-white/6 bg-[var(--surface-panel-strong)] p-4"><div className="flex items-center justify-between gap-3"><div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Availability</div><span className={`rounded-full border px-2.5 py-1 text-[11px] uppercase tracking-wide ${statusTone(launcher.available ? "running" : "warning")}`}>{launcher.available ? "ready" : "needs attention"}</span></div><p className="mt-3 text-sm text-[var(--text-muted)]">{launcher.reason}</p></div>
+          </div>
+        </article>
+
+        <article className={panel}>
+          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-[var(--text-strong)]">Scheduler</h3>
+          <div className="mt-4 space-y-3">
+            <div className="rounded-2xl border border-white/6 bg-[var(--surface-panel-strong)] p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Loop status</div>
+                <span className={`rounded-full border px-2.5 py-1 text-[11px] uppercase tracking-wide ${statusTone(schedulerBadgeStatus)}`}>{schedulerBadgeLabel}</span>
+              </div>
+              <p className="mt-3 text-sm text-[var(--text-muted)]">
+                {schedulerAvailable
+                  ? `Interval ${scheduler.interval_seconds ?? "n/a"}s | Max tasks ${scheduler.max_tasks ?? "n/a"} | Updated ${scheduler.updated_at ? formatLocalDateTime(scheduler.updated_at) : "n/a"}`
+                  : "Scheduler metrics are not reporting yet."}
+              </p>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-white/6 bg-[var(--surface-panel-strong)] p-4"><div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Last tick</div><div className="mt-2 text-lg font-semibold text-white">{scheduler.last_due_count ?? 0} due</div><p className="mt-2 text-sm text-[var(--text-muted)]">started {scheduler.last_dispatch_started ?? 0} | done {scheduler.last_dispatch_completed ?? 0} | dup {scheduler.last_dispatch_duplicates ?? 0} | policy {scheduler.last_dispatch_rejected_by_policy ?? 0} | errors {scheduler.last_dispatch_errors ?? 0}</p><p className="mt-2 text-xs text-[var(--text-dim)]">{Object.entries(scheduler.last_policy_reasons ?? {}).length > 0 ? Object.entries(scheduler.last_policy_reasons ?? {}).map(([reason, count]) => `${reason}: ${count}`).join(" | ") : "No policy rejections on last tick."}</p></div>
+              <div className="rounded-2xl border border-white/6 bg-[var(--surface-panel-strong)] p-4"><div className="text-[11px] uppercase tracking-[0.18em] text-[var(--text-dim)]">Cumulative</div><div className="mt-2 text-lg font-semibold text-white">{scheduler.ticks_total ?? 0} ticks</div><p className="mt-2 text-sm text-[var(--text-muted)]">started {scheduler.started_total ?? 0} | done {scheduler.completed_total ?? 0} | dup {scheduler.duplicates_total ?? 0} | policy {scheduler.rejected_by_policy_total ?? 0} | failures {scheduler.failures_total ?? 0}</p></div>
+            </div>
           </div>
         </article>
       </div>

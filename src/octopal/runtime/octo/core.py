@@ -7,7 +7,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -47,6 +47,11 @@ from octopal.runtime.memory.memchain import memchain_record
 from octopal.runtime.memory.reflection import ReflectionService
 from octopal.runtime.memory.service import MemoryService
 from octopal.runtime.metrics import update_component_gauges
+from octopal.runtime.octo.control_plane import (
+    RouteMode,
+    RouteRequest,
+    resolve_turn_route_mode,
+)
 from octopal.runtime.octo.delivery import (
     DeliveryMode,
     _result_has_blocking_failure,
@@ -60,12 +65,23 @@ from octopal.runtime.octo.router import (
     _complete_text,
     build_forced_worker_followup,
     normalize_plain_text,
+    route_internal_maintenance,
+    route_heartbeat,
     route_or_reply,
+    route_scheduler_tick,
+    route_scheduled_octo_control,
     route_worker_results_back_to_octo,
     should_force_worker_followup,
 )
 from octopal.runtime.policy.engine import PolicyEngine
-from octopal.runtime.scheduler.service import SchedulerService, normalize_notify_user_policy
+from octopal.runtime.scheduler.service import (
+    SCHEDULED_TASK_BLOCKED_REASON_KEY,
+    SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY,
+    SCHEDULED_TASK_BLOCKED_UNTIL_KEY,
+    SchedulerService,
+    normalize_notify_user_policy,
+    parse_scheduled_task_blocked_until,
+)
 from octopal.runtime.workers.contracts import TaskRequest, WorkerResult
 from octopal.runtime.workers.runtime import WorkerRuntime
 from octopal.utils import (
@@ -279,6 +295,95 @@ async def _normalize_heartbeat_delivery_reply(provider: InferenceProvider | None
     return _coerce_control_plane_reply(rewritten)
 
 
+_SCHEDULED_OCTO_CONTROL_DONE = "SCHEDULED_TASK_DONE"
+_SCHEDULED_OCTO_CONTROL_BLOCKED = "SCHEDULED_TASK_BLOCKED"
+_SCHEDULED_OCTO_CONTROL_BLOCKED_MARKERS = (
+    "bounded `octo_control` route",
+    "bounded octo_control route",
+    "requires external network access",
+    "cannot be performed from the bounded",
+    "no workers may be launched",
+    "no direct weather tools available",
+    "requires a worker",
+)
+
+
+def _looks_like_scheduled_octo_control_route_block(text: str) -> bool:
+    value = normalize_plain_text(text or "").casefold()
+    if not value:
+        return False
+    return any(marker in value for marker in _SCHEDULED_OCTO_CONTROL_BLOCKED_MARKERS)
+
+
+def _coerce_scheduled_octo_control_reply(text: str) -> str:
+    value = normalize_plain_text(text or "")
+    explicit = extract_heartbeat_user_visible_message(value)
+    if explicit:
+        return explicit
+    normalized_upper = value.strip().upper()
+    if normalized_upper == _SCHEDULED_OCTO_CONTROL_DONE:
+        return _SCHEDULED_OCTO_CONTROL_DONE
+    if normalized_upper == _SCHEDULED_OCTO_CONTROL_BLOCKED:
+        return _SCHEDULED_OCTO_CONTROL_BLOCKED
+    if normalized_upper == "NO_USER_RESPONSE" or has_no_user_response_suffix(value):
+        return "NO_USER_RESPONSE"
+    return "NO_USER_RESPONSE"
+
+
+async def _normalize_scheduled_octo_control_reply(
+    provider: InferenceProvider | None,
+    text: str,
+) -> str:
+    value = normalize_plain_text(text or "")
+    explicit = extract_heartbeat_user_visible_message(value)
+    if explicit:
+        return explicit
+    normalized_upper = value.strip().upper()
+    if normalized_upper == _SCHEDULED_OCTO_CONTROL_DONE:
+        return _SCHEDULED_OCTO_CONTROL_DONE
+    if normalized_upper == _SCHEDULED_OCTO_CONTROL_BLOCKED:
+        return _SCHEDULED_OCTO_CONTROL_BLOCKED
+    if normalized_upper == "NO_USER_RESPONSE" or has_no_user_response_suffix(value):
+        return "NO_USER_RESPONSE"
+    if provider is None:
+        return _coerce_scheduled_octo_control_reply(value)
+
+    rewrite_prompt = (
+        "Rewrite the draft scheduled Octo control reply into the strict completion contract.\n"
+        "Return exactly one of:\n"
+        "- SCHEDULED_TASK_DONE\n"
+        "- SCHEDULED_TASK_BLOCKED\n"
+        "- NO_USER_RESPONSE\n"
+        "- <user_visible>...</user_visible>\n"
+        "Use SCHEDULED_TASK_DONE only if the task completed successfully with no user-visible update.\n"
+        "Use SCHEDULED_TASK_BLOCKED when the task cannot complete from the bounded route because it needs workers, external access, or unavailable tools.\n"
+        "Use <user_visible> only for a concise completed user-facing update.\n"
+        "Use NO_USER_RESPONSE if the task did not complete or there is no completion signal.\n"
+        "Do not include any extra text outside the token or wrapper."
+    )
+    try:
+        rewritten = await _complete_text(
+            provider,
+            [
+                Message(role="system", content=rewrite_prompt),
+                Message(role="user", content=f"<draft>\n{value}\n</draft>"),
+            ],
+            context="scheduled_octo_control_delivery_rewrite",
+        )
+    except Exception:
+        logger.debug("Scheduled Octo control delivery rewrite failed", exc_info=True)
+        return _coerce_scheduled_octo_control_reply(value)
+
+    return _coerce_scheduled_octo_control_reply(rewritten)
+
+
+def _normalize_scheduled_octo_control_notify_policy(notify_user: str | None) -> str:
+    policy = normalize_notify_user_policy(notify_user)
+    if policy == "if_significant":
+        return "never"
+    return policy
+
+
 def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
     raw = os.getenv(name)
     if raw is None:
@@ -325,6 +430,13 @@ _RECENT_WORKER_TASK_TTL_SECONDS = float(
         "OCTOPAL_RECENT_WORKER_TASK_TTL_SECONDS",
         1800,
         minimum=60,
+    )
+)
+_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS = float(
+    _env_int(
+        "OCTOPAL_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS",
+        1800,
+        minimum=0,
     )
 )
 
@@ -497,6 +609,18 @@ def _publish_runtime_metrics(thinking_count: int = 0) -> None:
             "thinking_count": thinking_count,
         },
     )
+
+
+def _empty_scheduler_metric_counters() -> dict[str, int]:
+    return {
+        "ticks_total": 0,
+        "failures_total": 0,
+        "started_total": 0,
+        "completed_total": 0,
+        "duplicates_total": 0,
+        "rejected_by_policy_total": 0,
+        "errors_total": 0,
+    }
 
 
 async def _followup_worker(chat_id: int, queue: asyncio.Queue) -> None:
@@ -761,6 +885,98 @@ async def _send_worker_followup(
             chat_id=chat_id,
             text_len=len(text),
             batched_count=batched_count,
+        )
+    except Exception as exc:
+        trace_status = "error"
+        trace_metadata.update(summarize_exception(exc))
+        trace_output = {"status": "failed"}
+        raise
+    finally:
+        trace_metadata["duration_ms"] = round(now_ms() - trace_started_at_ms, 2)
+        await _finish_background_trace_context(
+            octo.trace_sink,
+            trace_ctx,
+            trace_token,
+            is_root_trace=is_root_trace,
+            status=trace_status,
+            output=trace_output,
+            metadata=trace_metadata,
+        )
+
+
+async def _send_scheduler_control_update(
+    octo: Octo,
+    chat_id: int,
+    task_id: str | None,
+    text: str,
+) -> None:
+    trace_started_at_ms = now_ms()
+    trace_metadata: dict[str, Any] = {
+        "delivery_channel": "internal",
+        "delivery_source": "scheduler_octo_control",
+        "scheduled_task_id": task_id,
+        "text_preview": safe_preview(text, limit=240),
+        "text_len": len(text or ""),
+    }
+    trace_ctx, trace_token, is_root_trace = await _start_background_trace_context(
+        octo.trace_sink,
+        name="channel.delivery",
+        chat_id=chat_id,
+        correlation_id=None,
+        metadata=trace_metadata,
+    )
+    trace_status = "ok"
+    trace_output: dict[str, Any] | None = None
+    try:
+        decision = resolve_user_delivery(text)
+        trace_metadata.update(
+            {
+                "delivery_mode": decision.mode,
+                "user_visible": decision.user_visible,
+                "suppressed_reason": decision.reason,
+            }
+        )
+        if not decision.user_visible:
+            trace_output = {"status": "suppressed", "reason": decision.reason}
+            logger.info(
+                "Scheduled Octo control update skipped",
+                chat_id=chat_id,
+                task_id=task_id,
+                reason=decision.reason,
+            )
+            return
+        if octo.internal_send:
+            await octo.internal_send(chat_id, decision.text)
+            octo.note_user_visible_delivery(chat_id, decision.text)
+            trace_output = {
+                "status": "sent",
+                "message_len": len(decision.text),
+            }
+            logger.info(
+                "Scheduled Octo control update sent",
+                chat_id=chat_id,
+                task_id=task_id,
+                text_len=len(decision.text),
+            )
+            await octo.memory.add_message(
+                "assistant",
+                decision.text,
+                {
+                    "chat_id": chat_id,
+                    "background_delivery": True,
+                    "scheduler_octo_control": True,
+                    "scheduled_task_id": task_id,
+                },
+            )
+            return
+        trace_status = "error"
+        trace_metadata["error_type"] = "no_sender_attached"
+        trace_output = {"status": "dropped", "reason": "no_sender_attached"}
+        logger.info(
+            "Scheduled Octo control update produced but no sender attached",
+            chat_id=chat_id,
+            task_id=task_id,
+            text_len=len(text),
         )
     except Exception as exc:
         trace_status = "error"
@@ -1160,6 +1376,11 @@ class Octo:
     internal_typing_control: callable | None = None
     _cleanup_task: asyncio.Task | None = None
     _metrics_task: asyncio.Task | None = None
+    _scheduler_task: asyncio.Task | None = None
+    _scheduler_metric_counters: dict[str, int] | None = None
+    _scheduler_interval_seconds: int | None = None
+    _scheduler_max_tasks: int | None = None
+    _scheduled_octo_control_backoff_by_task: dict[str, tuple[float, str]] | None = None
     _recent_tasks: dict[tuple[int, str, str], float] = (
         None  # Track in-flight worker launches per chat/correlation scope
     )
@@ -1202,6 +1423,8 @@ class Octo:
     def __post_init__(self):
         if self.trace_sink is None:
             self.trace_sink = NoopTraceSink()
+        if self._scheduled_octo_control_backoff_by_task is None:
+            self._scheduled_octo_control_backoff_by_task = {}
         if self._recent_tasks is None:
             self._recent_tasks = {}
         if self._approval_requesters is None:
@@ -1278,6 +1501,12 @@ class Octo:
                     "OCTOPAL_CANON_EVENTS_KEEP_ARCHIVES", 7, minimum=1
                 ),
             }
+        if self._scheduler_metric_counters is None:
+            self._scheduler_metric_counters = _empty_scheduler_metric_counters()
+        if self._scheduler_interval_seconds is None:
+            self._scheduler_interval_seconds = None
+        if self._scheduler_max_tasks is None:
+            self._scheduler_max_tasks = None
         self._restore_worker_registry_state()
         self._thinking_count = 0
         self._tg_send = self.internal_send
@@ -1482,6 +1711,500 @@ class Octo:
             except Exception:
                 logger.debug("Failed to publish periodic metrics", exc_info=True)
 
+    def _publish_scheduler_metrics(
+        self,
+        *,
+        running: bool,
+        interval_seconds: int | None = None,
+        max_tasks: int | None = None,
+        last_tick_status: str | None = None,
+        due_count: int | None = None,
+        result_preview: str | None = None,
+        dispatch_summary: dict[str, int] | None = None,
+    ) -> None:
+        counters = self._scheduler_metric_counters or _empty_scheduler_metric_counters()
+        payload: dict[str, Any] = {
+            "running": bool(running),
+            "configured": self.scheduler is not None,
+            **counters,
+        }
+        resolved_interval = interval_seconds
+        if resolved_interval is None:
+            resolved_interval = self._scheduler_interval_seconds
+        resolved_max_tasks = max_tasks
+        if resolved_max_tasks is None:
+            resolved_max_tasks = self._scheduler_max_tasks
+        if resolved_interval is not None:
+            payload["interval_seconds"] = int(resolved_interval)
+        if resolved_max_tasks is not None:
+            payload["max_tasks"] = int(resolved_max_tasks)
+        if last_tick_status is not None:
+            payload["last_tick_status"] = str(last_tick_status)
+        if due_count is not None:
+            payload["last_due_count"] = int(due_count)
+        if result_preview is not None:
+            payload["last_result_preview"] = str(result_preview)
+        if dispatch_summary is not None:
+            payload["last_dispatch_attempted"] = int(dispatch_summary.get("attempted") or 0)
+            payload["last_dispatch_started"] = int(dispatch_summary.get("started") or 0)
+            payload["last_dispatch_completed"] = int(dispatch_summary.get("completed") or 0)
+            payload["last_dispatch_duplicates"] = int(dispatch_summary.get("duplicates") or 0)
+            payload["last_dispatch_rejected_by_policy"] = int(
+                dispatch_summary.get("rejected_by_policy") or 0
+            )
+            payload["last_dispatch_errors"] = int(dispatch_summary.get("errors") or 0)
+            payload["last_policy_reasons"] = dict(
+                dispatch_summary.get("policy_reasons") or {}
+            )
+        update_component_gauges("scheduler", payload)
+
+    async def _run_scheduler_tick_once(self, *, chat_id: int = 0, max_tasks: int = 10) -> None:
+        if self.scheduler is None:
+            return
+        trace_started_at_ms = now_ms()
+        trace_metadata: dict[str, Any] = {
+            "route_mode": RouteMode.SCHEDULER.value,
+            "chat_id": chat_id,
+            "dry_run": False,
+            "max_tasks": max_tasks,
+        }
+        trace_ctx, trace_token, is_root_trace = await _start_background_trace_context(
+            self.trace_sink,
+            name="octo.scheduler_tick",
+            chat_id=chat_id,
+            correlation_id=None,
+            metadata=trace_metadata,
+        )
+        trace_status = "ok"
+        trace_output: dict[str, Any] | None = None
+        try:
+            result = await route_scheduler_tick(self, chat_id=chat_id, max_tasks=max_tasks)
+            normalized = normalize_plain_text(result)
+            normalized_upper = normalized.strip().upper()
+            dispatch_summary = await self._dispatch_due_scheduled_tasks_once(
+                chat_id=chat_id,
+                max_tasks=max_tasks,
+            )
+            due_count = int(dispatch_summary.get("due_count") or 0)
+            trace_metadata.update(
+                {
+                    "due_count": due_count,
+                    "result_preview": safe_preview(normalized, limit=240),
+                    "result_len": len(normalized or ""),
+                    "dispatch_started": int(dispatch_summary.get("started") or 0),
+                    "dispatch_completed": int(dispatch_summary.get("completed") or 0),
+                    "dispatch_duplicates": int(dispatch_summary.get("duplicates") or 0),
+                    "dispatch_rejected_by_policy": int(
+                        dispatch_summary.get("rejected_by_policy") or 0
+                    ),
+                    "dispatch_policy_reasons": dict(
+                        dispatch_summary.get("policy_reasons") or {}
+                    ),
+                    "dispatch_errors": int(dispatch_summary.get("errors") or 0),
+                }
+            )
+            counters = self._scheduler_metric_counters or _empty_scheduler_metric_counters()
+            counters["ticks_total"] = int(counters.get("ticks_total", 0) or 0) + 1
+            counters["started_total"] = int(counters.get("started_total", 0) or 0) + int(
+                dispatch_summary.get("started") or 0
+            )
+            counters["completed_total"] = int(counters.get("completed_total", 0) or 0) + int(
+                dispatch_summary.get("completed") or 0
+            )
+            counters["duplicates_total"] = int(
+                counters.get("duplicates_total", 0) or 0
+            ) + int(dispatch_summary.get("duplicates") or 0)
+            counters["rejected_by_policy_total"] = int(
+                counters.get("rejected_by_policy_total", 0) or 0
+            ) + int(dispatch_summary.get("rejected_by_policy") or 0)
+            counters["errors_total"] = int(counters.get("errors_total", 0) or 0) + int(
+                dispatch_summary.get("errors") or 0
+            )
+            self._scheduler_metric_counters = counters
+            if normalized_upper in {"", "SCHEDULER_IDLE", "NO_USER_RESPONSE"}:
+                self._publish_scheduler_metrics(
+                    running=True,
+                    last_tick_status="idle",
+                    due_count=due_count,
+                    result_preview=safe_preview(normalized, limit=160),
+                    dispatch_summary=dispatch_summary,
+                )
+                trace_output = {
+                    "status": "idle",
+                    "due_count": due_count,
+                    "dispatch": dispatch_summary,
+                }
+                logger.debug(
+                    "Scheduler tick complete",
+                    due_count=due_count,
+                    dispatch=dispatch_summary,
+                    result=normalized_upper or "EMPTY",
+                )
+                return
+
+            self._publish_scheduler_metrics(
+                running=True,
+                last_tick_status="decision_ready",
+                due_count=due_count,
+                result_preview=safe_preview(normalized, limit=160),
+                dispatch_summary=dispatch_summary,
+            )
+            trace_output = {
+                "status": "decision_ready",
+                "due_count": due_count,
+                "result_preview": safe_preview(normalized, limit=160),
+                "dispatch": dispatch_summary,
+            }
+            logger.info(
+                "Scheduler tick produced decision",
+                due_count=due_count,
+                dispatch=dispatch_summary,
+                result_preview=safe_preview(normalized, limit=160),
+            )
+        except Exception as exc:
+            counters = self._scheduler_metric_counters or _empty_scheduler_metric_counters()
+            counters["ticks_total"] = int(counters.get("ticks_total", 0) or 0) + 1
+            counters["failures_total"] = int(counters.get("failures_total", 0) or 0) + 1
+            self._scheduler_metric_counters = counters
+            self._publish_scheduler_metrics(
+                running=True,
+                last_tick_status="failed",
+                result_preview=safe_preview(str(exc), limit=160),
+            )
+            trace_status = "error"
+            trace_metadata.update(summarize_exception(exc))
+            trace_output = {"status": "failed"}
+            logger.exception("Scheduler tick failed")
+        finally:
+            trace_metadata["duration_ms"] = round(now_ms() - trace_started_at_ms, 2)
+            await _finish_background_trace_context(
+                self.trace_sink,
+                trace_ctx,
+                trace_token,
+                is_root_trace=is_root_trace,
+                status=trace_status,
+                output=trace_output,
+                metadata=trace_metadata,
+            )
+
+    async def _periodic_scheduler_tick(self, interval_seconds: int, *, max_tasks: int = 10) -> None:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            await self._run_scheduler_tick_once(chat_id=0, max_tasks=max_tasks)
+
+    def _get_scheduled_octo_control_backoff(self, task_id: str) -> tuple[float, str] | None:
+        task_id_value = str(task_id or "").strip()
+        if not task_id_value:
+            return None
+        backoff_map = self._scheduled_octo_control_backoff_by_task
+        if not isinstance(backoff_map, dict):
+            return None
+        entry = backoff_map.get(task_id_value)
+        if not entry:
+            return None
+        deadline, reason = entry
+        remaining = float(deadline) - time.monotonic()
+        if remaining <= 0:
+            backoff_map.pop(task_id_value, None)
+            return None
+        return remaining, str(reason or "").strip() or "runtime_backoff"
+
+    def _set_scheduled_octo_control_backoff(self, task_id: str, *, reason: str) -> None:
+        task_id_value = str(task_id or "").strip()
+        if not task_id_value or _SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS <= 0:
+            return
+        backoff_map = self._scheduled_octo_control_backoff_by_task
+        if backoff_map is None:
+            backoff_map = {}
+            self._scheduled_octo_control_backoff_by_task = backoff_map
+        backoff_map[task_id_value] = (
+            time.monotonic() + _SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS,
+            str(reason or "").strip() or "runtime_backoff",
+        )
+
+    def _get_persisted_scheduled_octo_control_backoff(
+        self,
+        task: dict[str, Any],
+    ) -> tuple[float, str] | None:
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        if not isinstance(metadata, dict):
+            return None
+        blocked_until = parse_scheduled_task_blocked_until(metadata)
+        if blocked_until is None:
+            return None
+        remaining = (blocked_until - utc_now()).total_seconds()
+        if remaining <= 0:
+            self._update_scheduled_octo_control_backoff_metadata(
+                task,
+                blocked_until=None,
+                reason=None,
+            )
+            return None
+        reason = str(metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY) or "").strip() or "blocked_by_route"
+        return remaining, reason
+
+    def _update_scheduled_octo_control_backoff_metadata(
+        self,
+        task: dict[str, Any],
+        *,
+        blocked_until: datetime | None,
+        reason: str | None,
+    ) -> None:
+        scheduler = self.scheduler
+        store = getattr(scheduler, "store", None)
+        update_metadata = getattr(store, "update_scheduled_task_metadata", None)
+        if scheduler is None or not callable(update_metadata):
+            return
+        task_id = str(task.get("id") or "").strip()
+        if not task_id:
+            return
+        metadata = dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
+        if blocked_until is None:
+            metadata.pop(SCHEDULED_TASK_BLOCKED_UNTIL_KEY, None)
+        else:
+            metadata[SCHEDULED_TASK_BLOCKED_UNTIL_KEY] = blocked_until.isoformat()
+        reason_value = str(reason or "").strip()
+        if reason_value:
+            metadata[SCHEDULED_TASK_BLOCKED_REASON_KEY] = reason_value
+        else:
+            metadata.pop(SCHEDULED_TASK_BLOCKED_REASON_KEY, None)
+        if reason_value == "blocked_by_route":
+            metadata[SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY] = "worker"
+        elif blocked_until is None:
+            metadata.pop(SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY, None)
+        try:
+            update_metadata(task_id, metadata or None)
+        except Exception:
+            logger.exception(
+                "Failed to persist scheduled Octo control backoff metadata",
+                task_id=task_id or None,
+            )
+            return
+        task["metadata"] = metadata
+        task["blocked_until"] = metadata.get(SCHEDULED_TASK_BLOCKED_UNTIL_KEY)
+        task["blocked_reason"] = metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY)
+        task["suggested_execution_mode"] = metadata.get(SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY)
+
+    async def _dispatch_due_scheduled_tasks_once(
+        self,
+        *,
+        chat_id: int = 0,
+        max_tasks: int = 10,
+    ) -> dict[str, Any]:
+        scheduler = self.scheduler
+        summary: dict[str, Any] = {
+            "due_count": 0,
+            "attempted": 0,
+            "started": 0,
+            "completed": 0,
+            "duplicates": 0,
+            "rejected_by_policy": 0,
+            "policy_reasons": {},
+            "errors": 0,
+        }
+        if scheduler is None:
+            return summary
+
+        due_tasks = list(scheduler.get_actionable_tasks() or [])
+        summary["due_count"] = len(due_tasks)
+        for task in due_tasks[: max(1, int(max_tasks))]:
+            task_id = str(task.get("id") or "").strip()
+            execution_mode = str(task.get("execution_mode") or "").strip().lower()
+            worker_id = str(task.get("worker_id") or "").strip()
+            task_text = str(task.get("task_text") or "").strip()
+            inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
+            if execution_mode == "octo_control":
+                persisted_backoff = self._get_persisted_scheduled_octo_control_backoff(task)
+                if persisted_backoff is not None:
+                    remaining_seconds, backoff_reason = persisted_backoff
+                    logger.info(
+                        "Skipping scheduled Octo control task during persisted backoff",
+                        task_id=task_id or None,
+                        chat_id=chat_id,
+                        backoff_reason=backoff_reason,
+                        cooldown_seconds=round(remaining_seconds, 1),
+                    )
+                    continue
+                backoff = self._get_scheduled_octo_control_backoff(task_id)
+                if backoff is not None:
+                    remaining_seconds, backoff_reason = backoff
+                    logger.info(
+                        "Skipping scheduled Octo control task during runtime backoff",
+                        task_id=task_id or None,
+                        chat_id=chat_id,
+                        backoff_reason=backoff_reason,
+                        cooldown_seconds=round(remaining_seconds, 1),
+                    )
+                    continue
+                summary["attempted"] += 1
+                try:
+                    result = await self._run_scheduled_octo_control_task_once(
+                        task=task,
+                        chat_id=chat_id,
+                    )
+                except Exception:
+                    summary["errors"] += 1
+                    logger.exception(
+                        "Scheduled Octo control task failed",
+                        task_id=task_id or None,
+                    )
+                    continue
+                if bool(result.get("completed")):
+                    summary["completed"] += 1
+                elif str(result.get("status") or "").strip().lower() == "failed":
+                    summary["errors"] += 1
+                continue
+            if not worker_id or not task_text:
+                summary["rejected_by_policy"] += 1
+                reason = "missing_worker_id" if not worker_id else "missing_task_text"
+                policy_reasons = summary.setdefault("policy_reasons", {})
+                if isinstance(policy_reasons, dict):
+                    policy_reasons[reason] = int(policy_reasons.get(reason, 0) or 0) + 1
+                logger.warning(
+                    "Rejected scheduled task by dispatch policy",
+                    task_id=task_id or None,
+                    policy_reason=reason,
+                    worker_id=worker_id or None,
+                    has_task_text=bool(task_text),
+                )
+                continue
+
+            summary["attempted"] += 1
+            try:
+                result = await self._start_worker_async(
+                    worker_id=worker_id,
+                    task=task_text,
+                    chat_id=chat_id,
+                    inputs=inputs,
+                    tools=None,
+                    model=None,
+                    timeout_seconds=None,
+                    scheduled_task_id=task_id or None,
+                )
+            except Exception:
+                summary["errors"] += 1
+                logger.exception(
+                    "Scheduled task dispatch failed",
+                    task_id=task_id or None,
+                    worker_id=worker_id,
+                )
+                continue
+
+            status = str(result.get("status") or "").strip().lower()
+            if status == "started":
+                summary["started"] += 1
+            elif status == "skipped_duplicate":
+                summary["duplicates"] += 1
+            elif status in {"rejected", "failed"}:
+                summary["errors"] += 1
+
+        return summary
+
+    async def _run_scheduled_octo_control_task_once(
+        self,
+        *,
+        task: dict[str, Any],
+        chat_id: int = 0,
+    ) -> dict[str, Any]:
+        scheduler = self.scheduler
+        task_id = str(task.get("id") or "").strip()
+        notify_user = _normalize_scheduled_octo_control_notify_policy(task.get("notify_user"))
+        reply_text = await route_scheduled_octo_control(
+            self,
+            task,
+            chat_id=chat_id,
+        )
+        normalized_reply = await _normalize_scheduled_octo_control_reply(self.provider, reply_text)
+        route_blocked = normalized_reply == _SCHEDULED_OCTO_CONTROL_BLOCKED or (
+            normalized_reply == "NO_USER_RESPONSE"
+            and _looks_like_scheduled_octo_control_route_block(reply_text)
+        )
+        if route_blocked:
+            self._set_scheduled_octo_control_backoff(task_id, reason="blocked_by_route")
+            self._update_scheduled_octo_control_backoff_metadata(
+                task,
+                blocked_until=utc_now() + timedelta(seconds=_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS),
+                reason="blocked_by_route",
+            )
+            logger.warning(
+                "Scheduled Octo control task blocked by bounded route",
+                task_id=task_id or None,
+                chat_id=chat_id,
+                raw_reply_preview=safe_preview(reply_text, limit=200),
+                cooldown_seconds=_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS,
+            )
+            return {
+                "status": "failed",
+                "completed": False,
+                "reason": "blocked_by_route",
+                "cooldown_seconds": _SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS,
+            }
+        if normalized_reply == "NO_USER_RESPONSE":
+            logger.warning(
+                "Scheduled Octo control task missing explicit completion signal",
+                task_id=task_id or None,
+                chat_id=chat_id,
+                raw_reply_preview=safe_preview(reply_text, limit=200),
+            )
+            return {
+                "status": "failed",
+                "completed": False,
+                "reason": "missing_completion_signal",
+            }
+        if normalized_reply == _SCHEDULED_OCTO_CONTROL_DONE:
+            self._update_scheduled_octo_control_backoff_metadata(
+                task,
+                blocked_until=None,
+                reason=None,
+            )
+            if scheduler is not None and task_id:
+                scheduler.mark_executed(task_id)
+            logger.info(
+                "Scheduled Octo control task completed silently",
+                task_id=task_id or None,
+                notify_user=notify_user,
+                chat_id=chat_id,
+            )
+            return {
+                "status": "completed",
+                "completed": True,
+                "user_visible_sent": False,
+                "delivery_mode": DeliveryMode.SILENT,
+            }
+        delivery = resolve_user_delivery(normalized_reply)
+        user_visible_sent = False
+        if delivery.user_visible and notify_user != "never":
+            await _send_scheduler_control_update(
+                self,
+                chat_id,
+                task_id or None,
+                delivery.text,
+            )
+            user_visible_sent = True
+        elif delivery.user_visible:
+            logger.info(
+                "Scheduled Octo control update suppressed by notify policy",
+                task_id=task_id or None,
+                notify_user=notify_user,
+                chat_id=chat_id,
+            )
+        if scheduler is not None and task_id:
+            scheduler.mark_executed(task_id)
+        logger.info(
+            "Scheduled Octo control task completed",
+            task_id=task_id or None,
+            notify_user=notify_user,
+            chat_id=chat_id,
+            user_visible_sent=user_visible_sent,
+            delivery_mode=delivery.mode,
+        )
+        return {
+            "status": "completed",
+            "completed": True,
+            "user_visible_sent": user_visible_sent,
+            "delivery_mode": delivery.mode,
+        }
+
     def _reconcile_stale_worker_records(self) -> None:
         """Normalize stale DB worker states that no longer exist in runtime."""
         runtime = self.runtime
@@ -1603,7 +2326,12 @@ class Octo:
             reconciled += 1
         return reconciled
 
-    def start_background_tasks(self, cleanup_interval_seconds: int = 3600):
+    def start_background_tasks(
+        self,
+        cleanup_interval_seconds: int = 3600,
+        *,
+        scheduler_interval_seconds: int | None = None,
+    ):
         if self._cleanup_task is None or self._cleanup_task.done():
             self._cleanup_task = asyncio.create_task(
                 self._periodic_cleanup(cleanup_interval_seconds)
@@ -1612,6 +2340,27 @@ class Octo:
         if self._metrics_task is None or self._metrics_task.done():
             self._metrics_task = asyncio.create_task(self._periodic_metrics_publish(10))
             logger.info("Started periodic metrics publishing task")
+        if self.scheduler and (self._scheduler_task is None or self._scheduler_task.done()):
+            resolved_interval = scheduler_interval_seconds or _env_int(
+                "OCTOPAL_SCHEDULER_TICK_INTERVAL_SECONDS", 60, minimum=5
+            )
+            max_tasks = _env_int("OCTOPAL_SCHEDULER_TICK_MAX_TASKS", 10, minimum=1)
+            self._scheduler_interval_seconds = int(resolved_interval)
+            self._scheduler_max_tasks = int(max_tasks)
+            self._publish_scheduler_metrics(
+                running=True,
+                interval_seconds=resolved_interval,
+                max_tasks=max_tasks,
+                last_tick_status="starting",
+            )
+            self._scheduler_task = asyncio.create_task(
+                self._periodic_scheduler_tick(resolved_interval, max_tasks=max_tasks)
+            )
+            logger.info(
+                "Started periodic scheduler tick task",
+                interval_seconds=resolved_interval,
+                max_tasks=max_tasks,
+            )
 
     async def stop_background_tasks(self):
         if self._cleanup_task and not self._cleanup_task.done():
@@ -1627,6 +2376,14 @@ class Octo:
                 await self._metrics_task
             except asyncio.CancelledError:
                 logger.info("Stopped periodic metrics publishing task")
+        if self._scheduler_task and not self._scheduler_task.done():
+            self._scheduler_task.cancel()
+            try:
+                await self._scheduler_task
+            except asyncio.CancelledError:
+                logger.info("Stopped periodic scheduler tick task")
+        if self.scheduler is not None:
+            self._publish_scheduler_metrics(running=False, last_tick_status="stopped")
 
         # Shutdown MCP sessions
         if self.mcp_manager:
@@ -1649,8 +2406,8 @@ class Octo:
             await self.connector_manager.load_and_start_all()
 
         wake_up_prompt = (
-            "You are waking up. Read AGENTS.md and inspect available workers internally. "
-            "Use tools if needed, but never output a tool name or tool syntax as your final answer. "
+            "You are waking up. Inspect runtime health and available workers internally. "
+            "Use only bounded control-plane tools if needed, but never output a tool name or tool syntax as your final answer. "
             "Then produce a short friendly startup status message for the user in plain language."
         )
         original_send = self.internal_send
@@ -1678,14 +2435,10 @@ class Octo:
             )
             self.internal_send = None
         try:
-            bootstrap_context = await build_bootstrap_context_prompt(self.store, system_chat_id)
-            result = await route_or_reply(
+            result = await route_internal_maintenance(
                 self,
-                self.provider,
-                self.memory,
-                wake_up_prompt,
                 system_chat_id,
-                bootstrap_context.content,
+                wake_up_prompt,
             )
             if should_suppress_user_delivery(result):
                 result = "Octo is online. Initialization is complete and I am ready for your tasks."
@@ -2505,6 +3258,19 @@ class Octo:
         }
         wants_followup = False
         finalized_visible_reply = False
+        route_request = RouteRequest(
+            mode=resolve_turn_route_mode(
+                track_progress=track_progress,
+                background_delivery=background_delivery,
+            ),
+            user_text=text,
+            chat_id=chat_id,
+            show_typing=show_typing,
+            include_wakeup=include_wakeup,
+            track_progress=track_progress,
+            background_delivery=background_delivery,
+        )
+        trace_metadata["route_mode"] = route_request.mode.value
         if not correlation_id:
             correlation_id = f"turn-{uuid4()}"
             correlation_token = correlation_id_var.set(correlation_id)
@@ -2528,7 +3294,13 @@ class Octo:
             self.mark_user_turn_active(correlation_id)
             if callable(approval_requester):
                 self._approval_requesters[chat_id] = approval_requester
-            logger.info("Handling message", chat_id=chat_id, is_ws=is_ws, has_images=bool(images))
+            logger.info(
+                "Handling message",
+                chat_id=chat_id,
+                is_ws=is_ws,
+                has_images=bool(images),
+                route_mode=route_request.mode.value,
+            )
             logger.debug("Received message text", text_len=len(text), text=text[:500])
             if not track_progress:
                 self.suppress_turn_followups(correlation_id)
@@ -2542,49 +3314,62 @@ class Octo:
                         "heartbeat": not track_progress,
                     },
                 )
-            bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
-            if bootstrap_context.files:
-                files_summary = ", ".join(
-                    [f"{name} ({size} chars)" for name, size in bootstrap_context.files]
+            bootstrap_context = None
+            if route_request.mode is RouteMode.HEARTBEAT:
+                reply_text = await route_heartbeat(
+                    self,
+                    chat_id,
+                    text,
+                    show_typing=show_typing,
+                    include_wakeup=include_wakeup,
                 )
-                logger.debug(
-                    "Octo bootstrap files",
-                    files=files_summary,
-                    file_count=len(bootstrap_context.files),
-                    total_chars=len(bootstrap_context.content),
-                    hash=bootstrap_context.hash,
-                )
-            route_kwargs: dict[str, Any] = {
-                "show_typing": show_typing,
-                "images": images,
-                "saved_file_paths": saved_file_paths,
-                "include_wakeup": include_wakeup,
-            }
-            while True:
-                try:
-                    reply_text = await route_or_reply(
-                        self,
-                        self.provider,
-                        self.memory,
-                        text,
-                        chat_id,
-                        bootstrap_context.content,
-                        **route_kwargs,
+            else:
+                bootstrap_context = await build_bootstrap_context_prompt(self.store, chat_id)
+                trace_metadata["bootstrap_chars"] = len(bootstrap_context.content)
+                if bootstrap_context.files:
+                    files_summary = ", ".join(
+                        [f"{name} ({size} chars)" for name, size in bootstrap_context.files]
                     )
-                    break
-                except TypeError as exc:
-                    # Backward-compatible fallback for monkeypatched tests/extensions using older signatures.
-                    msg = str(exc)
-                    if "unexpected keyword argument" not in msg:
-                        raise
-                    removed = False
-                    for key in list(route_kwargs.keys()):
-                        if f"'{key}'" in msg:
-                            route_kwargs.pop(key, None)
-                            removed = True
-                            break
-                    if not removed:
-                        raise
+                    logger.debug(
+                        "Octo bootstrap files",
+                        route_mode=route_request.mode.value,
+                        files=files_summary,
+                        file_count=len(bootstrap_context.files),
+                        total_chars=len(bootstrap_context.content),
+                        hash=bootstrap_context.hash,
+                    )
+                route_kwargs: dict[str, Any] = {
+                    "show_typing": show_typing,
+                    "images": images,
+                    "saved_file_paths": saved_file_paths,
+                    "include_wakeup": include_wakeup,
+                    "route_mode": route_request.mode,
+                }
+                while True:
+                    try:
+                        reply_text = await route_or_reply(
+                            self,
+                            self.provider,
+                            self.memory,
+                            text,
+                            chat_id,
+                            bootstrap_context.content,
+                            **route_kwargs,
+                        )
+                        break
+                    except TypeError as exc:
+                        # Backward-compatible fallback for monkeypatched tests/extensions using older signatures.
+                        msg = str(exc)
+                        if "unexpected keyword argument" not in msg:
+                            raise
+                        removed = False
+                        for key in list(route_kwargs.keys()):
+                            if f"'{key}'" in msg:
+                                route_kwargs.pop(key, None)
+                                removed = True
+                                break
+                        if not removed:
+                            raise
             initial_reaction_emoji, _ = extract_reaction_and_strip(reply_text or "")
             wants_followup = self.consume_structured_followup_required(correlation_id)
             if not track_progress:
@@ -2620,7 +3405,7 @@ class Octo:
                 )
             if include_wakeup:
                 self.clear_context_wakeup(chat_id)
-            if bootstrap_context.hash:
+            if bootstrap_context is not None and bootstrap_context.hash:
                 await asyncio.to_thread(
                     self.store.set_chat_bootstrap_hash, chat_id, bootstrap_context.hash, utc_now()
                 )
@@ -2631,6 +3416,7 @@ class Octo:
             logger.debug(
                 "OctoReply prepared for channel delivery",
                 chat_id=chat_id,
+                route_mode=route_request.mode.value,
                 has_react_tag="<react>" in immediate_text.lower(),
                 reaction=reaction_emoji,
                 delivery_mode=delivery.mode,

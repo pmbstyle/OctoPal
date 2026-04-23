@@ -9,6 +9,7 @@ from typing import Any
 import structlog
 
 from octopal.infrastructure.store.base import Store
+from octopal.runtime.workers.loader import get_worker_template
 from octopal.utils import utc_now
 
 logger = structlog.get_logger(__name__)
@@ -17,6 +18,10 @@ _EVERY_MINUTES_RE = re.compile(r"^every\s+(\d+)\s+minutes?$", re.IGNORECASE)
 _EVERY_HOURS_RE = re.compile(r"^every\s+(\d+)\s+hours?$", re.IGNORECASE)
 _DAILY_AT_RE = re.compile(r"^daily\s+at\s+(\d{1,2}):(\d{2})$", re.IGNORECASE)
 _NOTIFY_USER_POLICIES = {"never", "if_significant", "always"}
+_EXECUTION_MODES = {"worker", "octo_control"}
+SCHEDULED_TASK_BLOCKED_UNTIL_KEY = "blocked_until"
+SCHEDULED_TASK_BLOCKED_REASON_KEY = "blocked_reason"
+SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY = "suggested_execution_mode"
 
 
 def normalize_notify_user_policy(notify_user: str | None) -> str:
@@ -27,18 +32,74 @@ def normalize_notify_user_policy(notify_user: str | None) -> str:
     return value
 
 
+def normalize_execution_mode(
+    execution_mode: str | None,
+    *,
+    worker_id: str | None = None,
+) -> str:
+    value = str(execution_mode or "").strip().lower()
+    if not value:
+        return "worker" if str(worker_id or "").strip() else "octo_control"
+    if value not in _EXECUTION_MODES:
+        allowed = ", ".join(sorted(_EXECUTION_MODES))
+        raise ValueError(f"execution_mode must be one of: {allowed}.")
+    return value
+
+
+def parse_scheduled_task_blocked_until(metadata: dict[str, Any]) -> datetime | None:
+    raw_value = metadata.get(SCHEDULED_TASK_BLOCKED_UNTIL_KEY)
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
+
+
+def parse_scheduled_task_suggested_execution_mode(metadata: dict[str, Any]) -> str | None:
+    value = str(metadata.get(SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY) or "").strip().lower()
+    if not value:
+        return None
+    return value if value in _EXECUTION_MODES else None
+
+
 class SchedulerService:
     def __init__(self, store: Store, workspace_dir: Path) -> None:
         self.store = store
         self.workspace_dir = workspace_dir
         self.heartbeat_md = workspace_dir / "HEARTBEAT.md"
 
-    def schedule_task(self, name: str, frequency: str, task_text: str,
-                      description: str | None = None, worker_id: str | None = None,
-                      inputs: dict | None = None, notify_user: str | None = None) -> str:
+    def schedule_task(
+        self,
+        name: str,
+        frequency: str,
+        task_text: str,
+        description: str | None = None,
+        worker_id: str | None = None,
+        inputs: dict | None = None,
+        notify_user: str | None = None,
+        execution_mode: str | None = None,
+    ) -> str:
         """Add or update a scheduled task."""
         normalized_frequency = self._validate_and_normalize_frequency(frequency)
         normalized_notify_user = normalize_notify_user_policy(notify_user)
+        normalized_execution_mode = normalize_execution_mode(
+            execution_mode,
+            worker_id=worker_id,
+        )
+        worker_id_value = str(worker_id or "").strip() or None
+        if normalized_execution_mode == "octo_control" and normalized_notify_user == "if_significant":
+            normalized_notify_user = "never"
+        if normalized_execution_mode == "worker" and not worker_id_value:
+            raise ValueError("worker_id is required when execution_mode=worker.")
+        if normalized_execution_mode == "octo_control" and worker_id_value:
+            raise ValueError("worker_id must be omitted when execution_mode=octo_control.")
         task_id = self._generate_id(name)
         self.store.upsert_scheduled_task(
             task_id=task_id,
@@ -46,9 +107,12 @@ class SchedulerService:
             frequency=normalized_frequency,
             task_text=task_text,
             description=description,
-            worker_id=worker_id,
+            worker_id=worker_id_value,
             inputs=inputs,
-            metadata={"notify_user": normalized_notify_user},
+            metadata={
+                "notify_user": normalized_notify_user,
+                "execution_mode": normalized_execution_mode,
+            },
         )
         self.sync_to_markdown()
         return task_id
@@ -56,6 +120,104 @@ class SchedulerService:
     def remove_task(self, task_id: str) -> None:
         self.store.delete_scheduled_task(task_id)
         self.sync_to_markdown()
+
+    def repair_suggested_tasks(
+        self,
+        *,
+        apply: bool = False,
+        task_ids: list[str] | None = None,
+        worker_id: str | None = None,
+    ) -> dict[str, Any]:
+        selected_ids = {str(item or "").strip() for item in (task_ids or []) if str(item or "").strip()}
+        provided_worker_id = str(worker_id or "").strip() or None
+        described = self.describe_tasks(enabled_only=False)
+        candidates: list[dict[str, Any]] = []
+        applied_items: list[dict[str, Any]] = []
+        skipped_items: list[dict[str, Any]] = []
+
+        for task in described:
+            task_id = str(task.get("id") or "").strip()
+            if selected_ids and task_id not in selected_ids:
+                continue
+            suggested_mode = str(task.get("suggested_execution_mode") or "").strip().lower()
+            if not suggested_mode:
+                continue
+            resolved_worker_id = str(task.get("worker_id") or "").strip() or provided_worker_id
+            can_apply = True
+            skip_reason = None
+            if suggested_mode == "worker":
+                if not resolved_worker_id:
+                    can_apply = False
+                    skip_reason = "missing_worker_id"
+                elif get_worker_template(self.workspace_dir, resolved_worker_id) is None:
+                    can_apply = False
+                    skip_reason = "unknown_worker_id"
+            candidate = {
+                "task_id": task_id,
+                "name": task.get("name"),
+                "execution_mode": task.get("execution_mode"),
+                "suggested_execution_mode": suggested_mode,
+                "worker_id": task.get("worker_id"),
+                "resolved_worker_id": resolved_worker_id,
+                "dispatch_policy_reason": task.get("dispatch_policy_reason"),
+                "blocked_reason": task.get("blocked_reason"),
+                "can_apply": can_apply,
+            }
+            if skip_reason:
+                candidate["skip_reason"] = skip_reason
+            candidates.append(candidate)
+            if not apply:
+                continue
+            if not can_apply:
+                skipped_items.append(
+                    {
+                        "task_id": task_id,
+                        "name": task.get("name"),
+                        "reason": skip_reason or "cannot_apply",
+                    }
+                )
+                continue
+
+            metadata = dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
+            metadata["notify_user"] = task.get("notify_user")
+            metadata["execution_mode"] = suggested_mode
+            metadata.pop(SCHEDULED_TASK_BLOCKED_UNTIL_KEY, None)
+            metadata.pop(SCHEDULED_TASK_BLOCKED_REASON_KEY, None)
+            metadata.pop(SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY, None)
+
+            repaired_worker_id = resolved_worker_id if suggested_mode == "worker" else None
+            self.store.upsert_scheduled_task(
+                task_id=task_id,
+                name=str(task.get("name") or ""),
+                frequency=str(task.get("frequency") or ""),
+                task_text=str(task.get("task_text") or ""),
+                description=str(task.get("description") or "").strip() or None,
+                worker_id=repaired_worker_id,
+                inputs=task.get("inputs") if isinstance(task.get("inputs"), dict) else None,
+                enabled=bool(int(task.get("enabled", 1) or 0) == 1),
+                metadata=metadata or None,
+            )
+            applied_items.append(
+                {
+                    "task_id": task_id,
+                    "name": task.get("name"),
+                    "execution_mode": suggested_mode,
+                    "worker_id": repaired_worker_id,
+                }
+            )
+
+        if apply and applied_items:
+            self.sync_to_markdown()
+
+        return {
+            "status": "applied" if apply else "preview",
+            "candidate_count": len(candidates),
+            "applied_count": len(applied_items),
+            "skipped_count": len(skipped_items),
+            "candidates": candidates,
+            "applied": applied_items,
+            "skipped": skipped_items,
+        }
 
     def get_actionable_tasks(self) -> list[dict[str, Any]]:
         """Find tasks that are due to run."""
@@ -113,6 +275,15 @@ class SchedulerService:
             lines.append(f"- **Frequency**: {t['frequency']}")
             normalized = self._normalize_task_record(t)
             lines.append(f"- **Notify user**: {normalized['notify_user']}")
+            lines.append(f"- **Execution mode**: {normalized['execution_mode']}")
+            dispatch_line = "ready"
+            if not bool(normalized.get("dispatch_ready")):
+                dispatch_line = f"rejected by policy ({normalized.get('dispatch_policy_reason') or 'unknown'})"
+            lines.append(f"- **Dispatch**: {dispatch_line}")
+            if normalized.get("suggested_execution_mode"):
+                lines.append(
+                    f"- **Suggested execution mode**: {normalized['suggested_execution_mode']}"
+                )
             if t['worker_id']:
                 lines.append(f"- **Worker**: {t['worker_id']}")
             lines.append(f"- **Task**: {t['task_text']}")
@@ -229,7 +400,58 @@ class SchedulerService:
         except ValueError:
             logger.warning("Invalid scheduled task notify_user policy", task_id=normalized.get("id"))
             normalized["notify_user"] = "if_significant"
+        try:
+            normalized["execution_mode"] = normalize_execution_mode(
+                metadata.get("execution_mode"),
+                worker_id=normalized.get("worker_id"),
+            )
+        except ValueError:
+            logger.warning("Invalid scheduled task execution_mode", task_id=normalized.get("id"))
+            normalized["execution_mode"] = normalize_execution_mode(
+                None,
+                worker_id=normalized.get("worker_id"),
+            )
+        if normalized["execution_mode"] == "octo_control" and normalized["notify_user"] == "if_significant":
+            normalized["notify_user"] = "never"
+        blocked_until = parse_scheduled_task_blocked_until(metadata)
+        blocked_reason = str(metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY) or "").strip() or None
+        suggested_execution_mode = parse_scheduled_task_suggested_execution_mode(metadata)
+        if (
+            suggested_execution_mode is None
+            and normalized["execution_mode"] == "octo_control"
+            and blocked_reason == "blocked_by_route"
+        ):
+            suggested_execution_mode = "worker"
+        normalized["blocked_until"] = blocked_until.isoformat() if blocked_until is not None else None
+        normalized["blocked_reason"] = blocked_reason
+        normalized["suggested_execution_mode"] = suggested_execution_mode
+        dispatch_ready, dispatch_policy_reason = self._dispatch_readiness(normalized)
+        normalized["dispatch_ready"] = dispatch_ready
+        normalized["dispatch_policy_reason"] = dispatch_policy_reason
         return normalized
+
+    def _dispatch_readiness(self, task: dict[str, Any]) -> tuple[bool, str | None]:
+        execution_mode = str(task.get("execution_mode") or "").strip().lower()
+        blocked_until_value = str(task.get("blocked_until") or "").strip()
+        if blocked_until_value:
+            try:
+                blocked_until = datetime.fromisoformat(blocked_until_value)
+            except ValueError:
+                blocked_until = None
+            if blocked_until is not None and blocked_until.tzinfo is not None and blocked_until > utc_now():
+                return False, str(task.get("blocked_reason") or "").strip() or "blocked_by_route_backoff"
+        if execution_mode == "octo_control":
+            task_text = str(task.get("task_text") or "").strip()
+            if not task_text:
+                return False, "missing_task_text"
+            return True, None
+        worker_id = str(task.get("worker_id") or "").strip()
+        if not worker_id:
+            return False, "missing_worker_id"
+        task_text = str(task.get("task_text") or "").strip()
+        if not task_text:
+            return False, "missing_task_text"
+        return True, None
 
     def _build_task_preview(self, task: dict[str, Any], now: datetime) -> dict[str, Any]:
         due_now = bool(int(task.get("enabled", 1)) == 1 and self._should_run(task, now))

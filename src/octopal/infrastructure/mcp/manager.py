@@ -31,6 +31,7 @@ class MCPServerConfig:
     env: dict[str, str] = field(default_factory=dict)
     url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
+    tools: list[str] = field(default_factory=list)
     transport: Literal["auto", "sse", "streamable-http", "stdio"] | None = None
     last_error: str | None = None
 
@@ -77,36 +78,51 @@ class MCPManager:
         self._manual_disconnects: set[str] = set()
         self._shutdown_requested = False
         self.config_path = workspace_dir / "mcp_servers.json"
+        self.legacy_config_path = workspace_dir / "config" / "mcp.json"
         self._configs_loaded = False
+
+    def _config_paths(self) -> list[Path]:
+        # Keep supporting the newer flat mcp_servers.json layout while also
+        # reading the legacy workspace/config/mcp.json workspace file.
+        return [self.legacy_config_path, self.config_path]
 
     def _load_configs_from_disk(self) -> dict[str, MCPServerConfig]:
         if self._configs_loaded:
             return dict(self._server_configs)
-        if not self.config_path.exists():
+        if not any(path.exists() for path in self._config_paths()):
             self._configs_loaded = True
             return dict(self._server_configs)
 
-        config_data = json.loads(self.config_path.read_text(encoding="utf-8"))
         loaded: dict[str, MCPServerConfig] = {}
-        for server_id, cfg in config_data.items():
-            existing = self._server_configs.get(server_id)
-            loaded[server_id] = MCPServerConfig(
-                id=server_id,
-                name=cfg.get("name", server_id),
-                command=cfg.get("command"),
-                args=cfg.get("args", []),
-                env=cfg.get("env", {}),
-                url=cfg.get("url"),
-                headers=cfg.get("headers", {}),
-                transport=_normalize_transport(cfg.get("transport") or cfg.get("type")),
-                last_error=existing.last_error if existing else None,
-            )
+        for config_path in self._config_paths():
+            if not config_path.exists():
+                continue
+            config_data = json.loads(config_path.read_text(encoding="utf-8"))
+            server_configs = config_data.get("servers", config_data)
+            if not isinstance(server_configs, dict):
+                continue
+            for server_id, cfg in server_configs.items():
+                if not isinstance(cfg, dict):
+                    continue
+                existing = loaded.get(server_id) or self._server_configs.get(server_id)
+                loaded[server_id] = MCPServerConfig(
+                    id=server_id,
+                    name=cfg.get("name", server_id),
+                    command=cfg.get("command"),
+                    args=cfg.get("args", []),
+                    env=cfg.get("env", {}),
+                    url=cfg.get("url"),
+                    headers=cfg.get("headers", {}),
+                    tools=_normalize_configured_tool_names(cfg.get("tools", [])),
+                    transport=_normalize_transport(cfg.get("transport") or cfg.get("type")),
+                    last_error=existing.last_error if existing else None,
+                )
         self._server_configs.update(loaded)
         self._configs_loaded = True
         return dict(self._server_configs)
 
     async def load_and_connect_all(self):
-        if not self.config_path.exists():
+        if not any(path.exists() for path in self._config_paths()):
             return
         try:
             for server_id, mcp_cfg in self._load_configs_from_disk().items():
@@ -128,8 +144,12 @@ class MCPManager:
             logger.exception("Failed to load MCP config for ensure_configured_servers_connected")
             return {}
 
-        requested_ids = [str(server_id).strip() for server_id in (server_ids or []) if str(server_id).strip()]
-        target_ids = requested_ids or list(configs.keys())
+        requested_ids = None
+        if server_ids is not None:
+            requested_ids = [
+                str(server_id).strip() for server_id in server_ids if str(server_id).strip()
+            ]
+        target_ids = list(configs.keys()) if requested_ids is None else requested_ids
         results: dict[str, str] = {}
         for server_id in target_ids:
             cfg = configs.get(server_id)
@@ -151,6 +171,25 @@ class MCPManager:
                     error=str(exc),
                 )
         return results
+
+    def resolve_configured_server_ids_for_tools(self, tool_names: list[str]) -> list[str]:
+        try:
+            configs = self._load_configs_from_disk()
+        except Exception:
+            logger.exception("Failed to load MCP config while resolving requested tool servers")
+            return []
+
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for tool_name in _normalize_configured_tool_names(tool_names):
+            if not tool_name.startswith("mcp_"):
+                continue
+            server_id = _resolve_configured_server_id_for_tool_name(tool_name, configs)
+            if not server_id or server_id in seen:
+                continue
+            seen.add(server_id)
+            resolved.append(server_id)
+        return resolved
 
     async def connect_server(self, config: MCPServerConfig) -> list[ToolSpec]:
         self._shutdown_requested = False
@@ -262,9 +301,10 @@ class MCPManager:
             from octopal.tools.registry import ToolSpec
 
             for tool in mcp_tools_list.tools:
-                # Normalize tool name: replace dashes with underscores for better LLM compatibility
-                safe_id = config.id.replace("-", "_")
-                safe_tool_name = tool.name.replace("-", "_")
+                # Normalize tool name into the lowercase worker/runtime form so
+                # legacy mixed-case config ids still match worker templates.
+                safe_id = config.id.replace("-", "_").lower()
+                safe_tool_name = tool.name.replace("-", "_").lower()
                 mcp_tool_name = f"mcp_{safe_id}_{safe_tool_name}"
                 full_schema = tool.inputSchema if isinstance(tool.inputSchema, dict) else {}
                 self._tool_schemas[(config.id, mcp_tool_name)] = full_schema
@@ -726,6 +766,43 @@ def _mcp_timeout_seconds(tool_name: str, args: dict[str, Any]) -> float:
     if any(hint in lowered for hint in _MCP_SLOW_TOOL_HINTS):
         return _MCP_SLOW_TIMEOUT_SECONDS
     return _MCP_DEFAULT_TIMEOUT_SECONDS
+
+
+def _normalize_configured_tool_names(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        text = str(item or "").strip().replace("-", "_").lower()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return normalized
+
+
+def _resolve_configured_server_id_for_tool_name(
+    tool_name: str,
+    configs: dict[str, MCPServerConfig],
+) -> str | None:
+    normalized_tool_name = str(tool_name or "").strip().replace("-", "_").lower()
+    if not normalized_tool_name.startswith("mcp_"):
+        return None
+
+    for server_id, cfg in configs.items():
+        if normalized_tool_name in _normalize_configured_tool_names(cfg.tools):
+            return server_id
+
+    normalized_prefixes = sorted(
+        ((server_id.replace("-", "_").lower(), server_id) for server_id in configs),
+        key=lambda item: len(item[0]),
+        reverse=True,
+    )
+    for safe_id, server_id in normalized_prefixes:
+        if normalized_tool_name.startswith(f"mcp_{safe_id}_"):
+            return server_id
+    return None
 
 
 def _compact_mcp_input_schema(schema: dict[str, Any]) -> dict[str, Any]:
