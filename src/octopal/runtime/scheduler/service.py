@@ -18,6 +18,8 @@ _EVERY_HOURS_RE = re.compile(r"^every\s+(\d+)\s+hours?$", re.IGNORECASE)
 _DAILY_AT_RE = re.compile(r"^daily\s+at\s+(\d{1,2}):(\d{2})$", re.IGNORECASE)
 _NOTIFY_USER_POLICIES = {"never", "if_significant", "always"}
 _EXECUTION_MODES = {"worker", "octo_control"}
+SCHEDULED_TASK_BLOCKED_UNTIL_KEY = "blocked_until"
+SCHEDULED_TASK_BLOCKED_REASON_KEY = "blocked_reason"
 
 
 def normalize_notify_user_policy(notify_user: str | None) -> str:
@@ -40,6 +42,22 @@ def normalize_execution_mode(
         allowed = ", ".join(sorted(_EXECUTION_MODES))
         raise ValueError(f"execution_mode must be one of: {allowed}.")
     return value
+
+
+def parse_scheduled_task_blocked_until(metadata: dict[str, Any]) -> datetime | None:
+    raw_value = metadata.get(SCHEDULED_TASK_BLOCKED_UNTIL_KEY)
+    if raw_value is None:
+        return None
+    value = str(raw_value).strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
 
 
 class SchedulerService:
@@ -284,6 +302,10 @@ class SchedulerService:
             )
         if normalized["execution_mode"] == "octo_control" and normalized["notify_user"] == "if_significant":
             normalized["notify_user"] = "never"
+        blocked_until = parse_scheduled_task_blocked_until(metadata)
+        blocked_reason = str(metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY) or "").strip() or None
+        normalized["blocked_until"] = blocked_until.isoformat() if blocked_until is not None else None
+        normalized["blocked_reason"] = blocked_reason
         dispatch_ready, dispatch_policy_reason = self._dispatch_readiness(normalized)
         normalized["dispatch_ready"] = dispatch_ready
         normalized["dispatch_policy_reason"] = dispatch_policy_reason
@@ -291,6 +313,14 @@ class SchedulerService:
 
     def _dispatch_readiness(self, task: dict[str, Any]) -> tuple[bool, str | None]:
         execution_mode = str(task.get("execution_mode") or "").strip().lower()
+        blocked_until_value = str(task.get("blocked_until") or "").strip()
+        if blocked_until_value:
+            try:
+                blocked_until = datetime.fromisoformat(blocked_until_value)
+            except ValueError:
+                blocked_until = None
+            if blocked_until is not None and blocked_until.tzinfo is not None and blocked_until > utc_now():
+                return False, str(task.get("blocked_reason") or "").strip() or "blocked_by_route_backoff"
         if execution_mode == "octo_control":
             task_text = str(task.get("task_text") or "").strip()
             if not task_text:

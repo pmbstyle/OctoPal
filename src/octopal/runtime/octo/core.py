@@ -7,7 +7,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -74,7 +74,13 @@ from octopal.runtime.octo.router import (
     should_force_worker_followup,
 )
 from octopal.runtime.policy.engine import PolicyEngine
-from octopal.runtime.scheduler.service import SchedulerService, normalize_notify_user_policy
+from octopal.runtime.scheduler.service import (
+    SCHEDULED_TASK_BLOCKED_REASON_KEY,
+    SCHEDULED_TASK_BLOCKED_UNTIL_KEY,
+    SchedulerService,
+    normalize_notify_user_policy,
+    parse_scheduled_task_blocked_until,
+)
 from octopal.runtime.workers.contracts import TaskRequest, WorkerResult
 from octopal.runtime.workers.runtime import WorkerRuntime
 from octopal.utils import (
@@ -1915,6 +1921,64 @@ class Octo:
             str(reason or "").strip() or "runtime_backoff",
         )
 
+    def _get_persisted_scheduled_octo_control_backoff(
+        self,
+        task: dict[str, Any],
+    ) -> tuple[float, str] | None:
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        if not isinstance(metadata, dict):
+            return None
+        blocked_until = parse_scheduled_task_blocked_until(metadata)
+        if blocked_until is None:
+            return None
+        remaining = (blocked_until - utc_now()).total_seconds()
+        if remaining <= 0:
+            self._update_scheduled_octo_control_backoff_metadata(
+                task,
+                blocked_until=None,
+                reason=None,
+            )
+            return None
+        reason = str(metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY) or "").strip() or "blocked_by_route"
+        return remaining, reason
+
+    def _update_scheduled_octo_control_backoff_metadata(
+        self,
+        task: dict[str, Any],
+        *,
+        blocked_until: datetime | None,
+        reason: str | None,
+    ) -> None:
+        scheduler = self.scheduler
+        store = getattr(scheduler, "store", None)
+        update_metadata = getattr(store, "update_scheduled_task_metadata", None)
+        if scheduler is None or not callable(update_metadata):
+            return
+        task_id = str(task.get("id") or "").strip()
+        if not task_id:
+            return
+        metadata = dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
+        if blocked_until is None:
+            metadata.pop(SCHEDULED_TASK_BLOCKED_UNTIL_KEY, None)
+        else:
+            metadata[SCHEDULED_TASK_BLOCKED_UNTIL_KEY] = blocked_until.isoformat()
+        reason_value = str(reason or "").strip()
+        if reason_value:
+            metadata[SCHEDULED_TASK_BLOCKED_REASON_KEY] = reason_value
+        else:
+            metadata.pop(SCHEDULED_TASK_BLOCKED_REASON_KEY, None)
+        try:
+            update_metadata(task_id, metadata or None)
+        except Exception:
+            logger.exception(
+                "Failed to persist scheduled Octo control backoff metadata",
+                task_id=task_id or None,
+            )
+            return
+        task["metadata"] = metadata
+        task["blocked_until"] = metadata.get(SCHEDULED_TASK_BLOCKED_UNTIL_KEY)
+        task["blocked_reason"] = metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY)
+
     async def _dispatch_due_scheduled_tasks_once(
         self,
         *,
@@ -1944,6 +2008,17 @@ class Octo:
             task_text = str(task.get("task_text") or "").strip()
             inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
             if execution_mode == "octo_control":
+                persisted_backoff = self._get_persisted_scheduled_octo_control_backoff(task)
+                if persisted_backoff is not None:
+                    remaining_seconds, backoff_reason = persisted_backoff
+                    logger.info(
+                        "Skipping scheduled Octo control task during persisted backoff",
+                        task_id=task_id or None,
+                        chat_id=chat_id,
+                        backoff_reason=backoff_reason,
+                        cooldown_seconds=round(remaining_seconds, 1),
+                    )
+                    continue
                 backoff = self._get_scheduled_octo_control_backoff(task_id)
                 if backoff is not None:
                     remaining_seconds, backoff_reason = backoff
@@ -2040,6 +2115,11 @@ class Octo:
         )
         if route_blocked:
             self._set_scheduled_octo_control_backoff(task_id, reason="blocked_by_route")
+            self._update_scheduled_octo_control_backoff_metadata(
+                task,
+                blocked_until=utc_now() + timedelta(seconds=_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS),
+                reason="blocked_by_route",
+            )
             logger.warning(
                 "Scheduled Octo control task blocked by bounded route",
                 task_id=task_id or None,
@@ -2066,6 +2146,11 @@ class Octo:
                 "reason": "missing_completion_signal",
             }
         if normalized_reply == _SCHEDULED_OCTO_CONTROL_DONE:
+            self._update_scheduled_octo_control_backoff_metadata(
+                task,
+                blocked_until=None,
+                reason=None,
+            )
             if scheduler is not None and task_id:
                 scheduler.mark_executed(task_id)
             logger.info(

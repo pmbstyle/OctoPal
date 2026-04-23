@@ -1215,6 +1215,17 @@ class SQLiteStore(Store):
         )
         self._conn.commit()
 
+    def update_scheduled_task_metadata(
+        self,
+        task_id: str,
+        metadata: dict[str, Any] | None,
+    ) -> None:
+        self._conn.execute(
+            "UPDATE scheduled_tasks SET metadata_json = ? WHERE id = ?",
+            (json.dumps(metadata) if metadata else None, task_id),
+        )
+        self._conn.commit()
+
     def get_scheduled_tasks(self, enabled_only: bool = False) -> list[dict[str, Any]]:
         query = "SELECT * FROM scheduled_tasks"
         if enabled_only:

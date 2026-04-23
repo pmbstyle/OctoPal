@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from octopal.runtime.octo.core import Octo
 from octopal.runtime.scheduler.service import SchedulerService
 from octopal.runtime.workers.contracts import WorkerResult
 from octopal.tools.tools import _tool_check_schedule, _tool_schedule_task, _tool_scheduler_status
+from octopal.utils import utc_now
 
 
 class _StoreStub:
@@ -20,6 +22,7 @@ class _StoreStub:
         self.tasks = tasks or []
         self.last_upsert: dict | None = None
         self.marked_task_ids: list[str] = []
+        self.metadata_updates: list[dict[str, object | None]] = []
         self.worker_status = worker_status
 
     def upsert_scheduled_task(
@@ -53,6 +56,14 @@ class _StoreStub:
 
     def update_task_last_run(self, task_id: str, _ts) -> None:
         self.marked_task_ids.append(task_id)
+
+    def update_scheduled_task_metadata(self, task_id: str, metadata: dict | None) -> None:
+        self.metadata_updates.append({"task_id": task_id, "metadata": metadata})
+        metadata_json = json.dumps(metadata) if metadata else None
+        for task in self.tasks:
+            if str(task.get("id")) == task_id:
+                task["metadata_json"] = metadata_json
+                break
 
     def delete_scheduled_task(self, _task_id: str) -> None:
         return None
@@ -287,6 +298,43 @@ def test_schedule_task_rejects_invalid_notify_user(tmp_path: Path) -> None:
         {"octo": SimpleNamespace(scheduler=scheduler)},
     )
     assert result.startswith("schedule_task error:")
+
+
+def test_describe_tasks_marks_blocked_octo_control_backoff(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "weather_check",
+                    "name": "Weather Check",
+                    "description": "Check weather",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": None,
+                    "task_text": "Check the weather",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps(
+                        {
+                            "notify_user": "never",
+                            "execution_mode": "octo_control",
+                            "blocked_until": blocked_until.isoformat(),
+                            "blocked_reason": "blocked_by_route",
+                        }
+                    ),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=tmp_path,
+    )
+
+    described = scheduler.describe_tasks(enabled_only=True)
+
+    assert described[0]["dispatch_ready"] is False
+    assert described[0]["dispatch_policy_reason"] == "blocked_by_route"
+    assert described[0]["blocked_until"] == blocked_until.isoformat()
+    assert described[0]["blocked_reason"] == "blocked_by_route"
 
 
 def test_octo_marks_scheduled_task_after_successful_worker_run_even_if_store_lags() -> None:
@@ -682,25 +730,23 @@ async def test_octo_dispatch_due_scheduled_tasks_requires_explicit_octo_control_
 
 @pytest.mark.asyncio
 async def test_octo_dispatch_due_scheduled_tasks_backs_off_blocked_octo_control_task(monkeypatch):
-    scheduler = SchedulerService(
-        store=_StoreStub(
-            tasks=[
-                {
-                    "id": "weather_check",
-                    "name": "Weather Check",
-                    "description": "Check weather",
-                    "frequency": "Every 30 minutes",
-                    "worker_id": None,
-                    "task_text": "Check the weather",
-                    "inputs_json": "{}",
-                    "metadata_json": json.dumps({"notify_user": "never"}),
-                    "last_run_at": None,
-                    "enabled": 1,
-                }
-            ]
-        ),
-        workspace_dir=Path("."),
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": None,
+                "task_text": "Check the weather",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps({"notify_user": "never"}),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
     )
+    scheduler = SchedulerService(store=store, workspace_dir=Path("."))
     route_calls = {"count": 0}
 
     async def _start_worker_async(self, **kwargs):
@@ -753,6 +799,78 @@ async def test_octo_dispatch_due_scheduled_tasks_backs_off_blocked_octo_control_
     }
     assert route_calls["count"] == 1
     assert scheduler.store.marked_task_ids == []
+    metadata = store.metadata_updates[-1]["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["blocked_reason"] == "blocked_by_route"
+    assert "blocked_until" in metadata
+
+
+@pytest.mark.asyncio
+async def test_octo_dispatch_due_scheduled_tasks_skips_persisted_octo_control_backoff(monkeypatch):
+    blocked_until = utc_now() + timedelta(minutes=30)
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "weather_check",
+                    "name": "Weather Check",
+                    "description": "Check weather",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": None,
+                    "task_text": "Check the weather",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps(
+                        {
+                            "notify_user": "never",
+                            "execution_mode": "octo_control",
+                            "blocked_until": blocked_until.isoformat(),
+                            "blocked_reason": "blocked_by_route",
+                        }
+                    ),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+    route_calls = {"count": 0}
+
+    async def _start_worker_async(self, **kwargs):
+        raise AssertionError("_start_worker_async should not be called for octo_control tasks")
+
+    async def _route_scheduled_octo_control(octo, task, *, chat_id=0):
+        route_calls["count"] += 1
+        return "SCHEDULED_TASK_DONE"
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+    monkeypatch.setattr(octo_router, "route_scheduled_octo_control", _route_scheduled_octo_control)
+    monkeypatch.setattr(octo_core, "route_scheduled_octo_control", _route_scheduled_octo_control)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+    )
+
+    summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
+
+    assert summary == {
+        "due_count": 1,
+        "attempted": 0,
+        "started": 0,
+        "completed": 0,
+        "duplicates": 0,
+        "rejected_by_policy": 0,
+        "policy_reasons": {},
+        "errors": 0,
+    }
+    assert route_calls["count"] == 0
 
 
 @pytest.mark.asyncio
