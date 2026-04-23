@@ -179,9 +179,7 @@ class WorkerRuntime:
                     # behavior only when we cannot map requested MCP tools to a
                     # concrete server set.
                     ensure_server_ids = resolved_server_ids or None
-                await self.mcp_manager.ensure_configured_servers_connected(
-                    ensure_server_ids
-                )
+                await self.mcp_manager.ensure_configured_servers_connected(ensure_server_ids)
             except Exception:
                 logger.warning(
                     "Failed to ensure configured MCP servers before worker launch",
@@ -1313,6 +1311,7 @@ class WorkerRuntime:
             worker_dir,
             retries=8,
             base_delay_seconds=0.25,
+            docker_cleanup_image=getattr(self.launcher, "image", None),
         )
         if removed:
             logger.info("WorkerRuntime cleaned up worker dir: %s", worker_dir)

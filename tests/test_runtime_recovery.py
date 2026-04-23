@@ -351,10 +351,17 @@ def test_cleanup_worker_dir_uses_retrying_remove_helper(tmp_path: Path) -> None:
 
     calls = {"count": 0}
 
-    def _remove_tree(path: Path, *, retries: int, base_delay_seconds: float) -> bool:
+    def _remove_tree(
+        path: Path,
+        *,
+        retries: int,
+        base_delay_seconds: float,
+        docker_cleanup_image: str | None = None,
+    ) -> bool:
         assert path == worker_dir
         assert retries == 8
         assert base_delay_seconds == 0.25
+        assert docker_cleanup_image is None
         calls["count"] += 1
         return True
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 from octopal.runtime.housekeeping import (
     cleanup_ephemeral_worker_dirs,
@@ -82,6 +84,61 @@ def test_remove_tree_with_retries_retries_permission_errors(tmp_path: Path) -> N
     assert calls["count"] == 3
 
 
+def test_remove_tree_with_retries_uses_docker_fallback_for_root_owned_leftovers(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    target = tmp_path / "worker"
+    root_owned = target / "memory" / "canon"
+    root_owned.mkdir(parents=True)
+    (root_owned / "facts.md").write_text("facts", encoding="utf-8")
+
+    calls = {"rmtree": 0, "docker": [], "docker_kwargs": None}
+
+    import octopal.runtime.housekeeping as housekeeping_mod
+
+    original_rmtree = housekeeping_mod.shutil.rmtree
+
+    def _flaky_rmtree(path: Path, onerror=None) -> None:
+        calls["rmtree"] += 1
+        if calls["rmtree"] <= 2:
+            raise PermissionError("permission denied")
+        original_rmtree(path, onerror=onerror)
+
+    def _fake_run(args, **kwargs):
+        calls["docker"].append(args)
+        calls["docker_kwargs"] = kwargs
+        for child in list(target.iterdir()):
+            if child.is_dir():
+                original_rmtree(child)
+            else:
+                child.unlink()
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(housekeeping_mod.shutil, "rmtree", _flaky_rmtree)
+    monkeypatch.setattr(housekeeping_mod.shutil, "which", lambda name: "/usr/bin/docker")
+    monkeypatch.setattr(housekeeping_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(housekeeping_mod.os, "name", "posix")
+
+    removed = remove_tree_with_retries(
+        target,
+        retries=2,
+        base_delay_seconds=0,
+        docker_cleanup_image="octopal-worker:test",
+    )
+
+    assert removed is True
+    assert not target.exists()
+    assert calls["rmtree"] == 3
+    assert calls["docker"]
+    docker_args = calls["docker"][0]
+    assert docker_args[:3] == ["/usr/bin/docker", "run", "--rm"]
+    assert "octopal-worker:test" in docker_args
+    assert calls["docker_kwargs"]["check"] is False
+    assert calls["docker_kwargs"]["stdout"] == subprocess.DEVNULL
+    assert calls["docker_kwargs"]["stderr"] == subprocess.DEVNULL
+
+
 def test_rotate_canon_events_bootstraps_snapshot_and_keeps_archives(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     canon_dir = workspace / "memory" / "canon"
@@ -89,7 +146,9 @@ def test_rotate_canon_events_bootstraps_snapshot_and_keeps_archives(tmp_path: Pa
     (canon_dir / "facts.md").write_text("# Facts\n\nA\n", encoding="utf-8")
     (canon_dir / "decisions.md").write_text("# Decisions\n\nB\n", encoding="utf-8")
     events = canon_dir / "events.jsonl"
-    events.write_text('{"ts":"x","filename":"facts.md","mode":"append","content":"c"}\n' * 30, encoding="utf-8")
+    events.write_text(
+        '{"ts":"x","filename":"facts.md","mode":"append","content":"c"}\n' * 30, encoding="utf-8"
+    )
 
     # Seed old archives to validate pruning.
     _touch(canon_dir / "events.20250101010101.jsonl", "old1")

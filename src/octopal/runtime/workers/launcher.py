@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 
@@ -56,7 +57,6 @@ class DockerLauncher:
         env: dict[str, str],
     ) -> asyncio.subprocess.Process:
         import json
-        from pathlib import Path
 
         worker_id = os.path.basename(cwd.rstrip(os.sep))
         container_ws = self.container_workspace
@@ -88,6 +88,11 @@ class DockerLauncher:
         seen_mounts: set[tuple[str, str]] = set()
         host_skills_dir = host_ws_path / "skills"
         host_skills_dir.mkdir(parents=True, exist_ok=True)
+        _prepare_worker_mount_target(
+            host_worker_dir,
+            rel_path="skills",
+            source_path=host_skills_dir,
+        )
         cmd_args.extend(["-v", f"{host_skills_dir}:{container_worker_dir}/skills"])
         seen_mounts.add((str(host_skills_dir), f"{container_worker_dir}/skills"))
         for rel_path in allowed_paths or []:
@@ -100,6 +105,11 @@ class DockerLauncher:
                 continue
             if not host_path.exists():
                 continue
+            _prepare_worker_mount_target(
+                host_worker_dir,
+                rel_path=rel_path,
+                source_path=host_path,
+            )
             mount_targets = (
                 f"{container_ws}/{rel_path}",
                 f"{container_worker_dir}/{rel_path}",
@@ -112,17 +122,19 @@ class DockerLauncher:
                 seen_mounts.add(mount_key)
 
         spec_in_container = f"{container_ws}/workers/{worker_id}/spec.json"
-        cmd_args.extend([
-            "-w",
-            f"{container_ws}/workers/{worker_id}",
-            "-e",
-            f"OCTOPAL_WORKER_SPEC={spec_in_container}",
-            self.image,
-            "python",
-            "-m",
-            self.entrypoint_module,
-            spec_in_container,
-        ])
+        cmd_args.extend(
+            [
+                "-w",
+                f"{container_ws}/workers/{worker_id}",
+                "-e",
+                f"OCTOPAL_WORKER_SPEC={spec_in_container}",
+                self.image,
+                "python",
+                "-m",
+                self.entrypoint_module,
+                spec_in_container,
+            ]
+        )
 
         popen_kwargs = _worker_subprocess_kwargs()
         return await asyncio.create_subprocess_exec(
@@ -158,6 +170,27 @@ def _filter_container_env(
     if worker_workspace:
         filtered["OCTOPAL_WORKSPACE_DIR"] = worker_workspace
     return filtered
+
+
+def _prepare_worker_mount_target(
+    host_worker_dir: Path,
+    *,
+    rel_path: str,
+    source_path: Path,
+) -> None:
+    try:
+        target = (host_worker_dir / rel_path).resolve()
+        target.relative_to(host_worker_dir)
+    except (OSError, ValueError):
+        return
+
+    if source_path.is_dir():
+        target.mkdir(parents=True, exist_ok=True)
+        return
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.exists():
+        target.touch()
 
 
 def _host_user_spec() -> str | None:
