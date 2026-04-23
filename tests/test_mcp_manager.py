@@ -7,6 +7,7 @@ from octopal.infrastructure.mcp.manager import (
     MCPManager,
     MCPServerConfig,
     _classify_mcp_call_error,
+    _resolve_configured_server_id_for_tool_name,
 )
 from octopal.runtime.tool_errors import MCPToolCallError
 from octopal.tools.registry import ToolSpec
@@ -206,3 +207,75 @@ def test_mcp_manager_hydrates_full_schema_from_compact_registry_stub(tmp_path) -
 
     assert registry_spec.parameters == compact_schema
     assert hydrated_spec.parameters == full_schema
+
+
+def test_mcp_manager_reads_legacy_workspace_mcp_config(tmp_path) -> None:
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (config_dir / "mcp.json").write_text(
+        """
+{
+  "servers": {
+    "AgentMail": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "agentmail-mcp"],
+      "tools": ["mcp_AgentMail_list_inboxes"]
+    }
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manager = MCPManager(tmp_path)
+
+    resolved = manager.resolve_configured_server_ids_for_tools(["mcp_agentmail_list_inboxes"])
+
+    assert resolved == ["AgentMail"]
+
+
+def test_resolve_configured_server_id_for_tool_name_is_case_insensitive(tmp_path) -> None:
+    configs = {
+        "AgentMail": MCPServerConfig(
+            id="AgentMail",
+            name="AgentMail",
+            command="npx",
+            tools=["mcp_AgentMail_list_inboxes"],
+        )
+    }
+
+    resolved = _resolve_configured_server_id_for_tool_name(
+        "mcp_agentmail_list_inboxes",
+        configs,
+    )
+
+    assert resolved == "AgentMail"
+
+
+def test_mcp_manager_ensure_empty_list_skips_connections(tmp_path) -> None:
+    (tmp_path / "mcp_servers.json").write_text(
+        """
+{
+  "demo": {
+    "command": "demo-cmd",
+    "type": "stdio"
+  }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    manager = MCPManager(tmp_path)
+    calls: list[str] = []
+
+    async def _fake_connect(config: MCPServerConfig):
+        calls.append(config.id)
+        return []
+
+    manager.connect_server = _fake_connect  # type: ignore[method-assign]
+
+    result = asyncio.run(manager.ensure_configured_servers_connected([]))
+
+    assert result == {}
+    assert calls == []

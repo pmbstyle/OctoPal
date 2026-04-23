@@ -165,14 +165,29 @@ class WorkerRuntime:
         )
         if self.mcp_manager:
             try:
+                ensure_server_ids: list[str] | None = []
+                if has_requested_mcp_tools:
+                    resolver = getattr(
+                        self.mcp_manager,
+                        "resolve_configured_server_ids_for_tools",
+                        None,
+                    )
+                    resolved_server_ids: list[str] = []
+                    if callable(resolver):
+                        resolved_server_ids = list(resolver(requested_tool_names) or [])
+                    # Fall back to the older "connect everything configured"
+                    # behavior only when we cannot map requested MCP tools to a
+                    # concrete server set.
+                    ensure_server_ids = resolved_server_ids or None
                 await self.mcp_manager.ensure_configured_servers_connected(
-                    None if has_requested_mcp_tools else []
+                    ensure_server_ids
                 )
             except Exception:
                 logger.warning(
                     "Failed to ensure configured MCP servers before worker launch",
                     worker_id=task_request.worker_id,
                     requested_mcp_tools=has_requested_mcp_tools,
+                    requested_tool_names=requested_tool_names,
                     exc_info=True,
                 )
 

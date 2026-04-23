@@ -366,6 +366,84 @@ def test_runtime_ensures_configured_mcp_before_launch(tmp_path: Path) -> None:
     assert spec.mcp_tools[0]["server_id"] == "demo"
 
 
+def test_runtime_targets_requested_mcp_server_before_launch(tmp_path: Path) -> None:
+    template = WorkerTemplateRecord(
+        id="worker",
+        name="Worker",
+        description="Test worker",
+        system_prompt="Do work",
+        available_tools=["mcp_agentmail_list_inboxes"],
+        required_permissions=["mcp_exec"],
+        model=None,
+        max_thinking_steps=3,
+        default_timeout_seconds=30,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+
+    class _Store:
+        def get_worker_template(self, worker_id: str):
+            return template
+
+    class _Policy:
+        def grant_capabilities(self, capabilities):
+            return [Capability(type="mcp_exec", scope="worker")]
+
+    class _MCP:
+        def __init__(self) -> None:
+            self.sessions = {"AgentMail": object()}
+            self.ensure_calls: list[object] = []
+            self.resolve_calls: list[list[str]] = []
+
+        def resolve_configured_server_ids_for_tools(self, tool_names):
+            self.resolve_calls.append(list(tool_names))
+            return ["AgentMail"]
+
+        async def ensure_configured_servers_connected(self, server_ids=None):
+            self.ensure_calls.append(server_ids)
+            return {"AgentMail": "connected"}
+
+        def get_all_tools(self):
+            return [
+                ToolSpec(
+                    name="mcp_agentmail_list_inboxes",
+                    description="demo",
+                    parameters={"type": "object"},
+                    permission="mcp_exec",
+                    handler=lambda _args, _ctx: "ok",
+                    is_async=True,
+                    server_id="AgentMail",
+                    remote_tool_name="list_inboxes",
+                )
+            ]
+
+    mcp_manager = _MCP()
+    runtime = WorkerRuntime(
+        store=_Store(),
+        policy=_Policy(),
+        workspace_dir=tmp_path,
+        launcher=object(),
+        mcp_manager=mcp_manager,
+        settings=Settings(),
+    )
+
+    captured: dict[str, object] = {}
+
+    async def _fake_run(spec, approval_requester=None):
+        captured["spec"] = spec
+        return WorkerResult(summary="ok")
+
+    runtime.run = _fake_run  # type: ignore[method-assign]
+
+    request = TaskRequest(worker_id="worker", task="hello")
+    asyncio.run(runtime.run_task(request))
+
+    spec = captured["spec"]
+    assert mcp_manager.resolve_calls == [["mcp_agentmail_list_inboxes"]]
+    assert mcp_manager.ensure_calls == [["AgentMail"]]
+    assert spec.mcp_tools[0]["server_id"] == "AgentMail"
+
+
 def test_runtime_includes_connector_alias_tools_for_workers(tmp_path: Path) -> None:
     template = WorkerTemplateRecord(
         id="worker",
