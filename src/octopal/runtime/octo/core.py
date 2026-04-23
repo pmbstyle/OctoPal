@@ -76,6 +76,7 @@ from octopal.runtime.octo.router import (
 from octopal.runtime.policy.engine import PolicyEngine
 from octopal.runtime.scheduler.service import (
     SCHEDULED_TASK_BLOCKED_REASON_KEY,
+    SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY,
     SCHEDULED_TASK_BLOCKED_UNTIL_KEY,
     SchedulerService,
     normalize_notify_user_policy,
@@ -1967,6 +1968,10 @@ class Octo:
             metadata[SCHEDULED_TASK_BLOCKED_REASON_KEY] = reason_value
         else:
             metadata.pop(SCHEDULED_TASK_BLOCKED_REASON_KEY, None)
+        if reason_value == "blocked_by_route":
+            metadata[SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY] = "worker"
+        elif blocked_until is None:
+            metadata.pop(SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY, None)
         try:
             update_metadata(task_id, metadata or None)
         except Exception:
@@ -1978,6 +1983,7 @@ class Octo:
         task["metadata"] = metadata
         task["blocked_until"] = metadata.get(SCHEDULED_TASK_BLOCKED_UNTIL_KEY)
         task["blocked_reason"] = metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY)
+        task["suggested_execution_mode"] = metadata.get(SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY)
 
     async def _dispatch_due_scheduled_tasks_once(
         self,

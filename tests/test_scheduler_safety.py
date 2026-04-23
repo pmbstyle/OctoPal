@@ -207,6 +207,7 @@ def test_check_schedule_returns_json_with_inputs(tmp_path: Path) -> None:
     assert payload["due_tasks"][0]["execution_mode"] == "worker"
     assert payload["due_tasks"][0]["dispatch_ready"] is True
     assert payload["due_tasks"][0]["dispatch_policy_reason"] is None
+    assert payload["due_tasks"][0]["suggested_execution_mode"] is None
 
 
 def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> None:
@@ -252,9 +253,11 @@ def test_scheduler_status_reports_due_and_next_run_preview(tmp_path: Path) -> No
     assert payload["tasks"][0]["notify_user"] == "if_significant"
     assert payload["tasks"][0]["execution_mode"] == "worker"
     assert payload["tasks"][0]["dispatch_ready"] is True
+    assert payload["tasks"][0]["suggested_execution_mode"] is None
     assert payload["tasks"][1]["execution_mode"] == "octo_control"
     assert payload["tasks"][1]["dispatch_ready"] is True
     assert payload["tasks"][1]["dispatch_policy_reason"] is None
+    assert payload["tasks"][1]["suggested_execution_mode"] is None
     assert any("due now" in hint for hint in payload["hints"])
     assert not any("not dispatch-ready" in hint for hint in payload["hints"])
     assert payload["next_due_task"]["execution_mode"] == "worker"
@@ -335,6 +338,77 @@ def test_describe_tasks_marks_blocked_octo_control_backoff(tmp_path: Path) -> No
     assert described[0]["dispatch_policy_reason"] == "blocked_by_route"
     assert described[0]["blocked_until"] == blocked_until.isoformat()
     assert described[0]["blocked_reason"] == "blocked_by_route"
+    assert described[0]["suggested_execution_mode"] == "worker"
+
+
+def test_scheduler_sync_to_markdown_shows_suggested_execution_mode_for_blocked_tasks(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": None,
+                "task_text": "Check the weather",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "blocked_by_route",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    scheduler.sync_to_markdown()
+
+    heartbeat = (tmp_path / "HEARTBEAT.md").read_text(encoding="utf-8")
+    assert "**Suggested execution mode**: worker" in heartbeat
+
+
+def test_scheduler_status_reports_suggested_execution_mode_for_blocked_tasks(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": None,
+                "task_text": "Check the weather",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "blocked_by_route",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+    payload = json.loads(
+        asyncio.run(_tool_scheduler_status({}, {"octo": SimpleNamespace(scheduler=scheduler)}))
+    )
+
+    assert payload["tasks"][0]["execution_mode"] == "octo_control"
+    assert payload["tasks"][0]["dispatch_ready"] is False
+    assert payload["tasks"][0]["dispatch_policy_reason"] == "blocked_by_route"
+    assert payload["tasks"][0]["suggested_execution_mode"] == "worker"
+    assert any("suggested execution mode" in hint for hint in payload["hints"])
 
 
 def test_octo_marks_scheduled_task_after_successful_worker_run_even_if_store_lags() -> None:
@@ -803,6 +877,7 @@ async def test_octo_dispatch_due_scheduled_tasks_backs_off_blocked_octo_control_
     assert isinstance(metadata, dict)
     assert metadata["blocked_reason"] == "blocked_by_route"
     assert "blocked_until" in metadata
+    assert metadata["suggested_execution_mode"] == "worker"
 
 
 @pytest.mark.asyncio

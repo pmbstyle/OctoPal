@@ -1625,6 +1625,7 @@ async def _tool_check_schedule(args, ctx) -> str:
                 "notify_user": t.get("notify_user"),
                 "dispatch_ready": bool(t.get("dispatch_ready")),
                 "dispatch_policy_reason": t.get("dispatch_policy_reason"),
+                "suggested_execution_mode": t.get("suggested_execution_mode"),
             }
             for t in due_tasks
         ],
@@ -1651,6 +1652,14 @@ async def _tool_scheduler_status(args, ctx) -> str:
     if not_dispatch_ready:
         hints.append(
             f"{len(not_dispatch_ready)} scheduled task(s) are not dispatch-ready for the current worker loop."
+        )
+    suggested_migrations = [
+        task for task in not_dispatch_ready if str(task.get("suggested_execution_mode") or "").strip()
+    ]
+    if suggested_migrations:
+        hints.append(
+            f"{len(suggested_migrations)} scheduled task(s) have a suggested execution mode; "
+            "consider migrating incompatible tasks to that route."
         )
     if not hints:
         hints.append("Scheduler looks healthy. Use next-run previews to plan follow-up work.")
@@ -1689,6 +1698,7 @@ async def _tool_scheduler_status(args, ctx) -> str:
                 "notify_user": task.get("notify_user"),
                 "dispatch_ready": bool(task.get("dispatch_ready")),
                 "dispatch_policy_reason": task.get("dispatch_policy_reason"),
+                "suggested_execution_mode": task.get("suggested_execution_mode"),
             }
             for task in preview
         ],

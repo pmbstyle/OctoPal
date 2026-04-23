@@ -20,6 +20,7 @@ _NOTIFY_USER_POLICIES = {"never", "if_significant", "always"}
 _EXECUTION_MODES = {"worker", "octo_control"}
 SCHEDULED_TASK_BLOCKED_UNTIL_KEY = "blocked_until"
 SCHEDULED_TASK_BLOCKED_REASON_KEY = "blocked_reason"
+SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY = "suggested_execution_mode"
 
 
 def normalize_notify_user_policy(notify_user: str | None) -> str:
@@ -58,6 +59,13 @@ def parse_scheduled_task_blocked_until(metadata: dict[str, Any]) -> datetime | N
     if parsed.tzinfo is None:
         return None
     return parsed
+
+
+def parse_scheduled_task_suggested_execution_mode(metadata: dict[str, Any]) -> str | None:
+    value = str(metadata.get(SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY) or "").strip().lower()
+    if not value:
+        return None
+    return value if value in _EXECUTION_MODES else None
 
 
 class SchedulerService:
@@ -173,6 +181,10 @@ class SchedulerService:
             if not bool(normalized.get("dispatch_ready")):
                 dispatch_line = f"rejected by policy ({normalized.get('dispatch_policy_reason') or 'unknown'})"
             lines.append(f"- **Dispatch**: {dispatch_line}")
+            if normalized.get("suggested_execution_mode"):
+                lines.append(
+                    f"- **Suggested execution mode**: {normalized['suggested_execution_mode']}"
+                )
             if t['worker_id']:
                 lines.append(f"- **Worker**: {t['worker_id']}")
             lines.append(f"- **Task**: {t['task_text']}")
@@ -304,8 +316,16 @@ class SchedulerService:
             normalized["notify_user"] = "never"
         blocked_until = parse_scheduled_task_blocked_until(metadata)
         blocked_reason = str(metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY) or "").strip() or None
+        suggested_execution_mode = parse_scheduled_task_suggested_execution_mode(metadata)
+        if (
+            suggested_execution_mode is None
+            and normalized["execution_mode"] == "octo_control"
+            and blocked_reason == "blocked_by_route"
+        ):
+            suggested_execution_mode = "worker"
         normalized["blocked_until"] = blocked_until.isoformat() if blocked_until is not None else None
         normalized["blocked_reason"] = blocked_reason
+        normalized["suggested_execution_mode"] = suggested_execution_mode
         dispatch_ready, dispatch_policy_reason = self._dispatch_readiness(normalized)
         normalized["dispatch_ready"] = dispatch_ready
         normalized["dispatch_policy_reason"] = dispatch_policy_reason
