@@ -13,42 +13,71 @@
    <a href="https://deepwiki.com/pmbstyle/Octopal"><img src="https://deepwiki.com/badge.svg"></a>
 </p>
 
-Octopal is a local AI agent runtime designed for safe, autonomous execution.
+Octopal is a local multi-agent runtime for autonomous execution without giving a single long-lived process unrestricted access to your machine.
 
-It runs as a persistent operator that plans tasks, delegates work, and executes actions through isolated workers — keeping your system protected by design.
+It is built around a hard split between coordination and execution:
 
-At the core is the **Octo**: a long-running coordinator that holds memory, reasons about tasks, selects tools, and orchestrates execution.
+- **Octo** is the coordinator. It holds memory, user context, policy, and decides what should happen next.
+- **Workers** do the side effects. They run tools, touch files, browse the web, and return results to Octo.
 
-Instead of acting directly, Octo delegates all side effects to **Workers** — short-lived, sandboxed agents with limited context and strict permissions.
+That separation is the point. In many agent setups, the same process that sees your secrets also executes shell commands and follows untrusted content. Octopal keeps those concerns apart.
 
-This creates a hard separation between thinking and doing: the system that decides never touches the outside world, and the system that acts is fully controlled.
+By default, workers use the Docker launcher and get their own disposable runtime plus a private scratch workspace.
 
 ## Table of contents
 
+- 🧭 [Why I Built Octopal](#-why-i-built-octopal)
+- 🔒 [Security model](#-security-model)
 - 🪛 [What it can do](#-what-it-can-do) 
 - 🚀 [Quick start](#-quick-start) 
 - ✨ [Key features](#-key-features)
 
 
-## 🔒 Secure by Default Execution
+## 🧭 Why I Built Octopal
 
-Octopal is designed with a strict isolation model for all workers.
+Projects like OpenClaw, Hermes Agent, and NanoClaw show that people want agents that actually do things, not just answer questions.
 
-- Workers run in ephemeral Docker containers by default
-- No access to your system or workspace unless explicitly granted
-- Filesystem access is restricted via allowlisted paths
-- Environment variables and secrets are never exposed to workers
-- Each execution is sandboxed and fully disposable
+That is the part I agree with. I love smart agentic systems.
 
-Even when interacting with untrusted content (web pages, scripts, external tools), workers operate in a controlled environment that prevents system compromise.
+What I did not like in many agent setups was the default trust model: the same agent that sees your memory, instructions, and secrets can often also walk outside of your system and take unrestricted actions.
 
-### Why this matters
+It will be exposed to many sorts of attacks, like prompt injection, unsafe scripts, skills, websites that only purpose is to attack AI agents and get controll ower them. After the original OpenClaw release, the web became a much more dangerous place for AI agents.
 
-Modern AI agents frequently interact with untrusted data (web pages, APIs, generated code).
-Without isolation, a simple tool call (e.g. shell execution or remote fetch) can expose your system.
+This can lead to sensitive data exposure, identity theft, system compromise, and generally produce a lot of issues. 
 
-Octopal prevents this by design:
-workers cannot access your system, secrets, or filesystem unless explicitly allowed.
+Octopal tries to make that simpler and safer to reason about.
+
+- Octo is the brain that plans and decides
+- Workers do the risky part: tools, shell, files, web, and external actions
+- Workers use Docker by default, so they do not start with full access to your machine
+- If a worker needs files from your main workspace, you share only the paths it actually needs
+
+Why this is better in practice:
+
+- It is easier to trust, because the agent doing the work is not automatically sitting on top of your whole machine
+- It is easier to understand, because there is a clear line between thinking and acting
+- It is easier to control, because file access is shared deliberately instead of being wide open by default
+
+OpenClaw and Hermes Agent both support sandboxed/containerized execution, but their documented defaults still allow host-side execution in common setups. Octopal takes the opposite approach: isolation first, host-style execution only as a fallback.
+
+NanoClaw goes in a different direction and keeps the whole system much smaller. That is a good trade if you want the leanest possible setup. Octopal is broader on purpose: memory, worker templates, channels, MCP, skills, recurring tasks, and a private gateway/dashboard all live in one runtime.
+
+## 🔒 Security Model
+
+Octopal is designed so the coordinator keeps the sensitive context and workers handle execution.
+
+- Docker is the default worker runtime
+- Workers keep their own private scratch workspace by default
+- Sharing files from Octo's main workspace requires explicit `allowed_paths`
+- Dashboard and dashboard APIs can be protected with a token and exposed remotely through Tailscale
+
+### Why Docker workers
+
+Docker is not here just for packaging. In Octopal, it is the default execution boundary.
+
+Workers routinely touch untrusted inputs: web pages, external APIs, generated code, shell commands, and third-party tools. Running that work in a disposable container is a stronger default than letting the same long-lived process that holds your memory and policy also execute everything directly on the host.
+
+It also makes the runtime easier to reason about across macOS, Linux, and Windows: the worker environment is explicit, rebuildable, and separate from your main Octo process.
 
 ## 🪛 What It Can Do
 
