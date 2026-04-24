@@ -226,8 +226,11 @@ class SchedulerService:
         actionable = []
 
         for task in all_tasks:
-            if self._should_run(task, now):
-                actionable.append(self._normalize_task_record(task))
+            normalized = self._normalize_task_record(task)
+            if not bool(normalized.get("dispatch_ready")):
+                continue
+            if self._should_run(normalized, now):
+                actionable.append(normalized)
 
         return actionable
 
@@ -432,6 +435,9 @@ class SchedulerService:
 
     def _dispatch_readiness(self, task: dict[str, Any]) -> tuple[bool, str | None]:
         execution_mode = str(task.get("execution_mode") or "").strip().lower()
+        suggested_execution_mode = str(task.get("suggested_execution_mode") or "").strip().lower()
+        if execution_mode == "octo_control" and suggested_execution_mode == "worker":
+            return False, str(task.get("blocked_reason") or "").strip() or "blocked_by_route"
         blocked_until_value = str(task.get("blocked_until") or "").strip()
         if blocked_until_value:
             try:
@@ -454,7 +460,11 @@ class SchedulerService:
         return True, None
 
     def _build_task_preview(self, task: dict[str, Any], now: datetime) -> dict[str, Any]:
-        due_now = bool(int(task.get("enabled", 1)) == 1 and self._should_run(task, now))
+        due_now = bool(
+            int(task.get("enabled", 1)) == 1
+            and bool(task.get("dispatch_ready", True))
+            and self._should_run(task, now)
+        )
         next_run_at = self._estimate_next_run(task, now)
         last_run_at = task.get("last_run_at")
         overdue = False
