@@ -4,8 +4,10 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import time
 import uuid
+from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -39,16 +41,15 @@ def remove_tree_with_retries(
     *,
     retries: int = 6,
     base_delay_seconds: float = 0.25,
+    docker_cleanup_image: str | None = None,
 ) -> bool:
     """Remove a directory tree with Windows-friendly retry behavior."""
     if not path.exists():
         return True
 
     def _onerror(func, value, exc_info) -> None:
-        try:
+        with suppress(OSError):
             os.chmod(value, stat.S_IWRITE | stat.S_IREAD | stat.S_IEXEC)
-        except OSError:
-            pass
         func(value)
 
     for attempt in range(1, max(1, retries) + 1):
@@ -59,20 +60,78 @@ def remove_tree_with_retries(
             return True
         except PermissionError:
             if attempt == retries:
-                return False
+                break
             time.sleep(base_delay_seconds * attempt)
         except OSError:
             if attempt == retries:
-                return False
+                break
             time.sleep(base_delay_seconds * attempt)
 
+    if docker_cleanup_image and _remove_tree_contents_with_docker(
+        path,
+        image=docker_cleanup_image,
+    ):
+        try:
+            shutil.rmtree(path, onerror=_onerror)
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            pass
+
     return not path.exists()
+
+
+def _remove_tree_contents_with_docker(path: Path, *, image: str) -> bool:
+    """Best-effort cleanup for root-owned files Docker created in a bind mount."""
+    if os.name == "nt":
+        return False
+    image = str(image or "").strip()
+    if not image or not path.exists():
+        return False
+    docker = shutil.which("docker")
+    if not docker:
+        return False
+
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError:
+        return False
+
+    command = (
+        "import pathlib, shutil; "
+        "p=pathlib.Path('/cleanup'); "
+        "[shutil.rmtree(x) if x.is_dir() and not x.is_symlink() else x.unlink() "
+        "for x in p.iterdir()]"
+    )
+    try:
+        completed = subprocess.run(
+            [
+                docker,
+                "run",
+                "--rm",
+                "-v",
+                f"{resolved}:/cleanup",
+                image,
+                "python",
+                "-c",
+                command,
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=60,
+        )
+    except Exception:
+        return False
+    return completed.returncode == 0
 
 
 def cleanup_ephemeral_worker_dirs(
     workspace_dir: Path,
     *,
     retention_minutes: int,
+    docker_cleanup_image: str | None = None,
 ) -> WorkerDirCleanupResult:
     result = WorkerDirCleanupResult()
     workers_dir = workspace_dir / "workers"
@@ -97,7 +156,10 @@ def cleanup_ephemeral_worker_dirs(
         if modified >= cutoff:
             continue
 
-        if remove_tree_with_retries(worker_dir):
+        if remove_tree_with_retries(
+            worker_dir,
+            docker_cleanup_image=docker_cleanup_image,
+        ):
             result.deleted_dirs += 1
         else:
             result.errors += 1
@@ -123,7 +185,9 @@ def cleanup_workspace_tmp(workspace_dir: Path, *, retention_hours: int) -> TmpCl
             result.errors += 1
 
     # Remove empty directories deepest-first.
-    for directory in sorted([p for p in tmp_dir.rglob("*") if p.is_dir()], key=lambda p: len(p.parts), reverse=True):
+    for directory in sorted(
+        [p for p in tmp_dir.rglob("*") if p.is_dir()], key=lambda p: len(p.parts), reverse=True
+    ):
         try:
             next(directory.iterdir())
         except StopIteration:

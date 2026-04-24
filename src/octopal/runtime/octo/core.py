@@ -65,19 +65,19 @@ from octopal.runtime.octo.router import (
     _complete_text,
     build_forced_worker_followup,
     normalize_plain_text,
-    route_internal_maintenance,
     route_heartbeat,
+    route_internal_maintenance,
     route_or_reply,
-    route_scheduler_tick,
     route_scheduled_octo_control,
+    route_scheduler_tick,
     route_worker_results_back_to_octo,
     should_force_worker_followup,
 )
 from octopal.runtime.policy.engine import PolicyEngine
 from octopal.runtime.scheduler.service import (
     SCHEDULED_TASK_BLOCKED_REASON_KEY,
-    SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY,
     SCHEDULED_TASK_BLOCKED_UNTIL_KEY,
+    SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY,
     SchedulerService,
     normalize_notify_user_policy,
     parse_scheduled_task_blocked_until,
@@ -1658,6 +1658,7 @@ class Octo:
                     cleanup_ephemeral_worker_dirs,
                     self.canon.workspace_dir,
                     retention_minutes=int(cfg.get("worker_dir_retention_minutes", 15)),
+                    docker_cleanup_image=getattr(self.runtime.launcher, "image", None),
                 )
                 if worker_result.deleted_dirs or worker_result.errors:
                     logger.info(
@@ -1753,9 +1754,7 @@ class Octo:
                 dispatch_summary.get("rejected_by_policy") or 0
             )
             payload["last_dispatch_errors"] = int(dispatch_summary.get("errors") or 0)
-            payload["last_policy_reasons"] = dict(
-                dispatch_summary.get("policy_reasons") or {}
-            )
+            payload["last_policy_reasons"] = dict(dispatch_summary.get("policy_reasons") or {})
         update_component_gauges("scheduler", payload)
 
     async def _run_scheduler_tick_once(self, *, chat_id: int = 0, max_tasks: int = 10) -> None:
@@ -1797,9 +1796,7 @@ class Octo:
                     "dispatch_rejected_by_policy": int(
                         dispatch_summary.get("rejected_by_policy") or 0
                     ),
-                    "dispatch_policy_reasons": dict(
-                        dispatch_summary.get("policy_reasons") or {}
-                    ),
+                    "dispatch_policy_reasons": dict(dispatch_summary.get("policy_reasons") or {}),
                     "dispatch_errors": int(dispatch_summary.get("errors") or 0),
                 }
             )
@@ -1811,9 +1808,9 @@ class Octo:
             counters["completed_total"] = int(counters.get("completed_total", 0) or 0) + int(
                 dispatch_summary.get("completed") or 0
             )
-            counters["duplicates_total"] = int(
-                counters.get("duplicates_total", 0) or 0
-            ) + int(dispatch_summary.get("duplicates") or 0)
+            counters["duplicates_total"] = int(counters.get("duplicates_total", 0) or 0) + int(
+                dispatch_summary.get("duplicates") or 0
+            )
             counters["rejected_by_policy_total"] = int(
                 counters.get("rejected_by_policy_total", 0) or 0
             ) + int(dispatch_summary.get("rejected_by_policy") or 0)
@@ -1940,7 +1937,9 @@ class Octo:
                 reason=None,
             )
             return None
-        reason = str(metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY) or "").strip() or "blocked_by_route"
+        reason = (
+            str(metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY) or "").strip() or "blocked_by_route"
+        )
         return remaining, reason
 
     def _update_scheduled_octo_control_backoff_metadata(
@@ -1958,7 +1957,9 @@ class Octo:
         task_id = str(task.get("id") or "").strip()
         if not task_id:
             return
-        metadata = dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
+        metadata = (
+            dict(task.get("metadata") or {}) if isinstance(task.get("metadata"), dict) else {}
+        )
         if blocked_until is None:
             metadata.pop(SCHEDULED_TASK_BLOCKED_UNTIL_KEY, None)
         else:
@@ -2123,7 +2124,8 @@ class Octo:
             self._set_scheduled_octo_control_backoff(task_id, reason="blocked_by_route")
             self._update_scheduled_octo_control_backoff_metadata(
                 task,
-                blocked_until=utc_now() + timedelta(seconds=_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS),
+                blocked_until=utc_now()
+                + timedelta(seconds=_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS),
                 reason="blocked_by_route",
             )
             logger.warning(
