@@ -363,6 +363,80 @@ def test_describe_tasks_marks_blocked_octo_control_backoff(tmp_path: Path) -> No
     assert described[0]["blocked_until"] == blocked_until.isoformat()
     assert described[0]["blocked_reason"] == "blocked_by_route"
     assert described[0]["suggested_execution_mode"] == "worker"
+    assert described[0]["due_now"] is False
+
+
+def test_get_actionable_tasks_excludes_blocked_octo_control_backoff(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "weather_check",
+                    "name": "Weather Check",
+                    "description": "Check weather",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": None,
+                    "task_text": "Check the weather",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps(
+                        {
+                            "notify_user": "never",
+                            "execution_mode": "octo_control",
+                            "blocked_until": blocked_until.isoformat(),
+                            "blocked_reason": "blocked_by_route",
+                        }
+                    ),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=tmp_path,
+    )
+
+    assert scheduler.get_actionable_tasks() == []
+
+
+def test_route_blocked_octo_control_stays_not_ready_after_backoff_expires(
+    tmp_path: Path,
+) -> None:
+    blocked_until = utc_now() - timedelta(minutes=1)
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "weather_check",
+                    "name": "Weather Check",
+                    "description": "Check weather",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": None,
+                    "task_text": "Check the weather",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps(
+                        {
+                            "notify_user": "never",
+                            "execution_mode": "octo_control",
+                            "blocked_until": blocked_until.isoformat(),
+                            "blocked_reason": "blocked_by_route",
+                            "suggested_execution_mode": "worker",
+                        }
+                    ),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=tmp_path,
+    )
+
+    described = scheduler.describe_tasks(enabled_only=True)
+
+    assert scheduler.get_actionable_tasks() == []
+    assert described[0]["dispatch_ready"] is False
+    assert described[0]["dispatch_policy_reason"] == "blocked_by_route"
+    assert described[0]["suggested_execution_mode"] == "worker"
+    assert described[0]["due_now"] is False
 
 
 def test_scheduler_sync_to_markdown_shows_suggested_execution_mode_for_blocked_tasks(tmp_path: Path) -> None:
@@ -432,6 +506,7 @@ def test_scheduler_status_reports_suggested_execution_mode_for_blocked_tasks(tmp
     assert payload["tasks"][0]["dispatch_ready"] is False
     assert payload["tasks"][0]["dispatch_policy_reason"] == "blocked_by_route"
     assert payload["tasks"][0]["suggested_execution_mode"] == "worker"
+    assert payload["due_count"] == 0
     assert any("suggested execution mode" in hint for hint in payload["hints"])
 
 
@@ -998,7 +1073,7 @@ async def test_octo_dispatch_due_scheduled_tasks_backs_off_blocked_octo_control_
         "errors": 1,
     }
     assert second_summary == {
-        "due_count": 1,
+        "due_count": 0,
         "attempted": 0,
         "started": 0,
         "completed": 0,
@@ -1072,7 +1147,7 @@ async def test_octo_dispatch_due_scheduled_tasks_skips_persisted_octo_control_ba
     summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
 
     assert summary == {
-        "due_count": 1,
+        "due_count": 0,
         "attempted": 0,
         "started": 0,
         "completed": 0,
