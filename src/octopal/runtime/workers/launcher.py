@@ -83,6 +83,7 @@ class DockerLauncher:
         container_env = _filter_container_env(env, worker_workspace=container_worker_dir)
         for key, value in container_env.items():
             cmd_args.extend(["-e", f"{key}={value}"])
+        cmd_args.extend(["-e", f"HOME={container_worker_dir}"])
 
         host_ws_path = Path(self.host_workspace).resolve()
         seen_mounts: set[tuple[str, str]] = set()
