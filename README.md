@@ -1,5 +1,5 @@
 <p align="center">
-   <img src="https://github.com/pmbstyle/OctoPal/blob/main/logo.png?raw=true" width="500" alt="Octapal"/>
+   <img src="https://github.com/pmbstyle/OctoPal/blob/main/logo.png?raw=true" alt="Octapal"/>
 </p>
 
 <p align="center">
