@@ -19,6 +19,8 @@ _EVERY_HOURS_RE = re.compile(r"^every\s+(\d+)\s+hours?$", re.IGNORECASE)
 _DAILY_AT_RE = re.compile(r"^daily\s+at\s+(\d{1,2}):(\d{2})$", re.IGNORECASE)
 _NOTIFY_USER_POLICIES = {"never", "if_significant", "always"}
 _EXECUTION_MODES = {"worker", "octo_control"}
+SCHEDULED_TASK_DELIVERY_CHAT_ID_KEY = "delivery_chat_id"
+SCHEDULED_TASK_TARGET_CHAT_ID_KEY = "target_chat_id"
 SCHEDULED_TASK_BLOCKED_UNTIL_KEY = "blocked_until"
 SCHEDULED_TASK_BLOCKED_REASON_KEY = "blocked_reason"
 SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY = "suggested_execution_mode"
@@ -278,6 +280,8 @@ class SchedulerService:
             lines.append(f"- **Frequency**: {t['frequency']}")
             normalized = self._normalize_task_record(t)
             lines.append(f"- **Notify user**: {normalized['notify_user']}")
+            if normalized.get("delivery_chat_id"):
+                lines.append(f"- **Delivery chat**: {normalized['delivery_chat_id']}")
             lines.append(f"- **Execution mode**: {normalized['execution_mode']}")
             dispatch_line = "ready"
             if not bool(normalized.get("dispatch_ready")):
@@ -416,6 +420,14 @@ class SchedulerService:
             )
         if normalized["execution_mode"] == "octo_control" and normalized["notify_user"] == "if_significant":
             normalized["notify_user"] = "never"
+        normalized["delivery_chat_id"] = (
+            str(
+                metadata.get(SCHEDULED_TASK_DELIVERY_CHAT_ID_KEY)
+                or metadata.get(SCHEDULED_TASK_TARGET_CHAT_ID_KEY)
+                or ""
+            ).strip()
+            or None
+        )
         blocked_until = parse_scheduled_task_blocked_until(metadata)
         blocked_reason = str(metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY) or "").strip() or None
         suggested_execution_mode = parse_scheduled_task_suggested_execution_mode(metadata)

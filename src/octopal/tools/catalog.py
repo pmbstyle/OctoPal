@@ -1649,6 +1649,7 @@ async def _tool_check_schedule(args, ctx) -> str:
                 "inputs": t.get("inputs") if isinstance(t.get("inputs"), dict) else {},
                 "last_run_at": t.get("last_run_at"),
                 "notify_user": t.get("notify_user"),
+                "delivery_chat_id": t.get("delivery_chat_id"),
                 "dispatch_ready": bool(t.get("dispatch_ready")),
                 "dispatch_policy_reason": t.get("dispatch_policy_reason"),
                 "suggested_execution_mode": t.get("suggested_execution_mode"),
