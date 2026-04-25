@@ -77,7 +77,9 @@ from octopal.runtime.policy.engine import PolicyEngine
 from octopal.runtime.scheduler.service import (
     SCHEDULED_TASK_BLOCKED_REASON_KEY,
     SCHEDULED_TASK_BLOCKED_UNTIL_KEY,
+    SCHEDULED_TASK_DELIVERY_CHAT_ID_KEY,
     SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY,
+    SCHEDULED_TASK_TARGET_CHAT_ID_KEY,
     SchedulerService,
     normalize_notify_user_policy,
     parse_scheduled_task_blocked_until,
@@ -621,6 +623,14 @@ def _empty_scheduler_metric_counters() -> dict[str, int]:
         "rejected_by_policy_total": 0,
         "errors_total": 0,
     }
+
+
+def _coerce_positive_chat_id(value: Any) -> int | None:
+    try:
+        chat_id = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return chat_id if chat_id > 0 else None
 
 
 async def _followup_worker(chat_id: int, queue: asyncio.Queue) -> None:
@@ -1393,6 +1403,7 @@ class Octo:
     _tg_progress: callable | None = None
     _tg_worker_event: callable | None = None
     _tg_typing: callable | None = None
+    _scheduled_delivery_chat_ids: list[int] | None = None
     _spawn_limits: dict[str, int] | None = None
     _worker_children: dict[str, set[str]] | None = None
     _worker_lineage: dict[str, str] | None = None
@@ -1429,6 +1440,8 @@ class Octo:
             self._recent_tasks = {}
         if self._approval_requesters is None:
             self._approval_requesters = {}
+        if self._scheduled_delivery_chat_ids is None:
+            self._scheduled_delivery_chat_ids = []
         if self._worker_children is None:
             self._worker_children = {}
         if self._worker_lineage is None:
@@ -1986,6 +1999,40 @@ class Octo:
         task["blocked_reason"] = metadata.get(SCHEDULED_TASK_BLOCKED_REASON_KEY)
         task["suggested_execution_mode"] = metadata.get(SCHEDULED_TASK_SUGGESTED_EXECUTION_MODE_KEY)
 
+    def _resolve_scheduled_task_delivery_chat_id(
+        self,
+        task: dict[str, Any],
+        *,
+        requested_chat_id: int = 0,
+    ) -> tuple[int | None, str]:
+        notify_user = normalize_notify_user_policy(task.get("notify_user"))
+        if notify_user == "never":
+            return 0, "notify_never"
+
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        explicit = _coerce_positive_chat_id(
+            task.get("delivery_chat_id")
+            or metadata.get(SCHEDULED_TASK_DELIVERY_CHAT_ID_KEY)
+            or metadata.get(SCHEDULED_TASK_TARGET_CHAT_ID_KEY)
+        )
+        if explicit is not None:
+            return explicit, "task_metadata"
+
+        requested = _coerce_positive_chat_id(requested_chat_id)
+        if requested is not None:
+            return requested, "request_context"
+
+        configured = [
+            chat_id
+            for item in (self._scheduled_delivery_chat_ids or [])
+            if (chat_id := _coerce_positive_chat_id(item)) is not None
+        ]
+        unique_configured = list(dict.fromkeys(configured))
+        if len(unique_configured) == 1:
+            return unique_configured[0], "single_configured_recipient"
+
+        return None, "missing_delivery_target"
+
     async def _dispatch_due_scheduled_tasks_once(
         self,
         *,
@@ -2014,6 +2061,23 @@ class Octo:
             worker_id = str(task.get("worker_id") or "").strip()
             task_text = str(task.get("task_text") or "").strip()
             inputs = task.get("inputs") if isinstance(task.get("inputs"), dict) else {}
+            dispatch_chat_id, delivery_target_source = self._resolve_scheduled_task_delivery_chat_id(
+                task,
+                requested_chat_id=chat_id,
+            )
+            if dispatch_chat_id is None:
+                summary["rejected_by_policy"] += 1
+                reason = "missing_delivery_target"
+                policy_reasons = summary.setdefault("policy_reasons", {})
+                if isinstance(policy_reasons, dict):
+                    policy_reasons[reason] = int(policy_reasons.get(reason, 0) or 0) + 1
+                logger.warning(
+                    "Rejected scheduled task by delivery policy",
+                    task_id=task_id or None,
+                    notify_user=task.get("notify_user"),
+                    delivery_target_source=delivery_target_source,
+                )
+                continue
             if execution_mode == "octo_control":
                 persisted_backoff = self._get_persisted_scheduled_octo_control_backoff(task)
                 if persisted_backoff is not None:
@@ -2021,7 +2085,7 @@ class Octo:
                     logger.info(
                         "Skipping scheduled Octo control task during persisted backoff",
                         task_id=task_id or None,
-                        chat_id=chat_id,
+                        chat_id=dispatch_chat_id,
                         backoff_reason=backoff_reason,
                         cooldown_seconds=round(remaining_seconds, 1),
                     )
@@ -2032,7 +2096,7 @@ class Octo:
                     logger.info(
                         "Skipping scheduled Octo control task during runtime backoff",
                         task_id=task_id or None,
-                        chat_id=chat_id,
+                        chat_id=dispatch_chat_id,
                         backoff_reason=backoff_reason,
                         cooldown_seconds=round(remaining_seconds, 1),
                     )
@@ -2041,7 +2105,7 @@ class Octo:
                 try:
                     result = await self._run_scheduled_octo_control_task_once(
                         task=task,
-                        chat_id=chat_id,
+                        chat_id=dispatch_chat_id,
                     )
                 except Exception:
                     summary["errors"] += 1
@@ -2075,7 +2139,7 @@ class Octo:
                 result = await self._start_worker_async(
                     worker_id=worker_id,
                     task=task_text,
-                    chat_id=chat_id,
+                    chat_id=dispatch_chat_id,
                     inputs=inputs,
                     tools=None,
                     model=None,
@@ -2413,7 +2477,12 @@ class Octo:
             "Then produce a short friendly startup status message for the user in plain language."
         )
         original_send = self.internal_send
-        chat_ids = allowed_chat_ids or []
+        chat_ids = [
+            chat_id
+            for item in (allowed_chat_ids or [])
+            if (chat_id := _coerce_positive_chat_id(item)) is not None
+        ]
+        self._scheduled_delivery_chat_ids = list(chat_ids)
         if chat_ids and (bot or callable(original_send)):
             logger.info("Octo will send initialization message", count=len(chat_ids))
             logger.debug("Allowed chat_ids", chat_ids=chat_ids)

@@ -835,7 +835,7 @@ async def test_octo_dispatch_due_scheduled_tasks_starts_dispatchable_workers(mon
                     "worker_id": "writer",
                     "task_text": "Generate digest",
                     "inputs_json": json.dumps({"section": "news"}),
-                    "metadata_json": json.dumps({"notify_user": "always"}),
+                    "metadata_json": json.dumps({"notify_user": "never"}),
                     "last_run_at": None,
                     "enabled": 1,
                 }
@@ -885,6 +885,168 @@ async def test_octo_dispatch_due_scheduled_tasks_starts_dispatchable_workers(mon
             "scheduled_task_id": "daily_digest",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_octo_dispatch_due_scheduled_tasks_targets_single_configured_chat(monkeypatch):
+    started_calls = []
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "daily_digest",
+                    "name": "Daily Digest",
+                    "description": "Build digest",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": "writer",
+                    "task_text": "Generate digest",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps(
+                        {"notify_user": "if_significant", "execution_mode": "worker"}
+                    ),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+
+    async def _start_worker_async(self, **kwargs):
+        started_calls.append(kwargs)
+        return {"status": "started", "run_id": "run-1", "worker_id": "run-1"}
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+    )
+    octo._scheduled_delivery_chat_ids = [123]
+
+    summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
+
+    assert summary["started"] == 1
+    assert summary["rejected_by_policy"] == 0
+    assert started_calls[0]["chat_id"] == 123
+    assert started_calls[0]["scheduled_task_id"] == "daily_digest"
+
+
+@pytest.mark.asyncio
+async def test_octo_dispatch_due_scheduled_tasks_uses_explicit_delivery_chat(monkeypatch):
+    started_calls = []
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "daily_digest",
+                    "name": "Daily Digest",
+                    "description": "Build digest",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": "writer",
+                    "task_text": "Generate digest",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps(
+                        {
+                            "notify_user": "always",
+                            "execution_mode": "worker",
+                            "delivery_chat_id": "456",
+                        }
+                    ),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+
+    async def _start_worker_async(self, **kwargs):
+        started_calls.append(kwargs)
+        return {"status": "started", "run_id": "run-1", "worker_id": "run-1"}
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+    )
+    octo._scheduled_delivery_chat_ids = [123]
+
+    summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
+
+    assert summary["started"] == 1
+    assert started_calls[0]["chat_id"] == 456
+
+
+@pytest.mark.asyncio
+async def test_octo_dispatch_due_scheduled_tasks_rejects_user_visible_without_target(monkeypatch):
+    started_calls = []
+    scheduler = SchedulerService(
+        store=_StoreStub(
+            tasks=[
+                {
+                    "id": "daily_digest",
+                    "name": "Daily Digest",
+                    "description": "Build digest",
+                    "frequency": "Every 30 minutes",
+                    "worker_id": "writer",
+                    "task_text": "Generate digest",
+                    "inputs_json": "{}",
+                    "metadata_json": json.dumps(
+                        {"notify_user": "always", "execution_mode": "worker"}
+                    ),
+                    "last_run_at": None,
+                    "enabled": 1,
+                }
+            ]
+        ),
+        workspace_dir=Path("."),
+    )
+
+    async def _start_worker_async(self, **kwargs):
+        started_calls.append(kwargs)
+        return {"status": "started", "run_id": "run-1", "worker_id": "run-1"}
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=scheduler,
+    )
+    octo._scheduled_delivery_chat_ids = [123, 456]
+
+    summary = await octo._dispatch_due_scheduled_tasks_once(chat_id=0, max_tasks=5)
+
+    assert summary == {
+        "due_count": 1,
+        "attempted": 0,
+        "started": 0,
+        "completed": 0,
+        "duplicates": 0,
+        "rejected_by_policy": 1,
+        "policy_reasons": {"missing_delivery_target": 1},
+        "errors": 0,
+    }
+    assert started_calls == []
 
 
 @pytest.mark.asyncio
