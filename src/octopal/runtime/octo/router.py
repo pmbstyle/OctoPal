@@ -145,6 +145,7 @@ _INITIAL_OCTO_TOOL_NAMES = _ALWAYS_INCLUDE_TOOL_NAMES | {
     "mcp_discover",
 }
 _WORKER_FOLLOWUP_ALLOWED_TOOL_NAMES = {
+    "answer_worker_instruction",
     "get_worker_output_path",
     "manage_canon",
 }
@@ -1103,7 +1104,7 @@ async def route_worker_results_back_to_octo(
     chat_id: int,
     worker_results: list[tuple[str, WorkerResult] | tuple[str, str, WorkerResult]],
 ) -> str:
-    """Decide on one combined follow-up after one or more workers complete."""
+    """Decide on one combined follow-up after one or more worker updates."""
     normalized_results = [_normalize_worker_result_entry(item) for item in worker_results]
     payload_json = json.dumps(
         [
@@ -1114,14 +1115,20 @@ async def route_worker_results_back_to_octo(
     )
 
     worker_result_prompt = (
-        "One or more workers completed for the same user request. You are in bounded worker-result "
-        "follow-up mode, not full orchestration mode. Decide whether the user needs one combined "
-        "follow-up now based on these payloads.\n"
+        "One or more worker updates arrived for the same user request. You are in bounded "
+        "worker-result follow-up mode, not full orchestration mode. Decide whether the update "
+        "needs an internal action or one combined user follow-up now based on these payloads.\n"
         "<worker_results>\n"
         f"{payload_json}\n"
         "</worker_results>\n\n"
         "Interpretation rules:\n"
         "- Each `summary` is internal worker/runtime text and is not user-facing by default.\n"
+        "- If a payload has `status=awaiting_instruction` or `output.instruction_request`, the "
+        "worker is paused waiting for guidance.\n"
+        "- For an awaiting-instruction payload, use `answer_worker_instruction` when you can answer "
+        "from current context. Then return exactly NO_USER_RESPONSE unless the user must see an update.\n"
+        "- If the instruction requires the user's decision, ask exactly one concise user-facing "
+        "question instead of answering the worker yourself.\n"
         "- Never forward transport/debug/auth/orchestration text to the user.\n"
         "- Only `artifact_summary.durable_paths` and `artifact_summary.primary_report_path` are safe "
         "to mention as file outputs for the user.\n"
@@ -1133,6 +1140,8 @@ async def route_worker_results_back_to_octo(
         "- Do not invent follow-up tool needs beyond the tools already exposed here.\n\n"
         "If any payload output is truncated and a payload includes `worker_id`, you may use "
         "`get_worker_output_path` for a specific dotted path lookup.\n"
+        "If a payload includes `instruction_request`, its `request_id` and `worker_id` are the values "
+        "to pass to `answer_worker_instruction`.\n"
         "If there are knowledge_proposals, review them and use `manage_canon` to save them if valid.\n"
         "If a user-facing response is required now, provide it in plain text.\n"
         "If no user-facing response is needed, return exactly: NO_USER_RESPONSE"
@@ -1291,6 +1300,7 @@ def _build_worker_result_payload(
     )
 
     payload = {
+        "status": result.status,
         "worker_id": worker_id,
         "task": task_text,
         "summary": result.summary,

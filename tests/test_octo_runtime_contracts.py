@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from octopal.runtime.octo.core import Octo
-from octopal.runtime.workers.contracts import WorkerResult
+from octopal.runtime.workers.contracts import WorkerInstructionRequest, WorkerResult, WorkerSpec
 
 
 def test_octo_output_channel_uses_owner_lease() -> None:
@@ -161,6 +161,97 @@ def test_octo_does_not_forward_worker_model_override(monkeypatch) -> None:
         assert runtime.captured_task_request is not None
 
     asyncio.run(scenario())
+
+
+def test_octo_routes_worker_instruction_request_immediately(monkeypatch) -> None:
+    class DummyMemory:
+        def __init__(self) -> None:
+            self.messages = []
+
+        async def add_message(self, role: str, text: str, metadata: dict):
+            self.messages.append((role, text, metadata))
+
+    class DummyStore:
+        def get_worker(self, worker_id: str):
+            return None
+
+    import octopal.runtime.octo.core as octo_core
+
+    chat_id = 919191
+    octo_core._INTERNAL_QUEUES.pop(chat_id, None)
+    task = octo_core._INTERNAL_TASKS.pop(chat_id, None)
+    if task and not task.done():
+        task.cancel()
+
+    routed = []
+
+    async def fake_route(octo, chat_id_arg: int, worker_results):
+        routed.append((chat_id_arg, worker_results))
+        return "NO_USER_RESPONSE"
+
+    monkeypatch.setattr(octo_core, "_QUEUE_IDLE_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(octo_core, "route_worker_results_back_to_octo", fake_route)
+
+    octo = Octo(
+        provider=object(),
+        store=DummyStore(),
+        policy=object(),
+        runtime=object(),
+        approvals=object(),
+        memory=DummyMemory(),
+        canon=object(),
+    )
+    octo.register_worker_chat("worker-1", chat_id)
+    octo.register_worker_correlation("worker-1", "corr-1")
+    request = WorkerInstructionRequest(
+        request_id="req-1",
+        worker_id="worker-1",
+        target="octo",
+        question="Should I continue?",
+        context={"reason": "blocked"},
+        timeout_seconds=120,
+        created_at=datetime(2026, 4, 18, 12, 0, 0, tzinfo=UTC),
+    )
+    spec = WorkerSpec(
+        id="worker-1",
+        template_id="researcher",
+        task="research",
+        inputs={},
+        system_prompt="s",
+        available_tools=[],
+        granted_capabilities=[],
+        timeout_seconds=30,
+        max_thinking_steps=5,
+        correlation_id="corr-1",
+    )
+
+    async def scenario() -> None:
+        await octo.handle_worker_instruction_request(spec=spec, request=request)
+        for _ in range(20):
+            if routed:
+                break
+            await asyncio.sleep(0.01)
+        assert routed
+        task = octo_core._INTERNAL_TASKS.get(chat_id)
+        if task:
+            await asyncio.wait_for(task, timeout=0.2)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        task = octo_core._INTERNAL_TASKS.pop(chat_id, None)
+        if task and not task.done():
+            task.cancel()
+        octo_core._INTERNAL_QUEUES.pop(chat_id, None)
+
+    routed_chat_id, worker_results = routed[0]
+    assert routed_chat_id == chat_id
+    worker_id, task_text, result = worker_results[0]
+    assert worker_id == "worker-1"
+    assert task_text == "research"
+    assert result.status == "awaiting_instruction"
+    assert result.output["instruction_request"]["request_id"] == "req-1"
+    assert octo.has_active_workers_for_correlation("corr-1")
 
 
 def test_octo_handle_message_preserves_react_tag_for_channels(monkeypatch) -> None:

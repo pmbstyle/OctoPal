@@ -19,8 +19,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from octopal.channels import normalize_user_channel, user_channel_label
 from octopal.infrastructure.config.models import (
     GatewayConfig,
-    LLMConfig,
     LiteLLMRuntimeConfig,
+    LLMConfig,
     MemoryConfig,
     OctopalConfig,
     SearchConfig,
@@ -29,7 +29,12 @@ from octopal.infrastructure.config.models import (
     WhatsAppConfig,
     WorkerRuntimeConfig,
 )
-from octopal.infrastructure.config.settings import Settings, _sync_settings_from_config, load_config, save_config
+from octopal.infrastructure.config.settings import (
+    Settings,
+    _sync_settings_from_config,
+    load_config,
+    save_config,
+)
 from octopal.infrastructure.providers.catalog import list_provider_catalog
 from octopal.infrastructure.store.models import AuditEvent, WorkerRecord, WorkerTemplateRecord
 from octopal.infrastructure.store.sqlite import SQLiteStore
@@ -1192,14 +1197,17 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
     by_status: dict[str, int] = {}
     for worker in active_workers:
         by_status[worker.status] = by_status.get(worker.status, 0) + 1
-    running_nodes = [w for w in active_workers if w.status in {"started", "running"}]
+    running_nodes = [
+        w
+        for w in active_workers
+        if w.status in {"started", "running", "waiting_for_children", "awaiting_instruction"}
+    ]
     root_running = sum(1 for w in running_nodes if not w.parent_worker_id)
     subworkers_running = sum(1 for w in running_nodes if bool(w.parent_worker_id))
 
     octo_status = build_octo_status(octo_metrics)
     followup_q = int(octo_status["followup_queues"])
     internal_q = int(octo_status["internal_queues"])
-    thinking_count = int(octo_status["thinking_count"])
     octo_state = str(octo_status["state"])
 
     requests = _read_jsonl(settings.state_dir / "control_requests.jsonl")
@@ -1214,7 +1222,12 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
     log_health = _compute_log_health(log_path, now, window_minutes=filters.window_minutes, filters=filters)
     latency_p95_ms = _estimate_control_latency_p95_ms(requests, acks)
     queue_depth = followup_q + internal_q + int(channel_metrics.get("queue_depth", 0) or 0) + len(pending_requests)
-    active_workers_kpi = by_status.get("running", 0) + by_status.get("started", 0)
+    active_workers_kpi = (
+        by_status.get("running", 0)
+        + by_status.get("started", 0)
+        + by_status.get("waiting_for_children", 0)
+        + by_status.get("awaiting_instruction", 0)
+    )
     mcp_servers = connectivity_metrics.get("mcp_servers", {})
 
     services_all = _build_service_health(
@@ -1318,7 +1331,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         },
         "workers": {
             "spawned_24h": spawned_24h,
-            "running": by_status.get("running", 0) + by_status.get("started", 0),
+            "running": active_workers_kpi,
             "root_running": root_running,
             "subworkers_running": subworkers_running,
             "completed": by_status.get("completed", 0),

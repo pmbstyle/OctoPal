@@ -42,6 +42,8 @@ def test_http_get_builds_expected_intent_request() -> None:
 def test_valid_message_types_exposes_expected_protocol_surface() -> None:
     assert "await_children" in VALID_MESSAGE_TYPES
     assert "resume_children" in VALID_MESSAGE_TYPES
+    assert "instruction_request" in VALID_MESSAGE_TYPES
+    assert "resume_instruction" in VALID_MESSAGE_TYPES
     assert "intent_request" in VALID_MESSAGE_TYPES
     assert "octo_tool_result" in VALID_MESSAGE_TYPES
     assert "shutdown" in VALID_MESSAGE_TYPES
@@ -89,7 +91,18 @@ def test_worker_log_and_complete_emit_expected_messages(monkeypatch) -> None:
 
     assert sent == [
         {"type": "log", "level": "info", "message": "hello"},
-        {"type": "result", "result": {"status": "completed", "summary": "done", "output": {"ok": True}, "questions": [], "knowledge_proposals": [], "thinking_steps": 0, "tools_used": []}},
+        {
+            "type": "result",
+            "result": {
+                "status": "completed",
+                "summary": "done",
+                "output": {"ok": True},
+                "questions": [],
+                "knowledge_proposals": [],
+                "thinking_steps": 0,
+                "tools_used": [],
+            },
+        },
     ]
 
 
@@ -103,7 +116,9 @@ def test_worker_add_proposal_records_structured_knowledge() -> None:
     assert worker.knowledge_proposals[0].content == "Service health is green"
 
 
-def test_worker_await_children_emits_suspend_request_and_returns_resume_payload(monkeypatch) -> None:
+def test_worker_await_children_emits_suspend_request_and_returns_resume_payload(
+    monkeypatch,
+) -> None:
     worker = _worker()
     sent: list[dict] = []
 
@@ -130,6 +145,44 @@ def test_worker_await_children_emits_suspend_request_and_returns_resume_payload(
     assert payload["completed"][0]["worker_id"] == "child-1"
 
 
+def test_worker_request_instruction_emits_request_and_returns_resume_payload(monkeypatch) -> None:
+    worker = _worker()
+    sent: list[dict] = []
+    request_id = ""
+
+    async def _fake_write_message(payload: dict) -> None:
+        nonlocal request_id
+        sent.append(payload)
+        request_id = str(payload["request_id"])
+
+    async def _fake_read_message() -> dict:
+        return {
+            "type": "resume_instruction",
+            "request_id": request_id,
+            "status": "answered",
+            "instruction": "Use the narrow path.",
+        }
+
+    monkeypatch.setattr(worker, "_write_message", _fake_write_message)
+    monkeypatch.setattr(worker, "_read_message", _fake_read_message)
+
+    payload = asyncio.run(
+        worker.request_instruction(
+            question="Which path?",
+            context={"paths": ["narrow", "broad"]},
+            target="parent",
+            timeout_seconds=45,
+        )
+    )
+
+    assert sent[0]["type"] == "instruction_request"
+    assert sent[0]["target"] == "parent"
+    assert sent[0]["question"] == "Which path?"
+    assert sent[0]["timeout_seconds"] == 45
+    assert payload["status"] == "answered"
+    assert payload["instruction"] == "Use the narrow path."
+
+
 def test_worker_request_intent_returns_permit_when_hash_matches(monkeypatch) -> None:
     worker = _worker()
     sent: list[dict] = []
@@ -146,7 +199,11 @@ def test_worker_request_intent_returns_permit_when_hash_matches(monkeypatch) -> 
                 "intent_id": "intent-1",
                 "intent_type": "http.get",
                 "worker_id": "writer",
-                "payload_hash": worker._hash_payload({"url": "https://example.com"}) if hasattr(worker, "_hash_payload") else None,
+                "payload_hash": (
+                    worker._hash_payload({"url": "https://example.com"})
+                    if hasattr(worker, "_hash_payload")
+                    else None
+                ),
                 "expires_at": (datetime.now(UTC) + timedelta(minutes=5)).isoformat(),
                 "one_time": True,
                 "consumed": False,
@@ -175,7 +232,12 @@ def test_worker_request_intent_returns_permit_when_hash_matches(monkeypatch) -> 
 
     permit = asyncio.run(worker.request_intent(request))
 
-    assert sent == [{"type": "intent_request", "intent": {"type": "http.get", "payload": {"url": "https://example.com"}}}]
+    assert sent == [
+        {
+            "type": "intent_request",
+            "intent": {"type": "http.get", "payload": {"url": "https://example.com"}},
+        }
+    ]
     assert permit.id == "permit-1"
     assert permit.worker_id == "writer"
 

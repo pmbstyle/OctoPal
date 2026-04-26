@@ -11,6 +11,8 @@ VALID_MESSAGE_TYPES = {
     "error",
     "await_children",
     "resume_children",
+    "instruction_request",
+    "resume_instruction",
     "result",
     "permit",
     "permit_denied",

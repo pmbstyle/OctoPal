@@ -10,6 +10,7 @@ from octopal.infrastructure.config.models import LLMConfig
 
 class WorkerTemplate(BaseModel):
     """Pre-defined worker agent with system prompt and tools."""
+
     model_config = ConfigDict(frozen=True)
 
     id: str
@@ -29,6 +30,7 @@ class WorkerTemplate(BaseModel):
 
 class TaskRequest(BaseModel):
     """Task from Octo to worker."""
+
     model_config = ConfigDict(frozen=True)
 
     worker_id: str  # Which worker template to use
@@ -47,6 +49,7 @@ class TaskRequest(BaseModel):
 
 class WorkerSpec(BaseModel):
     """Simplified worker specification for runtime."""
+
     model_config = ConfigDict(frozen=True)
 
     id: str
@@ -75,6 +78,7 @@ class WorkerSpec(BaseModel):
 
 class KnowledgeProposal(BaseModel):
     """Proposal for canonical memory."""
+
     model_config = ConfigDict(frozen=True)
 
     category: str  # "fact", "decision", "failure"
@@ -83,15 +87,28 @@ class KnowledgeProposal(BaseModel):
 
 class WorkerResult(BaseModel):
     """Worker result with optional questions for Octo."""
+
     model_config = ConfigDict(frozen=True)
 
-    status: Literal["completed", "failed"] = "completed"
+    status: Literal["completed", "failed", "awaiting_instruction"] = "completed"
     summary: str
     output: dict[str, Any] | None = None
     questions: list[str] = Field(default_factory=list)  # Questions for Octo
     knowledge_proposals: list[KnowledgeProposal] = Field(default_factory=list)
     thinking_steps: int = 0
     tools_used: list[str] = Field(default_factory=list)
+
+
+class WorkerInstructionRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    request_id: str
+    worker_id: str
+    target: Literal["octo", "parent"] = "octo"
+    question: str
+    context: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: int = 120
+    created_at: datetime
 
 
 class ChildWorkerOutcome(BaseModel):
@@ -114,15 +131,18 @@ class ChildBatchResume(BaseModel):
     failed_count: int = 0
     stopped_count: int = 0
     missing_count: int = 0
+    awaiting_instruction_count: int = 0
     status: str = "completed"
     completed: list[ChildWorkerOutcome] = Field(default_factory=list)
     failed: list[ChildWorkerOutcome] = Field(default_factory=list)
     stopped: list[ChildWorkerOutcome] = Field(default_factory=list)
     missing: list[ChildWorkerOutcome] = Field(default_factory=list)
+    awaiting_instruction: list[ChildWorkerOutcome] = Field(default_factory=list)
 
 
 class Capability(BaseModel):
     """Permission capability (kept for policy engine compatibility)."""
+
     model_config = ConfigDict(frozen=True)
 
     type: str

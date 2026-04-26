@@ -16,6 +16,7 @@ It is a living document and may be edited freely as the workspace evolves.
   - Execute scoped tasks with clear acceptance criteria
   - Serve as secure boundary between the Octo and external resources
   - Each worker has specific tools and permissions
+  - Can pause in `awaiting_instruction` and ask Octo or a parent worker for bounded guidance
   - Return summaries or structured results for verification
 
 - **Worker templates**: reusable worker definitions in `workspace/workers/<id>/worker.json`.
@@ -63,6 +64,10 @@ This ensures:
 18. For scheduled or network-heavy work, do not reduce `timeout_seconds` below the worker template default just to be conservative.
 19. If one external task splits into several independent external substeps, prefer a worker that can spawn child workers or launch a bounded parallel batch rather than having the Octo orchestrate every small external action directly.
 20. Use subworkers only for independent subtasks with clear boundaries. Avoid duplicative fan-out and unnecessary recursion.
+21. If a worker pauses in `awaiting_instruction`, inspect its `instruction_request` and resume it with `answer_worker_instruction` instead of restarting the worker.
+22. If the worker asks Octo directly, the request is routed through Octo's internal queue. Answer from current context when safe; ask the human only when their judgment or missing input is required.
+23. If a child worker asks its parent, the parent worker should answer with `answer_worker_instruction` and then continue waiting for the remaining children.
+24. Paused worker time should not be treated as active work time; a pause is coordination state, not failure.
 
 ## Runtime Memory
 

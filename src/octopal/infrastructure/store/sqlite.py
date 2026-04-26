@@ -570,7 +570,7 @@ class SQLiteStore(Store):
         cursor = self._conn.execute(
             """
             SELECT * FROM workers
-            WHERE status IN ('started', 'running', 'waiting_for_children')
+            WHERE status IN ('started', 'running', 'waiting_for_children', 'awaiting_instruction')
                OR julianday(updated_at) > julianday(?)
             ORDER BY updated_at DESC
             """,

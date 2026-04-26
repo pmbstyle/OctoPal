@@ -38,6 +38,7 @@ def test_workspace_bootstrap_creates_required_markdown(tmp_path: Path) -> None:
     assert "Workers are the default path for external work." in agents_content
     assert "do not reduce `timeout_seconds` below the worker template default" in agents_content
     assert "prefer a worker that can spawn child workers or launch a bounded parallel batch" in agents_content
+    assert "resume it with `answer_worker_instruction` instead of restarting" in agents_content
 
 
 def test_bootstrap_context_includes_experiments_readme(tmp_path: Path, monkeypatch) -> None:

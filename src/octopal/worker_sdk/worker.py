@@ -31,9 +31,7 @@ class Worker:
         self.knowledge_proposals.append(KnowledgeProposal(category=category, content=content))
 
     async def request_intent(self, request: IntentRequest) -> Permit:
-        await self._write_message(
-            {"type": "intent_request", "intent": request.model_dump()}
-        )
+        await self._write_message({"type": "intent_request", "intent": request.model_dump()})
         response = await self._read_message()
         if response.get("type") == "permit_denied":
             reason = response.get("reason", "denied")
@@ -90,15 +88,57 @@ class Worker:
                 return payload if isinstance(payload, dict) else {}
             if response_type == "shutdown":
                 raise RuntimeError("Worker shutdown requested while waiting for child workers")
-            raise RuntimeError(f"Unexpected response from Octo while waiting for children: {response_type}")
+            raise RuntimeError(
+                f"Unexpected response from Octo while waiting for children: {response_type}"
+            )
+
+    async def request_instruction(
+        self,
+        *,
+        question: str,
+        context: dict[str, Any] | None = None,
+        target: str = "octo",
+        timeout_seconds: int = 120,
+    ) -> dict[str, Any]:
+        clean_question = str(question or "").strip()
+        if not clean_question:
+            raise ValueError("request_instruction requires a question")
+        clean_target = str(target or "octo").strip().lower()
+        if clean_target not in {"octo", "parent"}:
+            clean_target = "octo"
+        request_id = f"{self.spec.id}-instruction-{__import__('uuid').uuid4().hex[:12]}"
+        await self._write_message(
+            {
+                "type": "instruction_request",
+                "request_id": request_id,
+                "target": clean_target,
+                "question": clean_question,
+                "context": context if isinstance(context, dict) else {},
+                "timeout_seconds": max(1, int(timeout_seconds or 120)),
+            }
+        )
+        while True:
+            response = await self._read_message()
+            response_type = str(response.get("type") or "").strip()
+            if response_type == "resume_instruction":
+                if str(response.get("request_id") or "") != request_id:
+                    raise RuntimeError("Unexpected instruction response id from Octo")
+                return response
+            if response_type == "shutdown":
+                raise RuntimeError("Worker shutdown requested while waiting for instruction")
+            raise RuntimeError(
+                f"Unexpected response from Octo while waiting for instruction: {response_type}"
+            )
 
     async def call_mcp_tool(self, server_id: str, tool_name: str, arguments: dict[str, Any]) -> Any:
-        await self._write_message({
-            "type": "mcp_call",
-            "server_id": server_id,
-            "tool_name": tool_name,
-            "arguments": arguments
-        })
+        await self._write_message(
+            {
+                "type": "mcp_call",
+                "server_id": server_id,
+                "tool_name": tool_name,
+                "arguments": arguments,
+            }
+        )
         response = await self._read_message()
         if response.get("type") == "error":
             raise ToolBridgeError.from_payload(response, default_bridge="mcp")
