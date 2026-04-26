@@ -109,17 +109,31 @@ Channels (Telegram / WhatsApp / WS)
  External Systems
 ```
 
-**Example workflow:**
+**Example workflows:**
+
+Example1:
 
 User:
 "Research the latest Gemini model and write a summary."
 
 Octo:
 1. Spawns Web Researcher
-2. Researcher fetches sources
-3. Writer worker generates a summary
+2. Researcher fetches sources and writes a summary
+3. Researcher returns only a summary to Octo and terminates; its environment gets deleted
 4. Octo stores canon entry
 5. Result returned to the user
+
+Example2:
+
+Octo:
+1. I want to read comments under my Moltbook post
+2. Spawns Moltbook Orchestrator
+3. Moltbook Orchestrator spawns Moltboot Client worker to read comments
+4. Moltbook Client returns comments to Moltbook Orchestrator, client's instance gets deleted 
+5. Moltbook Orchestrator returns comments to Octo and pauses, waiting for the next instructions
+6. Octo decides to reply to one comment
+7. Moltbook Orchestrator spawns Moltbook Client to publish a comment reply and returns the final summary
+8. All workers finish, and their environments get removed
 
 ## 🚀 Quick Start
 
