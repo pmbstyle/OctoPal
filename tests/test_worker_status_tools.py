@@ -104,3 +104,33 @@ def test_get_worker_result_waiting_for_children_has_specific_message(monkeypatch
     data = json.loads(payload)
     assert data["status"] == "waiting_for_children"
     assert data["message"] == "Worker is waiting for child workers to finish before resuming."
+
+
+def test_get_worker_result_awaiting_instruction_exposes_request(monkeypatch) -> None:
+    worker = _worker_record(status="awaiting_instruction").model_copy(
+        update={
+            "summary": "Awaiting instruction: choose path",
+            "output": {
+                "instruction_request": {
+                    "request_id": "req-1",
+                    "worker_id": "worker-1",
+                    "target": "octo",
+                    "question": "Which path should I take?",
+                    "context": {"paths": ["a", "b"]},
+                    "timeout_seconds": 120,
+                    "created_at": "2026-04-16T20:54:25+00:00",
+                }
+            },
+        }
+    )
+    frozen_now = datetime(2026, 4, 16, 20, 54, 30, tzinfo=UTC)
+    monkeypatch.setattr(management, "utc_now", lambda: frozen_now)
+    payload = management._tool_get_worker_result(
+        {"worker_id": worker.id},
+        {"octo": _Octo(worker)},
+    )
+    data = json.loads(payload)
+    assert data["status"] == "awaiting_instruction"
+    assert data["message"] == "Worker is waiting for an instruction before resuming."
+    assert data["instruction_request"]["request_id"] == "req-1"
+    assert data["instruction_request"]["question"] == "Which path should I take?"

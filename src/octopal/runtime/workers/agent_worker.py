@@ -113,6 +113,7 @@ _OCTO_PROXY_TOOLS = {
     "stop_worker",
     "get_worker_status",
     "list_active_workers",
+    "answer_worker_instruction",
     "get_worker_result",
     "get_worker_output_path",
     "create_worker_template",
@@ -123,6 +124,7 @@ _ORCHESTRATION_PROGRESS_TOOLS = {
     "get_worker_result",
     "synthesize_worker_results",
     "worker_yield",
+    "request_instruction",
 }
 _CHILD_SPAWN_TOOLS = {
     "start_child_worker",
@@ -336,15 +338,24 @@ def _render_resumed_child_batch_message(child_batch: dict[str, Any]) -> str:
         for worker_id in child_batch.get("worker_ids", [])
         if str(worker_id).strip()
     ]
-    lines = [
-        "Runtime child-batch resume: the workers started in the previous tool-call batch have now reached terminal states.",
-        f"Joined worker ids: {', '.join(worker_ids) if worker_ids else '<none>'}",
-    ]
+    batch_status = str(child_batch.get("status") or "").strip()
+    if batch_status == "awaiting_instruction":
+        lead = (
+            "Runtime child-batch resume: at least one child worker paused and is awaiting "
+            "instruction. Answer it with answer_worker_instruction, then collect the result."
+        )
+    else:
+        lead = (
+            "Runtime child-batch resume: the workers started in the previous tool-call batch "
+            "have now reached terminal states."
+        )
+    lines = [lead, f"Joined worker ids: {', '.join(worker_ids) if worker_ids else '<none>'}"]
 
     completed = child_batch.get("completed", [])
     failed = child_batch.get("failed", [])
     stopped = child_batch.get("stopped", [])
     missing = child_batch.get("missing", [])
+    awaiting_instruction = child_batch.get("awaiting_instruction", [])
 
     if completed:
         lines.append("Completed workers:")
@@ -366,10 +377,29 @@ def _render_resumed_child_batch_message(child_batch: dict[str, Any]) -> str:
         for item in missing:
             error = str(item.get("error") or "Missing worker record after spawn").strip()
             lines.append(f"- {item.get('worker_id')}: {error}")
-    if not any((completed, failed, stopped, missing)):
+    if awaiting_instruction:
+        lines.append("Workers awaiting instruction:")
+        for item in awaiting_instruction:
+            output = item.get("output") if isinstance(item, dict) else {}
+            request = output.get("instruction_request") if isinstance(output, dict) else {}
+            question = (
+                str(
+                    request.get("question") or item.get("summary") or "Instruction requested"
+                ).strip()
+                if isinstance(request, dict)
+                else str(item.get("summary") or "Instruction requested").strip()
+            )
+            request_id = (
+                str(request.get("request_id") or "").strip() if isinstance(request, dict) else ""
+            )
+            suffix = f" request_id={request_id}" if request_id else ""
+            lines.append(f"- {item.get('worker_id')}{suffix}: {question}")
+    if not any((completed, failed, stopped, missing, awaiting_instruction)):
         lines.append("No child worker outcomes were collected.")
 
-    lines.append("Use these results directly in your next reasoning step. Do not re-poll the same child ids unless you are intentionally starting a new retry.")
+    lines.append(
+        "Use these results directly in your next reasoning step. Do not re-poll the same child ids unless you are intentionally starting a new retry."
+    )
     return "\n".join(lines)
 
 
@@ -388,6 +418,80 @@ def _record_joined_child_batch(
             if not worker_id:
                 continue
             joined_results_by_id[worker_id] = dict(item)
+
+
+def _build_worker_coordination_prompt(*, has_child_spawn_tools: bool) -> str:
+    lines = [
+        "Worker coordination:",
+        (
+            "- Use request_instruction when you are blocked on a concrete decision, missing "
+            "input, or a scoped clarification. Prefer target=parent when your blocker belongs "
+            "to a parent worker's delegated plan; use target=octo for top-level user or runtime decisions."
+        ),
+        (
+            "- request_instruction pauses you in awaiting_instruction. While paused, your active "
+            "timeout and thinking-step budget are not consumed; continue only after the runtime resumes you."
+        ),
+        (
+            "- If request_instruction resumes with status=timed_out, make a conservative local "
+            "decision or return a clear partial result instead of waiting forever."
+        ),
+    ]
+    if has_child_spawn_tools:
+        lines.extend(
+            [
+                "",
+                "Parent-worker coordination:",
+                (
+                    "- You can start child workers for independent subtasks. After starting children, "
+                    "the runtime pauses you until the child batch completes or a child asks for instruction."
+                ),
+                (
+                    "- If a child pauses in awaiting_instruction, read its instruction_request and "
+                    "answer it with answer_worker_instruction. The answer should be specific enough "
+                    "for the child to continue without re-asking the same question."
+                ),
+                (
+                    "- After you answer a child instruction, the runtime pauses you again until the "
+                    "remaining children complete or another child asks for instruction."
+                ),
+                (
+                    "- Do not poll children after a runtime child-batch resume unless you intentionally "
+                    "start a retry; use the resume payload already placed in context."
+                ),
+            ]
+        )
+    return "\n".join(lines)
+
+
+async def _await_child_batch_for_agent_loop(
+    *,
+    worker: Worker,
+    worker_ids: list[str],
+    messages: list[dict[str, Any]],
+    telemetry: dict[str, Any],
+    joined_results_by_id: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Any], float]:
+    await worker.log(
+        "info",
+        "Suspending parent worker until child batch completes: " + ", ".join(worker_ids),
+    )
+    child_wait_started = time.perf_counter()
+    child_batch = await worker.await_children(worker_ids)
+    waited_seconds = time.perf_counter() - child_wait_started
+    telemetry["paused_seconds"] = int(float(telemetry.get("paused_seconds", 0)) + waited_seconds)
+    await worker.log(
+        "info",
+        "Resuming parent worker after child batch update: " + ", ".join(worker_ids),
+    )
+    messages.append(
+        {
+            "role": "user",
+            "content": _render_resumed_child_batch_message(child_batch),
+        }
+    )
+    _record_joined_child_batch(joined_results_by_id, child_batch)
+    return child_batch, waited_seconds
 
 
 def _build_joined_child_guardrail_result(
@@ -530,6 +634,29 @@ async def execute_agent_task(
         ],
     )
     filtered_tools = _with_octo_tool_proxies(filtered_tools, worker)
+    has_child_spawn_tools = any(
+        getattr(tool, "name", "") in _CHILD_SPAWN_TOOLS for tool in filtered_tools
+    )
+    if not has_child_spawn_tools:
+        filtered_tools = [
+            tool
+            for tool in filtered_tools
+            if getattr(tool, "name", "") != "answer_worker_instruction"
+        ]
+    if has_child_spawn_tools and not any(
+        getattr(tool, "name", "") == "answer_worker_instruction" for tool in filtered_tools
+    ):
+        answer_tool = next(
+            (
+                tool
+                for tool in available_tools
+                if getattr(tool, "name", "") == "answer_worker_instruction"
+            ),
+            None,
+        )
+        if answer_tool is not None:
+            filtered_tools.append(_make_octo_proxy_tool(answer_tool, worker))
+    filtered_tools.append(_make_request_instruction_tool(worker))
 
     # Add MCP tools from spec
     from octopal.tools.registry import ToolSpec
@@ -560,13 +687,18 @@ async def execute_agent_task(
         filtered_tools.append(mcp_spec)
 
     tool_descriptions = "\n".join(f"- {t.name}: {t.description}" for t in filtered_tools)
+    coordination_prompt = _build_worker_coordination_prompt(
+        has_child_spawn_tools=has_child_spawn_tools
+    )
 
     system_prompt = f"""{spec.system_prompt}
 
 Available tools:
 {tool_descriptions}
 
-When you need to use a tool, the system will automatically call it for you. Just indicate what you want to do in your response.
+Use available tools through normal tool calls. Do not emit ad-hoc JSON tool_use blocks.
+
+{coordination_prompt}
 
 Skill usage:
 - Octopal skills are internal tools, not MCP servers.
@@ -580,10 +712,11 @@ When you have completed the task, respond with:
 {{
   "type": "result",
   "summary": "Internal summary for the Octo/runtime",
-  "output": {{...}}  // Optional structured output
+  "output": {{...}}
 }}
 
-If you need clarification from the Octo, include:
+If you still cannot continue after request_instruction times out or the task truly must stop,
+return a partial result with questions:
 {{
   "type": "result",
   "summary": "...",
@@ -624,6 +757,7 @@ Important:
         "tool_errors": 0,
         "tool_result_truncations": 0,
         "empty_turns": 0,
+        "paused_seconds": 0,
         "tokens": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
     upstream_failures: dict[str, int] = {}
@@ -631,6 +765,8 @@ Important:
     tool_call_history: list[dict[str, Any]] = []
     tool_loop_thresholds = _resolve_tool_loop_thresholds()
     joined_child_results_by_id: dict[str, dict[str, Any]] = {}
+    pending_child_wait_ids: list[str] = []
+    paused_seconds = 0.0
 
     while thinking_steps < effective_max_steps:
         llm_start = time.perf_counter()
@@ -669,6 +805,7 @@ Important:
             messages.append(assistant_msg)
             round_consumes_step = False
             spawned_child_ids: list[str] = []
+            answered_instruction_this_round = False
 
             # Process tool calls
             for tool_call in tool_calls:
@@ -717,9 +854,17 @@ Important:
                     )
                 else:
                     # Execute tool
-                    elapsed = asyncio.get_running_loop().time() - loop_start
+                    elapsed = asyncio.get_running_loop().time() - loop_start - paused_seconds
                     remaining_budget = max(1, spec.timeout_seconds - int(elapsed))
                     tool_timeout = min(_DEFAULT_TOOL_TIMEOUT_SECONDS, remaining_budget)
+                    if normalized_tool_name in {
+                        "request_instruction",
+                        "answer_worker_instruction",
+                    }:
+                        step_exempt = True
+                    if normalized_tool_name == "request_instruction":
+                        requested_wait = max(1, int(tool_input.get("timeout_seconds") or 120))
+                        tool_timeout = requested_wait + 5
                     tool_start = time.perf_counter()
                     tool_result, tool_meta = await _execute_tool(
                         tool_name,
@@ -731,7 +876,11 @@ Important:
                         timeout_seconds=tool_timeout,
                     )
                     telemetry["tool_calls"] += 1
-                    telemetry["tool_latency_ms_total"] += int((time.perf_counter() - tool_start) * 1000)
+                    tool_elapsed = time.perf_counter() - tool_start
+                    telemetry["tool_latency_ms_total"] += int(tool_elapsed * 1000)
+                    if normalized_tool_name == "request_instruction":
+                        paused_seconds += tool_elapsed
+                        telemetry["paused_seconds"] = int(paused_seconds)
                     telemetry["tool_retries"] += int(tool_meta.get("retries", 0))
                     if tool_meta.get("timed_out"):
                         telemetry["tool_timeouts"] += 1
@@ -758,6 +907,11 @@ Important:
                 )
                 if not step_exempt:
                     round_consumes_step = True
+                if (
+                    normalized_tool_name == "answer_worker_instruction"
+                    and not tool_meta.get("had_error")
+                ):
+                    answered_instruction_this_round = True
                 loop_state = _detect_tool_loop(
                     tool_call_history,
                     tool_name=str(tool_name or ""),
@@ -878,28 +1032,32 @@ Important:
                     )
                 )
                 if joined_worker_ids:
-                    await worker.log(
-                        "info",
-                        (
-                            "Suspending parent worker until child batch completes: "
-                            + ", ".join(joined_worker_ids)
-                        ),
+                    child_batch, waited_seconds = await _await_child_batch_for_agent_loop(
+                        worker=worker,
+                        worker_ids=joined_worker_ids,
+                        messages=messages,
+                        telemetry=telemetry,
+                        joined_results_by_id=joined_child_results_by_id,
                     )
-                    child_batch = await worker.await_children(joined_worker_ids)
-                    await worker.log(
-                        "info",
-                        (
-                            "Resuming parent worker after child batch completion: "
-                            + ", ".join(joined_worker_ids)
-                        ),
+                    paused_seconds += waited_seconds
+                    telemetry["paused_seconds"] = int(paused_seconds)
+                    pending_child_wait_ids = (
+                        joined_worker_ids
+                        if str(child_batch.get("status") or "") == "awaiting_instruction"
+                        else []
                     )
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": _render_resumed_child_batch_message(child_batch),
-                        }
-                    )
-                    _record_joined_child_batch(joined_child_results_by_id, child_batch)
+            if answered_instruction_this_round and pending_child_wait_ids:
+                child_batch, waited_seconds = await _await_child_batch_for_agent_loop(
+                    worker=worker,
+                    worker_ids=pending_child_wait_ids,
+                    messages=messages,
+                    telemetry=telemetry,
+                    joined_results_by_id=joined_child_results_by_id,
+                )
+                paused_seconds += waited_seconds
+                telemetry["paused_seconds"] = int(paused_seconds)
+                if str(child_batch.get("status") or "") != "awaiting_instruction":
+                    pending_child_wait_ids = []
             if round_consumes_step:
                 thinking_steps += 1
             empty_turns = 0
@@ -1223,6 +1381,59 @@ def _make_octo_proxy_tool(tool: Any, worker: Worker) -> Any:
         parameters=tool.parameters,
         permission=tool.permission,
         handler=_proxy_handler,
+        is_async=True,
+    )
+
+
+def _make_request_instruction_tool(worker: Worker) -> Any:
+    from octopal.tools.registry import ToolSpec
+
+    async def _handler(args: dict[str, Any], ctx: dict[str, Any]) -> Any:
+        question = str(args.get("question") or "").strip()
+        context = args.get("context")
+        target = str(args.get("target") or "octo").strip().lower()
+        timeout_seconds = max(1, int(args.get("timeout_seconds") or 120))
+        return await worker.request_instruction(
+            question=question,
+            context=context if isinstance(context, dict) else {},
+            target=target,
+            timeout_seconds=timeout_seconds,
+        )
+
+    return ToolSpec(
+        name="request_instruction",
+        description=(
+            "Pause this worker and ask Octo or the parent worker for blocking guidance. "
+            "Use this when the task cannot safely continue without a decision, missing input, "
+            "or a scoped instruction. The runtime resumes the worker with the answer or a timeout."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The concrete question or decision needed before continuing.",
+                },
+                "context": {
+                    "type": "object",
+                    "description": "Compact structured context the supervisor needs to answer.",
+                    "additionalProperties": True,
+                },
+                "target": {
+                    "type": "string",
+                    "enum": ["octo", "parent"],
+                    "description": "Who should answer. Use parent when this is a child-worker coordination issue.",
+                },
+                "timeout_seconds": {
+                    "type": "number",
+                    "description": "How long to wait before resuming with timed_out status. Default 120.",
+                },
+            },
+            "required": ["question"],
+            "additionalProperties": False,
+        },
+        permission="worker_coordination",
+        handler=_handler,
         is_async=True,
     )
 

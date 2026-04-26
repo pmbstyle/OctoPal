@@ -1077,7 +1077,15 @@ def workers_list() -> None:
     table.add_column("Current Task", width=50)
 
     for worker in workers:
-        status_style = "bright_green" if worker.status == "completed" else "yellow" if worker.status in ("running", "working") else "bright_red" if worker.status == "failed" else "dim white"
+        status_style = (
+            "bright_green"
+            if worker.status == "completed"
+            else "yellow"
+            if worker.status in ("running", "working", "waiting_for_children", "awaiting_instruction")
+            else "bright_red"
+            if worker.status == "failed"
+            else "dim white"
+        )
         table.add_row(
             worker.id,
             f"[{status_style}]{worker.status}[/{status_style}]",
@@ -2354,7 +2362,12 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
     for worker in active_workers:
         by_status[worker.status] = by_status.get(worker.status, 0) + 1
 
-    running_workers = by_status.get("running", 0) + by_status.get("started", 0)
+    running_workers = (
+        by_status.get("running", 0)
+        + by_status.get("started", 0)
+        + by_status.get("waiting_for_children", 0)
+        + by_status.get("awaiting_instruction", 0)
+    )
     failed_workers = by_status.get("failed", 0)
     completed_workers = by_status.get("completed", 0)
     stopped_workers = by_status.get("stopped", 0)

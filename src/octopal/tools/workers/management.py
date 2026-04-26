@@ -343,6 +343,35 @@ def get_worker_tools() -> list[ToolSpec]:
             handler=_tool_worker_yield,
         ),
         ToolSpec(
+            name="answer_worker_instruction",
+            description=(
+                "Answer a worker that is paused in awaiting_instruction state. "
+                "Use this after get_worker_status/get_worker_result or a child resume payload exposes an instruction_request."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "worker_id": {
+                        "type": "string",
+                        "description": "The paused worker run ID.",
+                    },
+                    "request_id": {
+                        "type": "string",
+                        "description": "Instruction request id. Optional when the worker has exactly one active instruction_request in its record.",
+                    },
+                    "instruction": {
+                        "type": "string",
+                        "description": "The concrete instruction the worker should use to continue.",
+                    },
+                },
+                "required": ["worker_id", "instruction"],
+                "additionalProperties": False,
+            },
+            permission="worker_manage",
+            handler=_tool_answer_worker_instruction,
+            is_async=True,
+        ),
+        ToolSpec(
             name="get_worker_result",
             description="Get the result/output of a completed worker by ID.",
             parameters={
@@ -1111,6 +1140,53 @@ async def _tool_stop_worker(args: dict[str, object], ctx: dict[str, object]) -> 
     return json.dumps({"status": "stopped" if stopped else "not_found", "worker_id": worker_id}, ensure_ascii=False)
 
 
+async def _tool_answer_worker_instruction(args: dict[str, object], ctx: dict[str, object]) -> str:
+    octo: Octo = ctx["octo"]
+    worker_id = str(args.get("worker_id", "")).strip()
+    request_id = str(args.get("request_id", "") or "").strip()
+    instruction = str(args.get("instruction", "") or "").strip()
+    if not worker_id:
+        return "answer_worker_instruction error: worker_id is required."
+    if not instruction:
+        return "answer_worker_instruction error: instruction is required."
+
+    worker = octo.store.get_worker(worker_id)
+    if worker is None:
+        return json.dumps({"status": "not_found", "worker_id": worker_id}, ensure_ascii=False)
+    if not request_id:
+        request = _extract_worker_instruction_request(worker.output)
+        request_id = str(request.get("request_id") or "").strip() if request else ""
+    if not request_id:
+        return json.dumps(
+            {
+                "status": "missing_request_id",
+                "worker_id": worker_id,
+                "message": "No active instruction_request found for this worker.",
+            },
+            ensure_ascii=False,
+        )
+
+    runtime = getattr(octo, "runtime", None)
+    if runtime is None or not hasattr(runtime, "answer_instruction"):
+        return json.dumps(
+            {"status": "runtime_unavailable", "worker_id": worker_id, "request_id": request_id},
+            ensure_ascii=False,
+        )
+    answered = await runtime.answer_instruction(
+        worker_id=worker_id,
+        request_id=request_id,
+        instruction=instruction,
+    )
+    return json.dumps(
+        {
+            "status": "answered" if answered else "not_waiting",
+            "worker_id": worker_id,
+            "request_id": request_id,
+        },
+        ensure_ascii=False,
+    )
+
+
 def _tool_get_worker_status(args: dict[str, object], ctx: dict[str, object]) -> str:
     octo: Octo = ctx["octo"]
     worker_id = str(args.get("worker_id", "")).strip()
@@ -1137,6 +1213,9 @@ def _tool_get_worker_status(args: dict[str, object], ctx: dict[str, object]) -> 
         "summary": worker.summary,
         "error": worker.error,
     }
+    instruction_request = _extract_worker_instruction_request(worker.output)
+    if instruction_request is not None:
+        payload["instruction_request"] = instruction_request
     payload.update(_worker_timing_fields(worker))
     return json.dumps(payload, ensure_ascii=False)
 
@@ -1212,7 +1291,12 @@ def _tool_worker_session_status(args: dict[str, object], ctx: dict[str, object])
     ]
 
     hints: list[str] = []
-    running = counts.get("running", 0) + counts.get("started", 0) + counts.get("waiting_for_children", 0)
+    running = (
+        counts.get("running", 0)
+        + counts.get("started", 0)
+        + counts.get("waiting_for_children", 0)
+        + counts.get("awaiting_instruction", 0)
+    )
     failed_recent = sum(1 for worker in recent_workers if str(worker.status) == "failed")
     if running > 0:
         hints.append(f"{running} worker(s) currently in flight.")
@@ -1356,7 +1440,7 @@ def _reconcile_stale_worker_status(octo: Octo, worker: Any) -> Any:
     runtime = getattr(octo, "runtime", None)
     if not runtime or not hasattr(runtime, "is_worker_running"):
         return worker
-    if worker.status not in {"started", "running", "waiting_for_children"}:
+    if worker.status not in {"started", "running", "waiting_for_children", "awaiting_instruction"}:
         return worker
     # Small grace window avoids false stale marks during process launch transitions.
     if worker.updated_at >= (utc_now() - timedelta(minutes=2)):
@@ -1379,7 +1463,7 @@ def _reconcile_stale_active_workers(octo: Octo, workers: list[Any], older_than_m
         return workers
     grace_cutoff = utc_now() - timedelta(minutes=2)
     for worker in workers:
-        if worker.status not in {"started", "running", "waiting_for_children"}:
+        if worker.status not in {"started", "running", "waiting_for_children", "awaiting_instruction"}:
             continue
         if worker.updated_at >= grace_cutoff:
             continue
@@ -1450,7 +1534,7 @@ def _select_workers_for_yield(
 
 
 def _serialize_worker_run(worker: Any) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "worker_id": getattr(worker, "id", None),
         "status": getattr(worker, "status", None),
         "task": getattr(worker, "task", None),
@@ -1463,6 +1547,23 @@ def _serialize_worker_run(worker: Any) -> dict[str, object]:
         "summary": getattr(worker, "summary", None),
         "error": getattr(worker, "error", None),
     }
+    instruction_request = _extract_worker_instruction_request(getattr(worker, "output", None))
+    if instruction_request is not None:
+        payload["instruction_request"] = instruction_request
+    return payload
+
+
+def _extract_worker_instruction_request(output: Any) -> dict[str, object] | None:
+    if not isinstance(output, dict):
+        return None
+    request = output.get("instruction_request")
+    if not isinstance(request, dict):
+        return None
+    request_id = str(request.get("request_id") or "").strip()
+    question = str(request.get("question") or "").strip()
+    if not request_id or not question:
+        return None
+    return dict(request)
 
 
 def _worker_timing_fields(worker: Any) -> dict[str, object]:
@@ -1527,6 +1628,8 @@ def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> 
         waiting_message = f"Worker is still {worker.status}. Result not available yet."
         if worker.status == "waiting_for_children":
             waiting_message = "Worker is waiting for child workers to finish before resuming."
+        elif worker.status == "awaiting_instruction":
+            waiting_message = "Worker is waiting for an instruction before resuming."
         payload = {
             "status": worker.status,
             "worker_id": worker.id,
@@ -1536,6 +1639,9 @@ def _tool_get_worker_result(args: dict[str, object], ctx: dict[str, object]) -> 
             "spawn_depth": worker.spawn_depth,
             "message": waiting_message,
         }
+        instruction_request = _extract_worker_instruction_request(worker.output)
+        if instruction_request is not None:
+            payload["instruction_request"] = instruction_request
         payload.update(_worker_timing_fields(worker))
         return json.dumps(payload, ensure_ascii=False)
 
