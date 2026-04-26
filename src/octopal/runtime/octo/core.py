@@ -84,7 +84,12 @@ from octopal.runtime.scheduler.service import (
     normalize_notify_user_policy,
     parse_scheduled_task_blocked_until,
 )
-from octopal.runtime.workers.contracts import TaskRequest, WorkerResult
+from octopal.runtime.workers.contracts import (
+    TaskRequest,
+    WorkerInstructionRequest,
+    WorkerResult,
+    WorkerSpec,
+)
 from octopal.runtime.workers.runtime import WorkerRuntime
 from octopal.utils import (
     extract_heartbeat_user_visible_message,
@@ -157,6 +162,27 @@ def _build_worker_result_batch_timeout_followup(items: list[_PendingWorkerFollow
         lines.append("Open questions:")
         lines.extend(f"- {question}" for question in questions[:5])
     return "\n".join(lines).strip()
+
+
+def _is_instruction_request_result(result: WorkerResult) -> bool:
+    if str(result.status or "").strip().lower() == "awaiting_instruction":
+        return True
+    output = result.output if isinstance(result.output, dict) else {}
+    return isinstance(output.get("instruction_request"), dict)
+
+
+def _instruction_request_question(result: WorkerResult) -> str:
+    output = result.output if isinstance(result.output, dict) else {}
+    request = output.get("instruction_request")
+    if isinstance(request, dict):
+        question = str(request.get("question") or "").strip()
+        if question:
+            return question
+    if result.questions:
+        question = str(result.questions[0] or "").strip()
+        if question:
+            return question
+    return str(result.summary or "").strip()
 
 
 def _build_worker_followup_batch_result(items: list[_PendingWorkerFollowupItem]) -> WorkerResult:
@@ -1277,9 +1303,14 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
             )
             # Add worker result to memory for context, but don't auto-send
             if result.summary:
+                memory_prefix = (
+                    "Worker requested instruction"
+                    if _is_instruction_request_result(result)
+                    else "Worker completed"
+                )
                 await octo.memory.add_message(
                     "system",
-                    f"Worker completed: {result.summary}",
+                    f"{memory_prefix}: {result.summary}",
                     {"worker_result": True, "task": task_text, "chat_id": chat_id},
                 )
             output_error = ""
@@ -1293,8 +1324,17 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
                     f"Worker error: {output_error}",
                     {"worker_result": True, "task": task_text, "chat_id": chat_id},
                 )
+            if _is_instruction_request_result(result):
+                await _route_instruction_request_to_octo(
+                    octo,
+                    chat_id,
+                    worker_id=worker_id,
+                    task_text=task_text,
+                    result=result,
+                    correlation_id=correlation_id,
+                )
             # System/internal chat (chat_id <= 0) should never emit user-facing follow-ups.
-            if chat_id <= 0:
+            elif chat_id <= 0:
                 logger.info("Skipping user follow-up for internal chat", chat_id=chat_id)
             else:
                 notify_policy = normalize_notify_user_policy(notify_user)
@@ -1333,6 +1373,57 @@ async def _internal_worker(octo: Octo, chat_id: int, queue: asyncio.Queue) -> No
     if queue.empty():
         _INTERNAL_QUEUES.pop(chat_id, None)
     _publish_runtime_metrics()
+
+
+async def _route_instruction_request_to_octo(
+    octo: Octo,
+    chat_id: int,
+    *,
+    worker_id: str,
+    task_text: str,
+    result: WorkerResult,
+    correlation_id: str | None,
+) -> None:
+    logger.info(
+        "Routing worker instruction request to Octo",
+        chat_id=chat_id,
+        worker_id=worker_id,
+        correlation_id=correlation_id,
+    )
+    try:
+        reply_text = await asyncio.wait_for(
+            route_worker_results_back_to_octo(
+                octo,
+                chat_id,
+                [(worker_id, task_text, result)],
+            ),
+            timeout=_WORKER_RESULT_ROUTING_TIMEOUT_SECONDS,
+        )
+    except TimeoutError:
+        logger.warning(
+            "Worker instruction request routing timed out",
+            chat_id=chat_id,
+            worker_id=worker_id,
+        )
+        reply_text = _instruction_request_question(result)
+
+    decision = resolve_user_delivery(reply_text)
+    if not decision.user_visible:
+        logger.info(
+            "Worker instruction request handled without user follow-up",
+            chat_id=chat_id,
+            worker_id=worker_id,
+            reason=decision.reason,
+        )
+        return
+    if chat_id <= 0:
+        logger.info(
+            "Skipping user-visible worker instruction follow-up for internal chat",
+            chat_id=chat_id,
+            worker_id=worker_id,
+        )
+        return
+    await _send_worker_followup(octo, chat_id, correlation_id, decision.text, batched_count=1)
 
 
 def _enqueue_internal_result(
@@ -1411,6 +1502,7 @@ class Octo:
     _lineage_children_total: dict[str, int] | None = None
     _lineage_children_active: dict[str, set[str]] | None = None
     _worker_correlation_by_run_id: dict[str, str] | None = None
+    _worker_chat_by_run_id: dict[str, int] | None = None
     _scheduled_notify_user_by_run_id: dict[str, str] | None = None
     _active_workers_by_correlation: dict[str, set[str]] | None = None
     _pending_internal_results_by_correlation: dict[str, int] | None = None
@@ -1454,6 +1546,8 @@ class Octo:
             self._lineage_children_active = {}
         if self._worker_correlation_by_run_id is None:
             self._worker_correlation_by_run_id = {}
+        if self._worker_chat_by_run_id is None:
+            self._worker_chat_by_run_id = {}
         if self._scheduled_notify_user_by_run_id is None:
             self._scheduled_notify_user_by_run_id = {}
         if self._active_workers_by_correlation is None:
@@ -2316,6 +2410,7 @@ class Octo:
         self._lineage_children_total.clear()
         self._lineage_children_active.clear()
         self._worker_correlation_by_run_id.clear()
+        self._worker_chat_by_run_id.clear()
         self._scheduled_notify_user_by_run_id.clear()
         self._active_workers_by_correlation.clear()
         self._pending_internal_results_by_correlation.clear()
@@ -2331,6 +2426,7 @@ class Octo:
             correlation_id = str(getattr(worker, "correlation_id", "") or "").strip() or None
             self._worker_lineage[run_id] = lineage_id
             self._worker_depth[run_id] = depth
+            self._worker_chat_by_run_id[run_id] = int(getattr(worker, "chat_id", 0) or 0)
             if correlation_id:
                 self._worker_correlation_by_run_id[run_id] = correlation_id
 
@@ -2676,6 +2772,61 @@ class Octo:
             return
         self._worker_correlation_by_run_id[run_id] = correlation_id
         self._active_workers_by_correlation.setdefault(correlation_id, set()).add(run_id)
+
+    def register_worker_chat(self, run_id: str, chat_id: int) -> None:
+        if not run_id:
+            return
+        self._worker_chat_by_run_id[run_id] = int(chat_id or 0)
+
+    def get_worker_chat_id(self, run_id: str) -> int:
+        if not run_id:
+            return 0
+        value = self._worker_chat_by_run_id.get(run_id)
+        if value is not None:
+            return int(value or 0)
+        worker = None
+        try:
+            worker = self.store.get_worker(run_id)
+        except Exception:
+            logger.debug("Failed to resolve worker chat id from store", worker_id=run_id, exc_info=True)
+        return int(getattr(worker, "chat_id", 0) or 0) if worker is not None else 0
+
+    async def handle_worker_instruction_request(
+        self,
+        *,
+        spec: WorkerSpec,
+        request: WorkerInstructionRequest,
+    ) -> None:
+        if request.target != "octo":
+            return
+        chat_id = self.get_worker_chat_id(spec.id)
+        result = WorkerResult(
+            status="awaiting_instruction",
+            summary=f"Worker {spec.id} requested instruction: {request.question}",
+            output={
+                "status": "awaiting_instruction",
+                "instruction_request": request.model_dump(mode="json"),
+            },
+            questions=[request.question],
+        )
+        _enqueue_internal_result(
+            self,
+            chat_id,
+            spec.id,
+            spec.task,
+            result,
+            correlation_id=spec.correlation_id,
+            notify_user=None,
+        )
+        await self._emit_worker_event(
+            chat_id,
+            "worker_awaiting_instruction",
+            {
+                "run_id": spec.id,
+                "worker_template_id": spec.template_id,
+                "instruction_request": request.model_dump(mode="json"),
+            },
+        )
 
     def has_active_workers_for_correlation(self, correlation_id: str | None) -> bool:
         if not correlation_id:
@@ -3776,6 +3927,7 @@ class Octo:
                 allowed_paths=allowed_paths,
             )
             self.register_worker_correlation(run_id, correlation_id)
+            self.register_worker_chat(run_id, chat_id)
 
             requester = self._approval_requesters.get(chat_id)
             if requester is None and getattr(self.approvals, "bot", None):
@@ -4050,6 +4202,7 @@ class Octo:
 
     def _mark_worker_inactive(self, run_id: str) -> None:
         correlation_id = self._worker_correlation_by_run_id.pop(run_id, None)
+        self._worker_chat_by_run_id.pop(run_id, None)
         self._scheduled_notify_user_by_run_id.pop(run_id, None)
         if correlation_id:
             active_by_correlation = self._active_workers_by_correlation.get(correlation_id)
@@ -4142,7 +4295,12 @@ def _serialize_worker_record(worker_record: Any) -> dict[str, Any] | None:
 
 
 def _is_active_worker_status(status: Any) -> bool:
-    return str(status or "").strip().lower() in {"started", "running"}
+    return str(status or "").strip().lower() in {
+        "started",
+        "running",
+        "waiting_for_children",
+        "awaiting_instruction",
+    }
 
 
 def _coerce_float(value: Any, default: float) -> float:

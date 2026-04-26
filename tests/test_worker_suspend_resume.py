@@ -208,6 +208,70 @@ def test_runtime_answer_instruction_marks_worker_running_before_resume(tmp_path:
     assert store.audit_events[-1].event_type == "worker_instruction_answered"
 
 
+def test_runtime_enqueues_octo_instruction_request_and_resumes(tmp_path: Path) -> None:
+    store = _Store({})
+    runtime = WorkerRuntime(
+        store=store,
+        policy=_Policy(),
+        workspace_dir=tmp_path,
+        launcher=object(),
+        settings=Settings(),
+    )
+    captured = {}
+
+    class _Octo:
+        async def handle_worker_instruction_request(self, *, spec, request) -> None:
+            captured["spec_id"] = spec.id
+            captured["request"] = request.model_dump(mode="json")
+            await runtime.answer_instruction(
+                worker_id=spec.id,
+                request_id=request.request_id,
+                instruction="continue with option b",
+            )
+
+    runtime.octo = _Octo()
+    process = _FakeProcess()
+    spec = WorkerSpec(
+        id="worker-1",
+        task="needs a decision",
+        inputs={},
+        system_prompt="s",
+        available_tools=[],
+        granted_capabilities=[],
+        timeout_seconds=30,
+        max_thinking_steps=5,
+    )
+
+    asyncio.run(
+        runtime._await_instruction(
+            spec=spec,
+            process=process,
+            payload={
+                "request_id": "req-1",
+                "target": "octo",
+                "question": "Which option should I take?",
+                "context": {"options": ["a", "b"]},
+                "timeout_seconds": 5,
+            },
+        )
+    )
+
+    assert captured["spec_id"] == "worker-1"
+    assert captured["request"]["target"] == "octo"
+    assert captured["request"]["question"] == "Which option should I take?"
+    assert store.status_updates == [
+        ("worker-1", "awaiting_instruction"),
+        ("worker-1", "running"),
+        ("worker-1", "running"),
+    ]
+    assert process.stdin.payloads[-1] == {
+        "type": "resume_instruction",
+        "request_id": "req-1",
+        "status": "answered",
+        "instruction": "continue with option b",
+    }
+
+
 def test_active_timeout_excludes_paused_worker_time(monkeypatch, tmp_path: Path) -> None:
     runtime = WorkerRuntime(
         store=_Store({}),

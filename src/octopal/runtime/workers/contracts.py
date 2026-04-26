@@ -90,7 +90,7 @@ class WorkerResult(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    status: Literal["completed", "failed"] = "completed"
+    status: Literal["completed", "failed", "awaiting_instruction"] = "completed"
     summary: str
     output: dict[str, Any] | None = None
     questions: list[str] = Field(default_factory=list)  # Questions for Octo

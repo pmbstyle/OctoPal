@@ -787,6 +787,18 @@ class WorkerRuntime:
         process.stdin.write(line.encode("utf-8"))
         await process.stdin.drain()
 
+    def _resolve_octo_chat_id(self, worker_id: str) -> int:
+        if self.octo is None:
+            return 0
+        resolver = getattr(self.octo, "get_worker_chat_id", None)
+        if not callable(resolver):
+            return 0
+        try:
+            return int(resolver(worker_id) or 0)
+        except Exception:
+            logger.debug("Failed to resolve worker chat id", worker_id=worker_id, exc_info=True)
+            return 0
+
     async def _read_loop_with_active_timeout(
         self,
         spec: WorkerSpec,
@@ -1043,6 +1055,19 @@ class WorkerRuntime:
             correlation_id=spec.id,
             data=request.model_dump(mode="json"),
         )
+        if target == "octo":
+            handler = getattr(self.octo, "handle_worker_instruction_request", None)
+            if callable(handler):
+                try:
+                    maybe_result = handler(spec=spec, request=request)
+                    if inspect.isawaitable(maybe_result):
+                        await maybe_result
+                except Exception:
+                    logger.exception(
+                        "Failed to enqueue worker instruction request for Octo",
+                        worker_id=spec.id,
+                        request_id=request.request_id,
+                    )
         if pause_tracker is not None:
             pause_tracker.pause("awaiting_instruction")
 
@@ -1171,7 +1196,7 @@ class WorkerRuntime:
 
                     tool_ctx: dict[str, Any] = {
                         "octo": self.octo,
-                        "chat_id": 0,
+                        "chat_id": self._resolve_octo_chat_id(spec.id),
                         "base_dir": self.workspace_dir,
                         "worker": SimpleNamespace(spec=spec),
                     }

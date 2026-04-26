@@ -223,6 +223,7 @@ Do not rely on a hard-coded template list in the prompt. Templates can be added,
 ## Worker communication:
 
 Workers can pause and ask for instructions without finishing:
+- Requests targeted to Octo arrive through the internal worker queue immediately; handle them as live coordination, not as final worker results.
 - If get_worker_status/get_worker_result returns status=awaiting_instruction, inspect instruction_request.
 - If you can answer safely from current context, call answer_worker_instruction with a concrete instruction.
 - If the question requires human judgment or missing user input, ask the human. After the human answers, call answer_worker_instruction; do not restart the worker just to pass the answer.
