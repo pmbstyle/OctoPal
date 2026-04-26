@@ -810,12 +810,22 @@ class WorkerRuntime:
         loop = asyncio.get_running_loop()
         pause_tracker = _WorkerPauseTracker(loop=loop)
         started_at = loop.time()
+        read_loop_kwargs: dict[str, Any] = {"approval_requester": approval_requester}
+        try:
+            read_loop_params = inspect.signature(self._read_loop).parameters
+            accepts_pause_tracker = "pause_tracker" in read_loop_params or any(
+                param.kind is inspect.Parameter.VAR_KEYWORD
+                for param in read_loop_params.values()
+            )
+        except (TypeError, ValueError):
+            accepts_pause_tracker = True
+        if accepts_pause_tracker:
+            read_loop_kwargs["pause_tracker"] = pause_tracker
         read_task = asyncio.create_task(
             self._read_loop(
                 spec,
                 process,
-                approval_requester=approval_requester,
-                pause_tracker=pause_tracker,
+                **read_loop_kwargs,
             )
         )
         try:
