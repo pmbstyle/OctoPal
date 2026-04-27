@@ -63,8 +63,11 @@ _DEFAULT_MAX_TOOL_COUNT = 64
 _MIN_TOOL_COUNT_ON_OVERFLOW = 12
 _CATALOG_TOOL_EXPANSION_LIMIT = 12
 _CATALOG_MCP_TOOL_EXPANSION_LIMIT = 1
-_DEFAULT_INITIAL_OCTO_TOOL_COUNT = 36
+_DEFAULT_INITIAL_OCTO_TOOL_COUNT = 39
 _MANDATORY_OCTO_TOOL_NAMES = {
+    "octo_restart_self",
+    "octo_check_update",
+    "octo_update_self",
     "octo_context_health",
     "check_schedule",
     "tool_catalog_search",
@@ -81,6 +84,9 @@ _MANDATORY_OCTO_TOOL_NAMES = {
     "fs_delete",
 }
 _PRIORITY_TOOL_NAMES = {
+    "octo_restart_self",
+    "octo_check_update",
+    "octo_update_self",
     "octo_context_reset",
     "octo_context_health",
     "tool_catalog_search",
@@ -100,6 +106,9 @@ _PRIORITY_TOOL_NAMES = {
 }
 _ALWAYS_INCLUDE_TOOL_NAMES = {
     # Octo self-control baseline
+    "octo_restart_self",
+    "octo_check_update",
+    "octo_update_self",
     "octo_context_reset",
     "octo_context_health",
     "check_schedule",

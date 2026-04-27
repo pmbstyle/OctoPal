@@ -84,9 +84,27 @@ def test_get_octo_tools_uses_small_core_and_defers_mcp_tools(monkeypatch) -> Non
     assert "octo_self_queue_list" in names
     assert "octo_self_queue_take" in names
     assert "octo_self_queue_update" in names
+    assert "octo_restart_self" in names
+    assert "octo_check_update" in names
+    assert "octo_update_self" in names
     assert "mcp_demo_tool_0" not in names
     assert "mcp_demo_tool_0" in all_names
     assert len(tool_specs) < len(all_names)
+
+
+def test_get_octo_tools_keeps_self_lifecycle_tools_with_profile(monkeypatch) -> None:
+    class DummyOcto:
+        mcp_manager = None
+
+    monkeypatch.setenv("OCTOPAL_OCTO_TOOL_PROFILE", "research")
+    monkeypatch.delenv("OCTOPAL_OCTO_DEFER_TOOL_LOADING", raising=False)
+
+    tool_specs, _ctx = _get_octo_tools(DummyOcto(), 0)
+    names = {spec.name for spec in tool_specs}
+
+    assert "octo_restart_self" in names
+    assert "octo_check_update" in names
+    assert "octo_update_self" in names
 
 
 def test_worker_followup_tools_are_narrow(monkeypatch) -> None:
