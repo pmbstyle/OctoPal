@@ -1007,10 +1007,13 @@ def status() -> None:
             console.print(f"Error: [red]{error_text}[/red]")
         return
 
-    status_data = read_status(settings)
-    pid = status_data.get("pid") if status_data else None
+    status_data = read_status(settings) or {}
+    pid = status_data.get("pid")
     running = is_pid_running(pid)
-    last_message = status_data.get("last_message_at") if status_data else None
+    last_heartbeat = status_data.get("last_internal_heartbeat_at")
+    last_user_message = status_data.get("last_user_message_at") or status_data.get("last_message_at")
+    last_scheduler_tick = status_data.get("last_scheduler_tick_at")
+    status_updated_at = status_data.get("status_updated_at")
 
     status_text, status_color = resolve_runtime_status_display(status_data=status_data, pid_running=running)
 
@@ -1021,7 +1024,10 @@ def status() -> None:
     grid.add_row("System Status", f"[{status_color}]{status_text}[/{status_color}]")
     grid.add_row("Active Channel", f"[bold]{status_data.get('active_channel', user_channel_label(settings.user_channel))}[/bold]")
     grid.add_row("Process ID", f"[bold]{pid}[/bold]" if pid else "[dim]N/A[/dim]")
-    grid.add_row("Last Heartbeat", str(last_message) if last_message else "[dim]Never[/dim]")
+    grid.add_row("Last Heartbeat", str(last_heartbeat) if last_heartbeat else "[dim]Never[/dim]")
+    grid.add_row("Last User Message", str(last_user_message) if last_user_message else "[dim]Never[/dim]")
+    grid.add_row("Last Scheduler Tick", str(last_scheduler_tick) if last_scheduler_tick else "[dim]Never[/dim]")
+    grid.add_row("Status Updated", str(status_updated_at) if status_updated_at else "[dim]Never[/dim]")
     grid.add_row("Configuration", "[bright_green]Valid[/bright_green]" if config_ok else "[bright_red]Invalid[/bright_red]")
     launcher_status = get_worker_launcher_status(settings)
     launcher_value = f"[bold]{launcher_status.effective_launcher}[/bold]"
@@ -2408,7 +2414,12 @@ def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore 
             "pid": pid,
             "active_channel": status_data.get("active_channel", user_channel_label(settings.user_channel)),
             "started_at": status_data.get("started_at"),
-            "last_heartbeat": status_data.get("last_message_at"),
+            "last_heartbeat": status_data.get("last_internal_heartbeat_at"),
+            "last_user_message_at": status_data.get("last_user_message_at")
+            or status_data.get("last_message_at"),
+            "last_scheduler_tick_at": status_data.get("last_scheduler_tick_at"),
+            "last_scheduler_tick_status": status_data.get("last_scheduler_tick_status"),
+            "status_updated_at": status_data.get("status_updated_at"),
             "uptime": _uptime_human(status_data.get("started_at")),
             "worker_launcher": {
                 "configured": launcher_status.configured_launcher,

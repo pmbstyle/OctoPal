@@ -20,10 +20,16 @@ def _utc_now_iso() -> str:
 
 def write_start_status(settings: Settings) -> None:
     settings.state_dir.mkdir(parents=True, exist_ok=True)
+    now = _utc_now_iso()
     payload = {
         "pid": _current_pid(),
-        "started_at": _utc_now_iso(),
+        "started_at": now,
+        "status_updated_at": now,
         "last_message_at": None,
+        "last_user_message_at": None,
+        "last_internal_heartbeat_at": None,
+        "last_scheduler_tick_at": None,
+        "last_scheduler_tick_status": None,
         "active_channel": user_channel_label(settings.user_channel),
         "phase": "starting",
     }
@@ -31,19 +37,47 @@ def write_start_status(settings: Settings) -> None:
 
 
 def update_last_message(settings: Settings) -> None:
+    update_runtime_status_timestamp(
+        settings,
+        "last_user_message_at",
+        legacy_field="last_message_at",
+    )
+
+
+def update_last_internal_heartbeat(settings: Settings) -> None:
+    update_runtime_status_timestamp(settings, "last_internal_heartbeat_at")
+
+
+def update_last_scheduler_tick(settings: Settings, *, status: str | None = None) -> None:
+    extra = {}
+    if status is not None:
+        extra["last_scheduler_tick_status"] = str(status)
+    update_runtime_status_timestamp(settings, "last_scheduler_tick_at", extra=extra)
+
+
+def update_runtime_status_timestamp(
+    settings: Settings,
+    field: str,
+    *,
+    legacy_field: str | None = None,
+    extra: dict | None = None,
+) -> None:
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     path = _status_path(settings)
-    payload = {}
-    if path.exists():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            payload = {}
-    payload["last_message_at"] = _utc_now_iso()
+    payload = _read_status_payload(path)
+    now = _utc_now_iso()
+    payload[field] = now
+    payload["status_updated_at"] = now
+    if legacy_field:
+        payload[legacy_field] = now
+    if extra:
+        payload.update(extra)
     if "pid" not in payload:
         payload["pid"] = _current_pid()
     if "started_at" not in payload:
-        payload["started_at"] = _utc_now_iso()
+        payload["started_at"] = now
+    if "active_channel" not in payload:
+        payload["active_channel"] = user_channel_label(settings.user_channel)
     payload["phase"] = "running"
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -51,18 +85,15 @@ def update_last_message(settings: Settings) -> None:
 def mark_runtime_running(settings: Settings) -> None:
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     path = _status_path(settings)
-    payload = {}
-    if path.exists():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            payload = {}
+    payload = _read_status_payload(path)
+    now = _utc_now_iso()
     if "pid" not in payload:
         payload["pid"] = _current_pid()
     if "started_at" not in payload:
-        payload["started_at"] = _utc_now_iso()
+        payload["started_at"] = now
     if "active_channel" not in payload:
         payload["active_channel"] = user_channel_label(settings.user_channel)
+    payload["status_updated_at"] = now
     payload["phase"] = "running"
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -75,6 +106,16 @@ def read_status(settings: Settings) -> dict | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+
+
+def _read_status_payload(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def resolve_runtime_status_display(

@@ -23,6 +23,11 @@ def test_gateway_status_summarizes_runtime_and_channel_state(monkeypatch, tmp_pa
             "pid": 4321,
             "started_at": "2026-03-20T10:00:00+00:00",
             "last_message_at": "2026-03-20T10:05:00+00:00",
+            "last_user_message_at": "2026-03-20T10:05:00+00:00",
+            "last_internal_heartbeat_at": "2026-03-20T10:06:00+00:00",
+            "last_scheduler_tick_at": "2026-03-20T10:06:30+00:00",
+            "last_scheduler_tick_status": "ok",
+            "status_updated_at": "2026-03-20T10:06:31+00:00",
             "active_channel": "Telegram",
         },
     )
@@ -76,6 +81,9 @@ def test_gateway_status_summarizes_runtime_and_channel_state(monkeypatch, tmp_pa
 
     assert payload["status"] == "ok"
     assert payload["running"] is True
+    assert payload["last_heartbeat"] == "2026-03-20T10:06:00+00:00"
+    assert payload["last_user_message_at"] == "2026-03-20T10:05:00+00:00"
+    assert payload["last_scheduler_tick_at"] == "2026-03-20T10:06:30+00:00"
     assert payload["gateway"]["active_channel"] == "telegram"
     assert payload["octo"]["state"] == "thinking"
     assert payload["octo"]["busy"] is True
@@ -106,6 +114,11 @@ def test_gateway_status_treats_missing_scheduler_metrics_as_not_reporting(monkey
             "pid": 4321,
             "started_at": "2026-03-20T10:00:00+00:00",
             "last_message_at": "2026-03-20T10:05:00+00:00",
+            "last_user_message_at": "2026-03-20T10:05:00+00:00",
+            "last_internal_heartbeat_at": "2026-03-20T10:06:00+00:00",
+            "last_scheduler_tick_at": "2026-03-20T10:06:30+00:00",
+            "last_scheduler_tick_status": "ok",
+            "status_updated_at": "2026-03-20T10:06:31+00:00",
             "active_channel": "Telegram",
         },
     )

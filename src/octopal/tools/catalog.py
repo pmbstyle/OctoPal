@@ -1801,13 +1801,16 @@ def _tool_gateway_status(args, ctx) -> str:
     active_channel_metrics = whatsapp_metrics if active_channel == "whatsapp" else telegram_metrics
 
     octo_status = build_octo_status(octo_metrics)
+    last_heartbeat = status_data.get("last_internal_heartbeat_at")
+    last_user_message = status_data.get("last_user_message_at") or status_data.get("last_message_at")
+    status_updated_at = status_data.get("status_updated_at")
 
     services = [
         {
             "id": "gateway",
             "status": "ok" if running else "critical",
             "reason": "running" if running else "process is not running",
-            "updated_at": status_data.get("last_message_at"),
+            "updated_at": status_updated_at or last_heartbeat,
         },
         {
             "id": "octo",
@@ -1860,7 +1863,11 @@ def _tool_gateway_status(args, ctx) -> str:
             "running": running,
             "pid": pid,
             "started_at": status_data.get("started_at"),
-            "last_heartbeat": status_data.get("last_message_at"),
+            "last_heartbeat": last_heartbeat,
+            "last_user_message_at": last_user_message,
+            "last_scheduler_tick_at": status_data.get("last_scheduler_tick_at"),
+            "last_scheduler_tick_status": status_data.get("last_scheduler_tick_status"),
+            "status_updated_at": status_updated_at,
             "gateway": {
                 "host": settings.gateway_host,
                 "port": settings.gateway_port,
