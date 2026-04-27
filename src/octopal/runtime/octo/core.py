@@ -84,6 +84,7 @@ from octopal.runtime.scheduler.service import (
     normalize_notify_user_policy,
     parse_scheduled_task_blocked_until,
 )
+from octopal.runtime.state import update_last_internal_heartbeat, update_last_scheduler_tick
 from octopal.runtime.workers.contracts import (
     TaskRequest,
     WorkerInstructionRequest,
@@ -1980,6 +1981,13 @@ class Octo:
             trace_output = {"status": "failed"}
             logger.exception("Scheduler tick failed")
         finally:
+            runtime_settings = getattr(getattr(self, "runtime", None), "settings", None)
+            if runtime_settings is not None:
+                await asyncio.to_thread(
+                    update_last_scheduler_tick,
+                    runtime_settings,
+                    status=trace_status,
+                )
             trace_metadata["duration_ms"] = round(now_ms() - trace_started_at_ms, 2)
             await _finish_background_trace_context(
                 self.trace_sink,
@@ -3602,6 +3610,13 @@ class Octo:
                     )
                 else:
                     reply_text = _coerce_control_plane_reply(reply_text)
+                if route_request.mode is RouteMode.HEARTBEAT:
+                    runtime_settings = getattr(getattr(self, "runtime", None), "settings", None)
+                    if runtime_settings is not None:
+                        await asyncio.to_thread(
+                            update_last_internal_heartbeat,
+                            runtime_settings,
+                        )
             logger.info("Octo response ready")
             if persist_to_memory:
                 await self.memory.add_message(

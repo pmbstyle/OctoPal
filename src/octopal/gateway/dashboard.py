@@ -1234,7 +1234,8 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         active_channel=active_channel,
         now=now,
         system_running=running,
-        system_last_heartbeat=status_data.get("last_message_at"),
+        system_last_heartbeat=status_data.get("last_internal_heartbeat_at"),
+        system_status_updated_at=status_data.get("status_updated_at"),
         launcher_status=launcher_status,
         octo_metrics=octo_metrics,
         telegram_metrics=telegram_metrics,
@@ -1295,7 +1296,12 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
             "active_channel": active_channel_label,
             "active_channel_id": active_channel,
             "started_at": status_data.get("started_at"),
-            "last_heartbeat": status_data.get("last_message_at"),
+            "last_heartbeat": status_data.get("last_internal_heartbeat_at"),
+            "last_user_message_at": status_data.get("last_user_message_at")
+            or status_data.get("last_message_at"),
+            "last_scheduler_tick_at": status_data.get("last_scheduler_tick_at"),
+            "last_scheduler_tick_status": status_data.get("last_scheduler_tick_status"),
+            "status_updated_at": status_data.get("status_updated_at"),
             "uptime": _uptime_human(status_data.get("started_at")),
             "worker_launcher": {
                 "configured": launcher_status.configured_launcher,
@@ -1411,6 +1417,7 @@ def _build_service_health(
     now: datetime,
     system_running: bool,
     system_last_heartbeat: str | None,
+    system_status_updated_at: str | None,
     launcher_status: WorkerLauncherStatus,
     octo_metrics: dict[str, Any],
     telegram_metrics: dict[str, Any],
@@ -1432,7 +1439,7 @@ def _build_service_health(
             "name": "Gateway",
             "status": gateway_status,
             "reason": gateway_reason,
-            "updated_at": system_last_heartbeat,
+            "updated_at": system_status_updated_at or system_last_heartbeat,
         }
     )
 
@@ -1445,7 +1452,7 @@ def _build_service_health(
             "name": "Worker Launcher",
             "status": launcher_service_status,
             "reason": launcher_status.reason,
-            "updated_at": system_last_heartbeat,
+            "updated_at": system_status_updated_at or system_last_heartbeat,
             "metrics": {
                 "configured": launcher_status.configured_launcher,
                 "effective": launcher_status.effective_launcher,

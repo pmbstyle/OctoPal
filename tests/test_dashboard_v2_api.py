@@ -10,7 +10,12 @@ from octopal.infrastructure.config.models import OctopalConfig
 from octopal.infrastructure.config.settings import Settings
 from octopal.infrastructure.store.models import WorkerRecord
 from octopal.infrastructure.store.sqlite import SQLiteStore
-from octopal.runtime.state import write_start_status
+from octopal.runtime.state import (
+    update_last_internal_heartbeat,
+    update_last_message,
+    update_last_scheduler_tick,
+    write_start_status,
+)
 from octopal.utils import utc_now
 
 
@@ -256,6 +261,49 @@ def test_dashboard_system_and_settings_include_worker_launcher_health(tmp_path, 
     settings_payload = settings_resp.json()
     assert settings_payload["worker_launcher"]["configured"] == "docker"
     assert settings_payload["worker_launcher"]["effective"] == "same_env"
+
+
+def test_dashboard_system_uses_canonical_status_timestamps(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        TELEGRAM_BOT_TOKEN="123:abc",
+        OCTOPAL_STATE_DIR=tmp_path / "state",
+        OCTOPAL_WORKSPACE_DIR=tmp_path / "workspace",
+    )
+    settings.state_dir.mkdir(parents=True, exist_ok=True)
+    write_start_status(settings)
+    update_last_message(settings)
+    update_last_internal_heartbeat(settings)
+    update_last_scheduler_tick(settings, status="ok")
+
+    monkeypatch.setattr(
+        "octopal.gateway.dashboard.get_worker_launcher_status",
+        lambda _settings: type(
+            "_Status",
+            (),
+            {
+                "configured_launcher": "docker",
+                "effective_launcher": "docker",
+                "available": True,
+                "reason": "Docker worker runtime is ready.",
+            },
+        )(),
+    )
+
+    app = build_app(settings)
+    client = TestClient(app)
+    headers = {"x-octopal-token": settings.dashboard_token} if settings.dashboard_token else {}
+
+    response = client.get("/api/dashboard/v2/system", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    system = payload["system"]
+    assert system["last_heartbeat"]
+    assert system["last_user_message_at"]
+    assert system["last_scheduler_tick_at"]
+    assert system["last_scheduler_tick_status"] == "ok"
+
+    gateway_service = next(service for service in payload["services"] if service["id"] == "gateway")
+    assert gateway_service["updated_at"] == system["status_updated_at"]
 
 
 def test_dashboard_config_can_be_read_and_updated(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
