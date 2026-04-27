@@ -22,7 +22,14 @@ def test_runtime_blocks_user_communication_tools_for_workers(tmp_path: Path) -> 
         name="Worker",
         description="Test worker",
         system_prompt="Do work",
-        available_tools=["fs_read", "send_file_to_user", "self_control", "octo_restart_self"],
+        available_tools=[
+            "fs_read",
+            "send_file_to_user",
+            "self_control",
+            "octo_restart_self",
+            "octo_check_update",
+            "octo_update_self",
+        ],
         required_permissions=["filesystem_read", "self_control"],
         model=None,
         max_thinking_steps=3,
@@ -64,6 +71,8 @@ def test_runtime_blocks_user_communication_tools_for_workers(tmp_path: Path) -> 
     assert "send_file_to_user" not in spec.available_tools
     assert "self_control" not in spec.available_tools
     assert "octo_restart_self" not in spec.available_tools
+    assert "octo_check_update" not in spec.available_tools
+    assert "octo_update_self" not in spec.available_tools
 
 
 def test_runtime_allows_worker_manage_templates(tmp_path: Path) -> None:

@@ -19,6 +19,8 @@ CONTROL_ACKS_FILE = "control_acks.jsonl"
 PENDING_RESTART_RESUME_FILE = "pending_restart_resume.json"
 SELF_RESTART_ACTION = "restart_service"
 SELF_RESTART_REQUESTED_BY = "octo_self_restart"
+SELF_UPDATE_ACTION = "update_service"
+SELF_UPDATE_REQUESTED_BY = "octo_self_update"
 
 
 def append_control_request(
@@ -81,18 +83,83 @@ def list_unacked_control_requests(state_dir: Path) -> list[dict[str, Any]]:
 def due_self_restart_requests(
     state_dir: Path, *, now: datetime | None = None
 ) -> list[dict[str, Any]]:
+    return _due_control_requests(
+        state_dir,
+        action=SELF_RESTART_ACTION,
+        requested_by=SELF_RESTART_REQUESTED_BY,
+        now=now,
+    )
+
+
+def due_self_update_requests(
+    state_dir: Path, *, now: datetime | None = None
+) -> list[dict[str, Any]]:
+    return _due_control_requests(
+        state_dir,
+        action=SELF_UPDATE_ACTION,
+        requested_by=SELF_UPDATE_REQUESTED_BY,
+        now=now,
+    )
+
+
+def _due_control_requests(
+    state_dir: Path,
+    *,
+    action: str,
+    requested_by: str,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
     current = now or datetime.now(UTC)
     due: list[dict[str, Any]] = []
     for item in list_unacked_control_requests(state_dir):
-        if str(item.get("action", "")).strip() != SELF_RESTART_ACTION:
+        if str(item.get("action", "")).strip() != action:
             continue
-        if str(item.get("requested_by", "")).strip() != SELF_RESTART_REQUESTED_BY:
+        if str(item.get("requested_by", "")).strip() != requested_by:
             continue
         not_before = _parse_datetime(str(item.get("not_before", "") or ""))
         if not_before is not None and not_before > current:
             continue
         due.append(item)
     return due
+
+
+def check_update_status(project_root: Path | None = None) -> dict[str, Any]:
+    from octopal import __version__
+    from octopal.cli.main import (
+        _detect_release_repo_slug,
+        _get_latest_release_info,
+        _git_checkout_ready_for_update,
+        _is_remote_version_newer,
+    )
+    from octopal.cli.main import (
+        _project_root as cli_project_root,
+    )
+
+    root = (project_root or cli_project_root()).resolve()
+    settings = load_settings()
+    ready, reason = _git_checkout_ready_for_update(root)
+    latest_release = _get_latest_release_info(settings)
+    latest_version = latest_release[0] if latest_release else None
+    release_url = latest_release[1] if latest_release else None
+    update_available = (
+        _is_remote_version_newer(__version__, latest_version)
+        if latest_version is not None
+        else False
+    )
+    return {
+        "status": "ok",
+        "local_version": __version__,
+        "latest_version": latest_version,
+        "release_url": release_url,
+        "repo": _detect_release_repo_slug(),
+        "project_root": str(root),
+        "git_ready": bool(ready),
+        "git_blocker": reason,
+        "update_available": update_available,
+        "can_update": bool(ready),
+        "update_command": "python -m octopal.cli update",
+        "restart_command": "python -m octopal.cli restart",
+    }
 
 
 def write_pending_restart_resume(state_dir: Path, payload: dict[str, Any]) -> Path:
@@ -134,6 +201,39 @@ def launch_restart_helper(
     project_root: Path,
     delay_seconds: int = 1,
 ) -> None:
+    _launch_helper(
+        state_dir,
+        request_id=request_id,
+        project_root=project_root,
+        delay_seconds=delay_seconds,
+        mode="restart",
+    )
+
+
+def launch_update_helper(
+    state_dir: Path,
+    *,
+    request_id: str,
+    project_root: Path,
+    delay_seconds: int = 1,
+) -> None:
+    _launch_helper(
+        state_dir,
+        request_id=request_id,
+        project_root=project_root,
+        delay_seconds=delay_seconds,
+        mode="update",
+    )
+
+
+def _launch_helper(
+    state_dir: Path,
+    *,
+    request_id: str,
+    project_root: Path,
+    delay_seconds: int,
+    mode: str,
+) -> None:
     log_dir = state_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
@@ -153,6 +253,8 @@ def launch_restart_helper(
         str(state_dir),
         "--delay-seconds",
         str(max(0, int(delay_seconds))),
+        "--mode",
+        mode,
     ]
     with (
         open(log_dir / "self_restart_stdout.log", "a", encoding="utf-8") as out_file,
@@ -181,6 +283,55 @@ def launch_restart_helper(
             )
 
 
+def run_update_helper(
+    *,
+    request_id: str,
+    project_root: Path,
+    state_dir: Path,
+    delay_seconds: int,
+) -> int:
+    append_control_ack(
+        state_dir,
+        request_id,
+        status="helper_started",
+        source="self_update_helper",
+        message="Update helper started.",
+    )
+    if delay_seconds > 0:
+        time.sleep(delay_seconds)
+
+    update_result = _run_cli_command(
+        ["update"],
+        project_root=project_root,
+        timeout_seconds=180,
+    )
+    append_control_ack(
+        state_dir,
+        request_id,
+        status="update_executed" if update_result["returncode"] == 0 else "update_failed",
+        source="self_update_helper",
+        message="Update command completed.",
+        metadata=update_result,
+    )
+    if update_result["returncode"] != 0:
+        return int(update_result["returncode"])
+
+    restart_result = _run_cli_command(
+        ["restart"],
+        project_root=project_root,
+        timeout_seconds=120,
+    )
+    append_control_ack(
+        state_dir,
+        request_id,
+        status="restart_executed" if restart_result["returncode"] == 0 else "restart_failed",
+        source="self_update_helper",
+        message="Restart command completed after update.",
+        metadata=restart_result,
+    )
+    return int(restart_result["returncode"])
+
+
 def run_restart_helper(
     *,
     request_id: str,
@@ -197,7 +348,26 @@ def run_restart_helper(
     )
     if delay_seconds > 0:
         time.sleep(delay_seconds)
-    command = [sys.executable, "-m", "octopal.cli", "restart"]
+    result = _run_cli_command(["restart"], project_root=project_root, timeout_seconds=120)
+    status = "executed" if result["returncode"] == 0 else "error"
+    append_control_ack(
+        state_dir,
+        request_id,
+        status=status,
+        source="self_restart_helper",
+        message="Restart command completed.",
+        metadata=result,
+    )
+    return int(result["returncode"])
+
+
+def _run_cli_command(
+    args: list[str],
+    *,
+    project_root: Path,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    command = [sys.executable, "-m", "octopal.cli", *args]
     env = os.environ.copy()
     src_dir = project_root / "src"
     existing_pp = env.get("PYTHONPATH", "")
@@ -210,30 +380,21 @@ def run_restart_helper(
             env=env,
             capture_output=True,
             text=True,
-            timeout=120,
+            timeout=timeout_seconds,
         )
     except Exception as exc:
-        append_control_ack(
-            state_dir,
-            request_id,
-            status="error",
-            source="self_restart_helper",
-            message=str(exc),
-        )
-        return 1
-    append_control_ack(
-        state_dir,
-        request_id,
-        status="executed",
-        source="self_restart_helper",
-        message="Restart command completed.",
-        metadata={
-            "returncode": proc.returncode,
-            "stdout_tail": (proc.stdout or "")[-4000:],
-            "stderr_tail": (proc.stderr or "")[-4000:],
-        },
-    )
-    return proc.returncode
+        return {
+            "returncode": 1,
+            "stdout_tail": "",
+            "stderr_tail": str(exc),
+            "command": " ".join(command),
+        }
+    return {
+        "returncode": proc.returncode,
+        "stdout_tail": (proc.stdout or "")[-4000:],
+        "stderr_tail": (proc.stderr or "")[-4000:],
+        "command": " ".join(command),
+    }
 
 
 def _project_root() -> Path:
@@ -269,14 +430,18 @@ def main() -> int:
     parser.add_argument("--project-root", default=str(_project_root()))
     parser.add_argument("--state-dir", default="")
     parser.add_argument("--delay-seconds", type=int, default=1)
+    parser.add_argument("--mode", choices=["restart", "update"], default="restart")
     args = parser.parse_args()
     state_dir = Path(args.state_dir).resolve() if args.state_dir else load_settings().state_dir
-    return run_restart_helper(
-        request_id=str(args.request_id),
-        project_root=Path(args.project_root).resolve(),
-        state_dir=state_dir,
-        delay_seconds=int(args.delay_seconds),
-    )
+    kwargs = {
+        "request_id": str(args.request_id),
+        "project_root": Path(args.project_root).resolve(),
+        "state_dir": state_dir,
+        "delay_seconds": int(args.delay_seconds),
+    }
+    if args.mode == "update":
+        return run_update_helper(**kwargs)
+    return run_restart_helper(**kwargs)
 
 
 if __name__ == "__main__":
