@@ -334,6 +334,12 @@ _TOOL_METADATA_BY_NAME: dict[str, ToolMetadata] = {
         profile_tags=("ops",),
         capabilities=("service_control",),
     ),
+    "octo_restart_self": ToolMetadata(
+        category="ops",
+        risk="guarded",
+        profile_tags=("ops",),
+        capabilities=("service_control", "self_restart"),
+    ),
     "config_audit": ToolMetadata(
         category="ops",
         profile_tags=("ops",),

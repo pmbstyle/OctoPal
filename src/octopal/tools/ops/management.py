@@ -473,7 +473,9 @@ def rollback_release(args: dict[str, Any], ctx: dict[str, Any]) -> str:
 
 def self_control(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     action = str(args.get("action", "")).strip().lower()
-    allowed = {"restart_service", "graceful_shutdown", "reload_config", "status"}
+    if action == "restart_service":
+        return "self_control error: use octo_restart_self for restart with durable handoff."
+    allowed = {"graceful_shutdown", "reload_config", "status"}
     if action not in allowed:
         return f"self_control error: action must be one of {sorted(allowed)}."
 

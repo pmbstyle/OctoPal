@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 _WORKER_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _TOKEN_RE = re.compile(r"[a-z0-9_]+")
 _MAX_PARALLEL_BATCH = 10
-_WORKER_BLOCKED_TOOL_NAMES = {"send_file_to_user"}
+_WORKER_BLOCKED_TOOL_NAMES = {"send_file_to_user", "self_control", "octo_restart_self"}
 _WORKER_PERMISSION_ALIASES = {
     "spawn_children": "worker_manage",
 }
