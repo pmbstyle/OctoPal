@@ -1526,6 +1526,44 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             handler=_tool_octo_restart_self,
             is_async=True,
         ),
+        ToolSpec(
+            name="octo_check_update",
+            description="Octo-only: check local Octopal version, latest release, and whether the checkout can be updated.",
+            parameters={
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=_tool_octo_check_update,
+            is_async=True,
+        ),
+        ToolSpec(
+            name="octo_update_self",
+            description="Octo-only: persist a durable handoff, run the existing Octopal update command, then restart and resume.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "Why Octo should update now."},
+                    "goal_now": {"type": "string", "description": "Primary goal to resume after update."},
+                    "done": {"type": "array", "items": {"type": "string"}, "description": "Completed items worth preserving."},
+                    "open_threads": {"type": "array", "items": {"type": "string"}, "description": "Open threads still unresolved."},
+                    "critical_constraints": {"type": "array", "items": {"type": "string"}, "description": "Non-negotiable constraints."},
+                    "next_step": {"type": "string", "description": "First step after update and restart."},
+                    "current_interest": {"type": "string", "description": "Current focus area."},
+                    "pending_human_input": {"type": "string", "description": "Human input currently needed, if any."},
+                    "cognitive_state": {"type": "string", "enum": ["focused", "fatigued", "frustrated", "energized"]},
+                    "confidence": {"type": "number", "description": "Confidence in handoff quality (0-1)."},
+                    "delay_seconds": {"type": "integer", "description": "Delay before helper updates Octo (3-60 seconds)."},
+                    "confirm": {"type": "boolean", "description": "Required; must be true to update."},
+                },
+                "required": ["reason", "confirm"],
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=_tool_octo_update_self,
+            is_async=True,
+        ),
     ]
     tools.extend(get_skill_management_tools())
     tools.extend(get_registered_skill_tools())
@@ -1985,6 +2023,34 @@ async def _tool_octo_restart_self(args, ctx) -> str:
     if octo is None or not hasattr(octo, "request_self_restart"):
         return json.dumps({"status": "error", "message": "octo self restart is unavailable"}, ensure_ascii=False)
     result = await octo.request_self_restart(chat_id, args or {})
+    return json.dumps(result, ensure_ascii=False)
+
+
+async def _tool_octo_check_update(args, ctx) -> str:
+    if bool(ctx.get("worker_id") or ctx.get("worker")):
+        return json.dumps(
+            {"status": "error", "message": "octo_check_update is only available to Octo"},
+            ensure_ascii=False,
+        )
+    octo = ctx.get("octo")
+    chat_id = int(ctx.get("chat_id", 0) or 0)
+    if octo is None or not hasattr(octo, "request_update_check"):
+        return json.dumps({"status": "error", "message": "octo update check is unavailable"}, ensure_ascii=False)
+    result = await octo.request_update_check(chat_id, args or {})
+    return json.dumps(result, ensure_ascii=False)
+
+
+async def _tool_octo_update_self(args, ctx) -> str:
+    if bool(ctx.get("worker_id") or ctx.get("worker")):
+        return json.dumps(
+            {"status": "error", "message": "octo_update_self is only available to Octo"},
+            ensure_ascii=False,
+        )
+    octo = ctx.get("octo")
+    chat_id = int(ctx.get("chat_id", 0) or 0)
+    if octo is None or not hasattr(octo, "request_self_update"):
+        return json.dumps({"status": "error", "message": "octo self update is unavailable"}, ensure_ascii=False)
+    result = await octo.request_self_update(chat_id, args or {})
     return json.dumps(result, ensure_ascii=False)
 
 

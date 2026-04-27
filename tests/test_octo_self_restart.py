@@ -9,9 +9,13 @@ from octopal.runtime.octo.core import Octo
 from octopal.runtime.self_control import (
     SELF_RESTART_ACTION,
     SELF_RESTART_REQUESTED_BY,
+    SELF_UPDATE_ACTION,
+    SELF_UPDATE_REQUESTED_BY,
     append_control_request,
     due_self_restart_requests,
+    due_self_update_requests,
     read_pending_restart_resume,
+    run_update_helper,
 )
 from octopal.runtime.workers import runtime as worker_runtime
 from octopal.tools.workers import management as worker_management
@@ -91,6 +95,53 @@ def test_self_restart_persists_handoff_resume_and_request(tmp_path: Path) -> Non
     assert resume["handoff"]["goal_now"] == "Continue connector setup."
 
 
+def test_self_update_persists_handoff_resume_and_request(tmp_path: Path, monkeypatch) -> None:
+    settings = _StoreSettings(tmp_path / "data", tmp_path / "workspace")
+    store = SQLiteStore(settings)
+    octo = Octo(
+        provider=object(),
+        store=store,
+        policy=object(),
+        runtime=_Runtime(settings),
+        approvals=object(),
+        memory=_Memory(),
+        canon=object(),
+    )
+    monkeypatch.setattr(
+        "octopal.runtime.octo.core.check_update_status",
+        lambda _root: {
+            "status": "ok",
+            "local_version": "2026.04.26",
+            "latest_version": "2026.04.27",
+            "update_available": True,
+            "can_update": True,
+        },
+    )
+
+    async def scenario() -> dict:
+        return await octo.request_self_update(
+            42,
+            {
+                "reason": "apply latest release",
+                "goal_now": "Continue release verification.",
+                "next_step": "Report whether update and restart worked.",
+                "confirm": True,
+                "delay_seconds": 3,
+            },
+        )
+
+    result = asyncio.run(scenario())
+    assert result["status"] == "update_requested"
+    assert result["request"]["action"] == SELF_UPDATE_ACTION
+    assert result["request"]["requested_by"] == SELF_UPDATE_REQUESTED_BY
+
+    resume = read_pending_restart_resume(settings.state_dir)
+    assert resume is not None
+    assert resume["request_id"] == result["request"]["request_id"]
+    assert resume["handoff"]["source"] == "octo_update_self"
+    assert resume["update"]["latest_version"] == "2026.04.27"
+
+
 def test_due_self_restart_requests_are_octo_only(tmp_path: Path) -> None:
     state_dir = tmp_path / "data"
     append_control_request(
@@ -123,8 +174,62 @@ def test_due_self_restart_requests_are_octo_only(tmp_path: Path) -> None:
     assert due[0]["reason"] == "ok"
 
 
+def test_due_self_update_requests_are_octo_only(tmp_path: Path) -> None:
+    state_dir = tmp_path / "data"
+    append_control_request(
+        state_dir,
+        action=SELF_UPDATE_ACTION,
+        reason="ok",
+        requested_by=SELF_UPDATE_REQUESTED_BY,
+        delay_seconds=0,
+    )
+    append_control_request(
+        state_dir,
+        action=SELF_UPDATE_ACTION,
+        reason="wrong source",
+        requested_by="worker",
+        delay_seconds=0,
+    )
+
+    due = due_self_update_requests(
+        state_dir,
+        now=datetime.now(UTC) + timedelta(seconds=1),
+    )
+    assert len(due) == 1
+    assert due[0]["reason"] == "ok"
+
+
+def test_update_helper_runs_update_then_restart(tmp_path: Path, monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_cli_command(args, *, project_root, timeout_seconds):
+        calls.append(list(args))
+        return {
+            "returncode": 0,
+            "stdout_tail": "ok",
+            "stderr_tail": "",
+            "command": " ".join(args),
+        }
+
+    monkeypatch.setattr("octopal.runtime.self_control._run_cli_command", fake_run_cli_command)
+
+    rc = run_update_helper(
+        request_id="u1",
+        project_root=tmp_path,
+        state_dir=tmp_path / "data",
+        delay_seconds=0,
+    )
+
+    assert rc == 0
+    assert calls == [["update"], ["restart"]]
+
+
 def test_workers_cannot_receive_self_restart_tools() -> None:
     assert "octo_restart_self" in worker_runtime._WORKER_BLOCKED_TOOL_NAMES
+    assert "octo_check_update" in worker_runtime._WORKER_BLOCKED_TOOL_NAMES
+    assert "octo_update_self" in worker_runtime._WORKER_BLOCKED_TOOL_NAMES
     assert "self_control" in worker_runtime._WORKER_BLOCKED_TOOL_NAMES
     assert "octo_restart_self" in worker_management._WORKER_BLOCKED_TOOL_NAMES
+    assert "octo_check_update" in worker_management._WORKER_BLOCKED_TOOL_NAMES
+    assert "octo_update_self" in worker_management._WORKER_BLOCKED_TOOL_NAMES
     assert "self_control" in worker_management._WORKER_BLOCKED_TOOL_NAMES

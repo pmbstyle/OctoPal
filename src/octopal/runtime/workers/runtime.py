@@ -51,7 +51,13 @@ from octopal.runtime.workers.launcher import WorkerLauncher
 from octopal.utils import utc_now
 
 logger = structlog.get_logger(__name__)
-_WORKER_BLOCKED_TOOL_NAMES = {"send_file_to_user", "self_control", "octo_restart_self"}
+_WORKER_BLOCKED_TOOL_NAMES = {
+    "send_file_to_user",
+    "self_control",
+    "octo_restart_self",
+    "octo_check_update",
+    "octo_update_self",
+}
 _PERMISSION_ALIASES = {
     "spawn_children": "worker_manage",
 }
