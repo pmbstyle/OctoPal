@@ -84,6 +84,17 @@ from octopal.runtime.scheduler.service import (
     normalize_notify_user_policy,
     parse_scheduled_task_blocked_until,
 )
+from octopal.runtime.self_control import (
+    SELF_RESTART_ACTION,
+    SELF_RESTART_REQUESTED_BY,
+    append_control_ack,
+    append_control_request,
+    due_self_restart_requests,
+    launch_restart_helper,
+    mark_restart_resume_consumed,
+    read_pending_restart_resume,
+    write_pending_restart_resume,
+)
 from octopal.runtime.state import update_last_internal_heartbeat, update_last_scheduler_tick
 from octopal.runtime.workers.contracts import (
     TaskRequest,
@@ -1479,6 +1490,7 @@ class Octo:
     _cleanup_task: asyncio.Task | None = None
     _metrics_task: asyncio.Task | None = None
     _scheduler_task: asyncio.Task | None = None
+    _self_control_task: asyncio.Task | None = None
     _scheduler_metric_counters: dict[str, int] | None = None
     _scheduler_interval_seconds: int | None = None
     _scheduler_max_tasks: int | None = None
@@ -2003,6 +2015,52 @@ class Octo:
         while True:
             await asyncio.sleep(interval_seconds)
             await self._run_scheduler_tick_once(chat_id=0, max_tasks=max_tasks)
+
+    async def _periodic_self_control_requests(self, interval_seconds: int = 1) -> None:
+        while True:
+            await asyncio.sleep(interval_seconds)
+            try:
+                await self._run_self_control_requests_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Self-control request executor failed")
+
+    async def _run_self_control_requests_once(self) -> None:
+        runtime_settings = getattr(getattr(self, "runtime", None), "settings", None)
+        if runtime_settings is None:
+            return
+        state_dir = Path(runtime_settings.state_dir)
+        for request in await asyncio.to_thread(due_self_restart_requests, state_dir):
+            request_id = str(request.get("request_id", "") or "").strip()
+            if not request_id:
+                continue
+            append_control_ack(
+                state_dir,
+                request_id,
+                status="accepted",
+                source="octo_self_control",
+                message="Self-restart request accepted; launching restart helper.",
+            )
+            try:
+                launch_restart_helper(
+                    state_dir,
+                    request_id=request_id,
+                    project_root=Path(__file__).resolve().parents[4],
+                    delay_seconds=1,
+                )
+            except Exception as exc:
+                append_control_ack(
+                    state_dir,
+                    request_id,
+                    status="error",
+                    source="octo_self_control",
+                    message=f"Failed to launch restart helper: {exc}",
+                )
+                logger.exception(
+                    "Failed to launch self-restart helper",
+                    request_id=request_id,
+                )
 
     def _get_scheduled_octo_control_backoff(self, task_id: str) -> tuple[float, str] | None:
         task_id_value = str(task_id or "").strip()
@@ -2531,6 +2589,11 @@ class Octo:
                 interval_seconds=resolved_interval,
                 max_tasks=max_tasks,
             )
+        if self._self_control_task is None or self._self_control_task.done():
+            self._self_control_task = asyncio.create_task(
+                self._periodic_self_control_requests()
+            )
+            logger.info("Started self-control request executor")
 
     async def stop_background_tasks(self):
         if self._cleanup_task and not self._cleanup_task.done():
@@ -2554,6 +2617,12 @@ class Octo:
                 logger.info("Stopped periodic scheduler tick task")
         if self.scheduler is not None:
             self._publish_scheduler_metrics(running=False, last_tick_status="stopped")
+        if self._self_control_task and not self._self_control_task.done():
+            self._self_control_task.cancel()
+            try:
+                await self._self_control_task
+            except asyncio.CancelledError:
+                logger.info("Stopped self-control request executor")
 
         # Shutdown MCP sessions
         if self.mcp_manager:
@@ -2575,11 +2644,23 @@ class Octo:
         if self.connector_manager:
             await self.connector_manager.load_and_start_all()
 
+        restart_resume = None
+        runtime_settings = getattr(getattr(self, "runtime", None), "settings", None)
+        if runtime_settings is not None:
+            restart_resume = await asyncio.to_thread(
+                read_pending_restart_resume,
+                Path(runtime_settings.state_dir),
+            )
+            if restart_resume and restart_resume.get("consumed_at"):
+                restart_resume = None
+
         wake_up_prompt = (
             "You are waking up. Inspect runtime health and available workers internally. "
             "Use only bounded control-plane tools if needed, but never output a tool name or tool syntax as your final answer. "
             "Then produce a short friendly startup status message for the user in plain language."
         )
+        if restart_resume:
+            wake_up_prompt += "\n\n" + _build_restart_resume_message(restart_resume)
         original_send = self.internal_send
         chat_ids = [
             chat_id
@@ -2628,6 +2709,11 @@ class Octo:
                     logger.info("Octo initialization response sent")
                 except Exception as e:
                     logger.warning("Failed to send octo initialization response", error=e)
+            if restart_resume and runtime_settings is not None:
+                await asyncio.to_thread(
+                    mark_restart_resume_consumed,
+                    Path(runtime_settings.state_dir),
+                )
         except Exception:
             logger.exception("Octo failed to complete wake-up task")
         finally:
@@ -3448,6 +3534,114 @@ class Octo:
                 output=trace_output,
                 metadata=trace_metadata,
             )
+
+    async def request_self_restart(self, chat_id: int, args: dict[str, Any]) -> dict[str, Any]:
+        runtime_settings = getattr(getattr(self, "runtime", None), "settings", None)
+        if runtime_settings is None:
+            return {"status": "error", "message": "runtime settings are unavailable"}
+        reason = str(args.get("reason", "") or "").strip()
+        if not reason:
+            return {"status": "error", "message": "reason is required"}
+        if not bool(args.get("confirm", False)):
+            return {
+                "status": "needs_confirmation",
+                "action": "octo_restart_self",
+                "message": "Self restart requires confirm=true.",
+            }
+
+        confidence = _coerce_float(args.get("confidence"), default=0.8)
+        delay_seconds = _coerce_int(args.get("delay_seconds"), default=5, minimum=3, maximum=60)
+        health = await self.get_context_health_snapshot(chat_id)
+        handoff = {
+            "chat_id": chat_id,
+            "created_at": utc_now().isoformat(),
+            "mode": "self_restart",
+            "source": "octo_restart_self",
+            "reason": reason,
+            "confidence": confidence,
+            "goal_now": str(args.get("goal_now", "") or "").strip(),
+            "done": _normalize_string_list(args.get("done")),
+            "open_threads": _normalize_string_list(args.get("open_threads")),
+            "critical_constraints": _normalize_string_list(args.get("critical_constraints")),
+            "next_step": str(args.get("next_step", "") or "").strip(),
+            "current_interest": str(args.get("current_interest", "") or "").strip(),
+            "pending_human_input": str(args.get("pending_human_input", "") or "").strip(),
+            "cognitive_state": str(args.get("cognitive_state", "") or "focused")
+            .strip()
+            .lower(),
+            "health_snapshot": health,
+        }
+        if not handoff["goal_now"]:
+            handoff["goal_now"] = "Resume the current user task after Octo restarts."
+        if not handoff["next_step"]:
+            handoff["next_step"] = "Read the restart handoff and continue or clarify."
+
+        workspace_dir = Path(
+            getattr(
+                runtime_settings,
+                "workspace_dir",
+                os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace"),
+            )
+        ).resolve()
+        state_dir = Path(runtime_settings.state_dir)
+        file_info = await asyncio.to_thread(_persist_context_reset_files, workspace_dir, handoff)
+        request = await asyncio.to_thread(
+            append_control_request,
+            state_dir,
+            action=SELF_RESTART_ACTION,
+            reason=reason,
+            requested_by=SELF_RESTART_REQUESTED_BY,
+            delay_seconds=delay_seconds,
+            metadata={"chat_id": chat_id, "handoff_file": file_info.get("handoff_md", "")},
+        )
+        resume_payload = {
+            "status": "pending",
+            "request_id": request["request_id"],
+            "created_at": utc_now().isoformat(),
+            "handoff": handoff,
+            "files": file_info,
+        }
+        await asyncio.to_thread(write_pending_restart_resume, state_dir, resume_payload)
+
+        try:
+            memchain_info = await asyncio.to_thread(
+                memchain_record,
+                workspace_dir,
+                reason="self_restart",
+                meta={
+                    "chat_id": chat_id,
+                    "source": "octo_restart_self",
+                    "request_id": request["request_id"],
+                },
+            )
+        except Exception as exc:
+            memchain_info = {"status": "error", "message": str(exc)}
+            logger.warning("Memchain record failed during self restart request", error=str(exc))
+
+        await asyncio.to_thread(
+            self.store.append_audit,
+            AuditEvent(
+                id=str(uuid4()),
+                ts=utc_now(),
+                level="info",
+                event_type="octo.self_restart_requested",
+                data={
+                    "chat_id": chat_id,
+                    "reason": reason,
+                    "request": request,
+                    "files": file_info,
+                    "memchain": memchain_info,
+                },
+            ),
+        )
+        return {
+            "status": "restart_requested",
+            "request": request,
+            "handoff": handoff,
+            "files": file_info,
+            "memchain": memchain_info,
+            "message": "Self restart requested. Handoff is durable and the restart helper will run shortly.",
+        }
 
     async def handle_message(
         self,
@@ -4325,6 +4519,18 @@ def _coerce_float(value: Any, default: float) -> float:
         return default
 
 
+def _coerce_int(value: Any, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    try:
+        result = int(value)
+    except Exception:
+        result = default
+    if minimum is not None:
+        result = max(minimum, result)
+    if maximum is not None:
+        result = min(maximum, result)
+    return result
+
+
 def _watch_conditions(
     *,
     context_size_estimate: int,
@@ -4565,6 +4771,23 @@ def _build_wakeup_message(handoff: dict[str, Any], handoff_path: str) -> str:
         f"Suggested next step: {next_step}\n"
         f"Handoff file: {handoff_path}\n"
         "Choose one mode now: continue / clarify / replan."
+    )
+
+
+def _build_restart_resume_message(resume: dict[str, Any]) -> str:
+    handoff = resume.get("handoff") if isinstance(resume.get("handoff"), dict) else {}
+    files = resume.get("files") if isinstance(resume.get("files"), dict) else {}
+    goal_now = str(handoff.get("goal_now", "") or "").strip()
+    next_step = str(handoff.get("next_step", "") or "").strip()
+    reason = str(handoff.get("reason", "") or "").strip()
+    handoff_path = str(files.get("handoff_md", "") or "").strip()
+    return (
+        "You woke up after a supervised self restart.\n"
+        f"Restart reason: {reason}\n"
+        f"Handoff goal: {goal_now}\n"
+        f"Suggested next step: {next_step}\n"
+        f"Handoff file: {handoff_path}\n"
+        "Tell the user briefly that the restart completed, then continue, clarify, or replan."
     )
 
 

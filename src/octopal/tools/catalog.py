@@ -1486,11 +1486,11 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="self_control",
-            description="Request supervised self actions (restart/shutdown/reload) or check action status.",
+            description="Request supervised self actions (shutdown/reload) or check action status. Use octo_restart_self for restart with handoff.",
             parameters={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["restart_service", "graceful_shutdown", "reload_config", "status"]},
+                    "action": {"type": "string", "enum": ["graceful_shutdown", "reload_config", "status"]},
                     "reason": {"type": "string"},
                     "confirm": {"type": "boolean"},
                 },
@@ -1499,6 +1499,32 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
             },
             permission="self_control",
             handler=lambda args, ctx: _tool_ops_management("self_control", args, ctx),
+        ),
+        ToolSpec(
+            name="octo_restart_self",
+            description="Octo-only: persist a durable handoff, request a supervised Octo restart, and resume after startup.",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "Why Octo should restart now."},
+                    "goal_now": {"type": "string", "description": "Primary goal to resume after restart."},
+                    "done": {"type": "array", "items": {"type": "string"}, "description": "Completed items worth preserving."},
+                    "open_threads": {"type": "array", "items": {"type": "string"}, "description": "Open threads still unresolved."},
+                    "critical_constraints": {"type": "array", "items": {"type": "string"}, "description": "Non-negotiable constraints."},
+                    "next_step": {"type": "string", "description": "First step after restart."},
+                    "current_interest": {"type": "string", "description": "Current focus area."},
+                    "pending_human_input": {"type": "string", "description": "Human input currently needed, if any."},
+                    "cognitive_state": {"type": "string", "enum": ["focused", "fatigued", "frustrated", "energized"]},
+                    "confidence": {"type": "number", "description": "Confidence in handoff quality (0-1)."},
+                    "delay_seconds": {"type": "integer", "description": "Delay before helper restarts Octo (3-60 seconds)."},
+                    "confirm": {"type": "boolean", "description": "Required; must be true to restart."},
+                },
+                "required": ["reason", "confirm"],
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=_tool_octo_restart_self,
+            is_async=True,
         ),
     ]
     tools.extend(get_skill_management_tools())
@@ -1945,6 +1971,20 @@ async def _tool_octo_context_reset(args, ctx) -> str:
     if octo is None or not hasattr(octo, "request_context_reset"):
         return json.dumps({"status": "error", "message": "octo context reset is unavailable"}, ensure_ascii=False)
     result = await octo.request_context_reset(chat_id, args or {})
+    return json.dumps(result, ensure_ascii=False)
+
+
+async def _tool_octo_restart_self(args, ctx) -> str:
+    if bool(ctx.get("worker_id") or ctx.get("worker")):
+        return json.dumps(
+            {"status": "error", "message": "octo_restart_self is only available to Octo"},
+            ensure_ascii=False,
+        )
+    octo = ctx.get("octo")
+    chat_id = int(ctx.get("chat_id", 0) or 0)
+    if octo is None or not hasattr(octo, "request_self_restart"):
+        return json.dumps({"status": "error", "message": "octo self restart is unavailable"}, ensure_ascii=False)
+    result = await octo.request_self_restart(chat_id, args or {})
     return json.dumps(result, ensure_ascii=False)
 
 

@@ -624,8 +624,8 @@ async def execute_agent_task(
         available_tools,
         [
             ToolPolicyPipelineStep(
-                label="worker.user_communication_denylist",
-                policy=ToolPolicy(deny=["send_file_to_user"]),
+                label="worker.octo_only_tool_denylist",
+                policy=ToolPolicy(deny=["send_file_to_user", "self_control", "octo_restart_self"]),
             ),
             ToolPolicyPipelineStep(
                 label="worker.available_tools",

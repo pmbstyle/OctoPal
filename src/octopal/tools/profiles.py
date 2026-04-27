@@ -89,6 +89,7 @@ DEFAULT_TOOL_PROFILES: dict[str, ToolProfile] = {
                 "service_logs",
                 "process_inspect",
                 "self_control",
+                "octo_restart_self",
                 "config_audit",
                 "secret_scan",
                 "db_backup",
