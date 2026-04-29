@@ -249,7 +249,7 @@ def _format_recent_history_content(content: str, created_at: str | None) -> str:
 
 
 def _prune_recent_history_window(
-    history: list[tuple[str, str, str | None]],
+    history: list[tuple[str, str] | tuple[str, str, str | None]],
     *,
     max_history_chars: int,
     keep_recent: int,
@@ -258,7 +258,8 @@ def _prune_recent_history_window(
     trimmed_count = 0
     dropped_count = 0
     normalized: list[tuple[str, str, str | None]] = []
-    for role, content, created_at in history:
+    for item in history:
+        role, content, created_at = _normalize_recent_history_item(item)
         trimmed = _trim_middle(content, per_message_chars)
         if trimmed != content:
             trimmed_count += 1
