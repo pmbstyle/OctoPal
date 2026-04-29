@@ -31,7 +31,14 @@ export function InstallProgressScreen({
     >
       <img className={busy ? "octo status-octo pulse" : "octo status-octo"} src={octoImage} alt="Octopal mascot" />
       <h1>{title}</h1>
-      <p>{error || body}</p>
+      {error ? (
+        <div className="status-error" role="alert">
+          <strong>{body}</strong>
+          <pre>{error}</pre>
+        </div>
+      ) : (
+        <p>{body}</p>
+      )}
 
       {visibleEvents.length > 0 ? (
         <div className="install-events" aria-live="polite">

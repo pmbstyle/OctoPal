@@ -28,7 +28,14 @@ export type InstallResult = {
 };
 
 export type StartResult = {
+  ok: true;
   installDir: string;
+  detail: string;
+};
+
+export type StartFailure = {
+  ok: false;
+  error: string;
   detail: string;
 };
 
@@ -42,6 +49,32 @@ type RunOptions = {
   env?: NodeJS.ProcessEnv;
   quiet?: boolean;
 };
+
+function sanitizeOutput(text: string): string {
+  return text
+    .replace(/\b\d{7,12}:[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
+    .replace(/\bsk-or-v1-[A-Za-z0-9_-]{16,}\b/g, "[redacted-key]")
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, "[redacted-key]")
+    .replace(/\bBS[A-Za-z0-9_-]{20,}\b/g, "[redacted-key]")
+    .replace(
+      /((?:api[_-]?key|bot[_-]?token|callback[_-]?token|telegram[_-]?bot[_-]?token|secret|token)\s*=\s*')[^']*(')/gi,
+      "$1[redacted]$2",
+    )
+    .replace(
+      /((?:api[_-]?key|bot[_-]?token|callback[_-]?token|telegram[_-]?bot[_-]?token|secret|token)"?\s*:\s*")[^"]*(")/gi,
+      "$1[redacted]$2",
+    );
+}
+
+function withPythonDesktopEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...withLocalToolPaths(env),
+    FORCE_COLOR: "0",
+    NO_COLOR: "1",
+    PYTHONIOENCODING: "utf-8",
+    PYTHONUTF8: "1",
+  };
+}
 
 function emitStep(emit: (event: InstallEvent) => void, message: string, detail?: string) {
   emit({ kind: "step", message, detail });
@@ -93,7 +126,7 @@ function runCommand(
     let stderr = "";
 
     child.stdout?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+      const text = sanitizeOutput(chunk.toString());
       stdout += text;
       if (!options.quiet) {
         emit({ kind: "log", message: text.trim() });
@@ -101,7 +134,7 @@ function runCommand(
     });
 
     child.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
+      const text = sanitizeOutput(chunk.toString());
       stderr += text;
       if (!options.quiet) {
         emit({ kind: "log", message: text.trim() });
@@ -114,7 +147,7 @@ function runCommand(
         resolve({ stdout, stderr });
         return;
       }
-      reject(new Error(`${command} ${args.join(" ")} exited with code ${code}: ${(stderr || stdout).trim()}`));
+      reject(new Error(`${command} ${args.join(" ")} exited with code ${code}: ${sanitizeOutput(stderr || stdout).trim()}`));
     });
   });
 }
@@ -340,12 +373,26 @@ export async function startOctopal(installDir: string): Promise<StartResult> {
 
   const { stdout, stderr } = await runCommand(uvCommand, ["run", "octopal", "start"], () => undefined, {
     cwd: installDir,
-    env: withLocalToolPaths(),
+    env: withPythonDesktopEnv(),
     quiet: true,
   });
 
   return {
+    ok: true,
     installDir,
-    detail: (stdout || stderr).trim(),
+    detail: sanitizeOutput(stdout || stderr).trim(),
   };
+}
+
+export async function startOctopalSafely(installDir: string): Promise<StartResult | StartFailure> {
+  try {
+    return await startOctopal(installDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not start Octopal.";
+    return {
+      ok: false,
+      error: "Could not start Octopal.",
+      detail: sanitizeOutput(message),
+    };
+  }
 }

@@ -14,7 +14,14 @@ type DesktopInstallResult = {
 };
 
 type DesktopStartResult = {
+  ok: true;
   installDir: string;
+  detail: string;
+};
+
+type DesktopStartFailure = {
+  ok: false;
+  error: string;
   detail: string;
 };
 
@@ -40,7 +47,7 @@ type OctopalDesktopApi = {
   checkPrerequisites: () => Promise<Array<{ id: string; label: string; ok: boolean; detail: string }>>;
   writeInstallPlan: (payload: unknown) => Promise<{ planPath: string }>;
   installOctopal: (payload: unknown) => Promise<DesktopInstallResult>;
-  startOctopal: (installDir: string) => Promise<DesktopStartResult>;
+  startOctopal: (installDir: string) => Promise<DesktopStartResult | DesktopStartFailure>;
   onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => () => void;
 };
 

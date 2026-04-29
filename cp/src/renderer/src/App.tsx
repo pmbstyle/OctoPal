@@ -33,6 +33,7 @@ export function App() {
   const [installError, setInstallError] = useState("");
   const [startStatus, setStartStatus] = useState<"idle" | "starting" | "started" | "failed">("idle");
   const [startError, setStartError] = useState("");
+  const [startErrorDetail, setStartErrorDetail] = useState("");
 
   const form = useForm<InstallForm>({
     resolver: zodResolver(installSchema),
@@ -172,6 +173,7 @@ export function App() {
     setSavedInstallResult(null);
     setStartStatus("idle");
     setStartError("");
+    setStartErrorDetail("");
 
     const payload = {
       createdBy: "Octopal Desktop",
@@ -212,12 +214,20 @@ export function App() {
 
     setStartStatus("starting");
     setStartError("");
+    setStartErrorDetail("");
     try {
-      await window.octopalDesktop.startOctopal(installDir);
+      const result = await window.octopalDesktop.startOctopal(installDir);
+      if (!result.ok) {
+        setStartStatus("failed");
+        setStartError(result.error || copy("startFailed"));
+        setStartErrorDetail(result.detail);
+        return;
+      }
       setStartStatus("started");
     } catch (error) {
       setStartStatus("failed");
       setStartError(error instanceof Error ? error.message : copy("startFailed"));
+      setStartErrorDetail("");
     }
   }
 
@@ -278,8 +288,10 @@ export function App() {
           <StatusScreen
             key="done"
             title={startStatus === "started" ? copy("octopalStarted") : copy("completeTitle")}
-            body={startStatus === "failed" ? startError : ""}
+            body=""
             octoAlt="Octopal mascot"
+            errorTitle={startStatus === "failed" ? startError : ""}
+            errorDetail={startStatus === "failed" ? startErrorDetail : ""}
             action={
               startStatus === "started" ? null : (
                 <Button

@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { runInstall, startOctopal, type InstallEvent, type InstallPayload } from "./installer";
+import { runInstall, startOctopalSafely, type InstallEvent, type InstallPayload } from "./installer";
 
 const execFileAsync = promisify(execFile);
 
@@ -164,7 +164,7 @@ ipcMain.handle("desktop:install-octopal", async (event, payload: InstallPayload)
   }
 });
 
-ipcMain.handle("desktop:start-octopal", async (_event, installDir: string) => startOctopal(installDir));
+ipcMain.handle("desktop:start-octopal", async (_event, installDir: string) => startOctopalSafely(installDir));
 
 void app.whenReady().then(async () => {
   nativeTheme.themeSource = (await readSettings()).theme;
