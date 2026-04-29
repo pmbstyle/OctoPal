@@ -174,12 +174,12 @@ class MemoryService:
         top = scored[: self.top_k]
         return [f"{entry.role}: {entry.content}" for _, entry in top]
 
-    async def get_recent_history(self, chat_id: int, limit: int = 6) -> list[tuple[str, str]]:
+    async def get_recent_history(self, chat_id: int, limit: int = 6) -> list[tuple[str, str, str]]:
         entries = await asyncio.to_thread(
             self.store.list_memory_entries_by_chat, chat_id, limit=limit
         )
         entries.reverse()
-        return [(entry.role, entry.content) for entry in entries]
+        return [(entry.role, entry.content, entry.created_at.isoformat()) for entry in entries]
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:

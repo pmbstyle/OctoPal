@@ -6,7 +6,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from octopal.runtime.memory.memchain import memchain_verify
 from octopal.runtime.memory.service import infer_memory_facets
@@ -37,7 +37,7 @@ class MemoryContextBundle:
     canon_context: str
     facts_context: list[str]
     memory_context: list[str]
-    recent_history: list[tuple[str, str]]
+    recent_history: list[tuple[str, str, str | None]]
     prune_stats: dict[str, int]
     selected_facets: list[str]
 
@@ -236,35 +236,48 @@ def _trim_middle(text: str, max_chars: int) -> str:
     return text[:head] + "\n...[pruned for context window]...\n" + text[-tail:]
 
 
+def _normalize_recent_history_item(item: Any) -> tuple[str, str, str | None]:
+    role, content = item[0], item[1]
+    created_at = item[2] if len(item) > 2 else None
+    return str(role), str(content), str(created_at) if created_at is not None else None
+
+
+def _format_recent_history_content(content: str, created_at: str | None) -> str:
+    if not created_at:
+        return content
+    return f"Sent at: {created_at}\n\n{content}"
+
+
 def _prune_recent_history_window(
-    history: list[tuple[str, str]],
+    history: list[tuple[str, str] | tuple[str, str, str | None]],
     *,
     max_history_chars: int,
     keep_recent: int,
     per_message_chars: int,
-) -> tuple[list[tuple[str, str]], dict[str, int]]:
+) -> tuple[list[tuple[str, str, str | None]], dict[str, int]]:
     trimmed_count = 0
     dropped_count = 0
-    normalized: list[tuple[str, str]] = []
-    for role, content in history:
+    normalized: list[tuple[str, str, str | None]] = []
+    for item in history:
+        role, content, created_at = _normalize_recent_history_item(item)
         trimmed = _trim_middle(content, per_message_chars)
         if trimmed != content:
             trimmed_count += 1
-        normalized.append((role, trimmed))
+        normalized.append((role, trimmed, created_at))
 
-    total_chars = sum(len(content) for _, content in normalized)
+    total_chars = sum(len(content) for _, content, _ in normalized)
     pruned = list(normalized)
 
     # Drop oldest messages first while preserving a recent tail.
     keep_recent = max(1, keep_recent)
     while len(pruned) > keep_recent and total_chars > max_history_chars:
-        _, removed = pruned.pop(0)
+        _, removed, _ = pruned.pop(0)
         dropped_count += 1
         total_chars -= len(removed)
 
     # If still too large, continue dropping oldest until within budget or one message remains.
     while len(pruned) > 1 and total_chars > max_history_chars:
-        _, removed = pruned.pop(0)
+        _, removed, _ = pruned.pop(0)
         dropped_count += 1
         total_chars -= len(removed)
 
@@ -307,7 +320,8 @@ async def _build_memory_context_bundle(
     else:
         memory_context = await memory.get_context(user_text, exclude_chat_id=chat_id)
 
-    recent_history = await memory.get_recent_history(chat_id, limit=20)
+    raw_recent_history = await memory.get_recent_history(chat_id, limit=20)
+    recent_history = [_normalize_recent_history_item(item) for item in raw_recent_history]
     if recent_history and recent_history[-1][0] == "user" and recent_history[-1][1] == user_text:
         recent_history = recent_history[:-1]
     max_history_chars = _env_int("OCTOPAL_CONTEXT_PRUNE_MAX_HISTORY_CHARS", 100_000, minimum=2_000)
@@ -434,8 +448,13 @@ async def build_octo_prompt(
             )
         )
     if memory_bundle.recent_history:
-        for role, content in memory_bundle.recent_history:
-            messages.append(Message(role=role, content=content))
+        for role, content, created_at in memory_bundle.recent_history:
+            messages.append(
+                Message(
+                    role=role,
+                    content=_format_recent_history_content(content, created_at),
+                )
+            )
 
     if images:
         text_segments: list[str] = []
