@@ -2,7 +2,7 @@ import { type ButtonHTMLAttributes, type ReactNode } from "react";
 
 import { cn } from "../lib/cn";
 
-type ButtonVariant = "primary" | "secondary" | "ghost";
+type ButtonVariant = "primary" | "secondary" | "ghost" | "success";
 
 export function Button({
   children,

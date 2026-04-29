@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import type { ReactNode } from "react";
 
 import octoImage from "../../../../assets/octo.png";
 
@@ -7,11 +8,13 @@ export function StatusScreen({
   body,
   octoAlt,
   busy,
+  action,
 }: {
   title: string;
   body: string;
   octoAlt: string;
   busy?: boolean;
+  action?: ReactNode;
 }) {
   return (
     <motion.section
@@ -23,7 +26,8 @@ export function StatusScreen({
     >
       <img className={busy ? "octo status-octo pulse" : "octo status-octo"} src={octoImage} alt={octoAlt} />
       <h1>{title}</h1>
-      <p>{body}</p>
+      {body ? <p>{body}</p> : null}
+      {action ? <div className="status-actions">{action}</div> : null}
     </motion.section>
   );
 }

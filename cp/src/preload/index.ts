@@ -6,6 +6,24 @@ type DesktopSettings = {
   installDir: string;
 };
 
+type DesktopInstallEvent = {
+  kind: "step" | "log" | "warning" | "error" | "done";
+  message: string;
+  detail?: string;
+};
+
+type DesktopInstallResult = {
+  installDir: string;
+  releaseTag: string;
+  configPath: string;
+  planPath: string;
+};
+
+type DesktopStartResult = {
+  installDir: string;
+  detail: string;
+};
+
 contextBridge.exposeInMainWorld("octopalDesktop", {
   loadSettings: () => ipcRenderer.invoke("desktop:load-settings") as Promise<DesktopSettings>,
   saveSettings: (settings: DesktopSettings) =>
@@ -20,4 +38,13 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     >,
   writeInstallPlan: (payload: unknown) =>
     ipcRenderer.invoke("desktop:write-install-plan", payload) as Promise<{ planPath: string }>,
+  installOctopal: (payload: unknown) =>
+    ipcRenderer.invoke("desktop:install-octopal", payload) as Promise<DesktopInstallResult>,
+  startOctopal: (installDir: string) =>
+    ipcRenderer.invoke("desktop:start-octopal", installDir) as Promise<DesktopStartResult>,
+  onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, installEvent: DesktopInstallEvent) => callback(installEvent);
+    ipcRenderer.on("desktop:install-event", handler);
+    return () => ipcRenderer.removeListener("desktop:install-event", handler);
+  },
 });

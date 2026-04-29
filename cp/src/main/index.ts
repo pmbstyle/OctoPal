@@ -4,6 +4,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
+import { runInstall, startOctopal, type InstallEvent, type InstallPayload } from "./installer";
+
 const execFileAsync = promisify(execFile);
 
 type DesktopSettings = {
@@ -144,6 +146,25 @@ ipcMain.handle("desktop:write-install-plan", async (_event, payload: unknown) =>
   await writeFile(planPath, JSON.stringify(payload, null, 2), "utf8");
   return { planPath };
 });
+
+ipcMain.handle("desktop:install-octopal", async (event, payload: InstallPayload) => {
+  const sender = event.sender;
+  const emit = (installEvent: InstallEvent) => {
+    if (!sender.isDestroyed()) {
+      sender.send("desktop:install-event", installEvent);
+    }
+  };
+
+  try {
+    return await runInstall(payload, emit);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Installation failed.";
+    emit({ kind: "error", message });
+    throw error;
+  }
+});
+
+ipcMain.handle("desktop:start-octopal", async (_event, installDir: string) => startOctopal(installDir));
 
 void app.whenReady().then(async () => {
   nativeTheme.themeSource = (await readSettings()).theme;

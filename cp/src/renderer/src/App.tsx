@@ -1,9 +1,12 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { AnimatePresence } from "framer-motion";
+import { Play } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { AppShell } from "./components/AppShell";
+import { Button } from "./components/Button";
+import { InstallProgressScreen } from "./components/InstallProgressScreen";
 import { StatusScreen } from "./components/StatusScreen";
 import { WelcomeScreen } from "./components/WelcomeScreen";
 import { WizardScreen } from "./components/WizardScreen";
@@ -25,6 +28,11 @@ export function App() {
   const [screen, setScreen] = useState<Screen>("welcome");
   const [stepIndex, setStepIndex] = useState(0);
   const [savedPlanPath, setSavedPlanPath] = useState("");
+  const [savedInstallResult, setSavedInstallResult] = useState<DesktopInstallResult | null>(null);
+  const [installEvents, setInstallEvents] = useState<DesktopInstallEvent[]>([]);
+  const [installError, setInstallError] = useState("");
+  const [startStatus, setStartStatus] = useState<"idle" | "starting" | "started" | "failed">("idle");
+  const [startError, setStartError] = useState("");
 
   const form = useForm<InstallForm>({
     resolver: zodResolver(installSchema),
@@ -159,6 +167,12 @@ export function App() {
     }
 
     setScreen("installing");
+    setInstallEvents([]);
+    setInstallError("");
+    setSavedInstallResult(null);
+    setStartStatus("idle");
+    setStartError("");
+
     const payload = {
       createdBy: "Octopal Desktop",
       createdAt: new Date().toISOString(),
@@ -167,13 +181,44 @@ export function App() {
     };
 
     if (window.octopalDesktop) {
-      const result = await window.octopalDesktop.writeInstallPlan(payload);
-      setSavedPlanPath(result.planPath);
+      const unsubscribe = window.octopalDesktop.onInstallEvent((event) => {
+        setInstallEvents((current) => [...current, event].slice(-80));
+      });
+
+      try {
+        const result = await window.octopalDesktop.installOctopal(payload);
+        setSavedInstallResult(result);
+        setSavedPlanPath(result.planPath);
+        setScreen("done");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : copy("installFailedBody");
+        setInstallError(message);
+        setScreen("failed");
+      } finally {
+        unsubscribe();
+      }
     } else {
       setSavedPlanPath("browser-preview/.octopal-desktop/install-plan.json");
+      setInstallEvents([{ kind: "done", message: "Browser preview", detail: "Electron installer API is not available." }]);
+      window.setTimeout(() => setScreen("done"), 850);
+    }
+  }
+
+  async function startInstalledOctopal() {
+    const installDir = savedInstallResult?.installDir || values.installDir;
+    if (!window.octopalDesktop || !installDir) {
+      return;
     }
 
-    window.setTimeout(() => setScreen("done"), 850);
+    setStartStatus("starting");
+    setStartError("");
+    try {
+      await window.octopalDesktop.startOctopal(installDir);
+      setStartStatus("started");
+    } catch (error) {
+      setStartStatus("failed");
+      setStartError(error instanceof Error ? error.message : copy("startFailed"));
+    }
   }
 
   return (
@@ -220,11 +265,11 @@ export function App() {
         ) : null}
 
         {screen === "installing" ? (
-          <StatusScreen
+          <InstallProgressScreen
             key="installing"
             title={copy("installingTitle")}
             body={copy("installingBody")}
-            octoAlt="Octopal mascot"
+            events={installEvents}
             busy
           />
         ) : null}
@@ -232,9 +277,33 @@ export function App() {
         {screen === "done" ? (
           <StatusScreen
             key="done"
-            title={copy("completeTitle")}
-            body={`${copy("completeBody")} ${savedPlanPath ? `${copy("planSaved")}: ${savedPlanPath}` : ""}`}
+            title={startStatus === "started" ? copy("octopalStarted") : copy("completeTitle")}
+            body={startStatus === "failed" ? startError : ""}
             octoAlt="Octopal mascot"
+            action={
+              startStatus === "started" ? null : (
+                <Button
+                  type="button"
+                  variant="success"
+                  className="status-action-button"
+                  disabled={startStatus === "starting"}
+                  onClick={() => void startInstalledOctopal()}
+                >
+                  <Play data-icon="inline-start" />
+                  {startStatus === "starting" ? copy("startingOctopal") : copy("startOctopal")}
+                </Button>
+              )
+            }
+          />
+        ) : null}
+
+        {screen === "failed" ? (
+          <InstallProgressScreen
+            key="failed"
+            title={copy("installFailedTitle")}
+            body={copy("installFailedBody")}
+            events={installEvents}
+            error={installError}
           />
         ) : null}
       </AnimatePresence>

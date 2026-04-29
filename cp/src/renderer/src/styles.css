@@ -260,6 +260,18 @@ button {
   box-shadow: 0 16px 30px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
+.button-success {
+  background: linear-gradient(135deg, #2fbf8f, #17a56f);
+  color: #ffffff;
+  box-shadow: 0 16px 30px rgba(47, 191, 143, 0.24);
+}
+
+.button:disabled {
+  cursor: default;
+  opacity: 0.68;
+  transform: none;
+}
+
 .button-secondary,
 .button-ghost {
   color: var(--foreground);
@@ -999,6 +1011,81 @@ p {
 .status-screen p {
   max-width: 720px;
   margin: 18px auto 0;
+}
+
+.status-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 30px;
+}
+
+.status-action-button {
+  min-width: 210px;
+  min-height: 58px;
+  font-size: 17px;
+}
+
+.install-progress {
+  padding-right: 32px;
+  padding-left: 32px;
+}
+
+.install-progress .status-octo {
+  width: min(210px, 42vw);
+  margin-bottom: 22px;
+}
+
+.install-events {
+  display: grid;
+  gap: 10px;
+  width: min(720px, 100%);
+  max-height: 260px;
+  margin-top: 26px;
+  overflow: auto;
+  text-align: left;
+}
+
+.install-event {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-strong);
+}
+
+.install-event strong,
+.install-event span {
+  display: block;
+}
+
+.install-event strong {
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.install-event span {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.install-event-log {
+  opacity: 0.78;
+}
+
+.install-event-warning {
+  border-color: color-mix(in srgb, #f6a524 56%, var(--border));
+}
+
+.install-event-error {
+  border-color: color-mix(in srgb, var(--danger) 70%, var(--border));
+}
+
+.install-event-done {
+  border-color: color-mix(in srgb, var(--success) 62%, var(--border));
 }
 
 .pulse {
