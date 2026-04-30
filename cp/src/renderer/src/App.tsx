@@ -178,7 +178,7 @@ export function App() {
   }, [language, settingsLoaded, theme, values.installDir]);
 
   useEffect(() => {
-    if (!settingsLoaded || !installState.installed) {
+    if (!settingsLoaded || !installState.installed || screen !== "done") {
       return;
     }
 
@@ -188,7 +188,7 @@ export function App() {
     }, 5000);
 
     return () => window.clearInterval(interval);
-  }, [installState.installed, refreshRuntimeStatus, settingsLoaded]);
+  }, [installState.installed, refreshRuntimeStatus, screen, settingsLoaded]);
 
   useEffect(() => {
     setStepIndex((current) => Math.min(current, steps.length - 1));
@@ -382,6 +382,7 @@ export function App() {
     }
 
     setStartStatus("starting");
+    setScreen("done");
     setStartError("");
     setStartErrorDetail("");
     try {
@@ -450,11 +451,7 @@ export function App() {
             onThemeChange={setTheme}
             onStart={() => void openConfiguration()}
             onStartOctopal={() => void startInstalledOctopal()}
-            onStopOctopal={() => void stopInstalledOctopal()}
             installed={installState.installed}
-            runtimeState={runtimeView.state}
-            runtimeTitle={runtimeView.title}
-            runtimeDetail={runtimeView.detail}
           />
         ) : null}
 

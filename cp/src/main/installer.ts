@@ -103,6 +103,7 @@ function sanitizeOutput(text: string): string {
 function withPythonDesktopEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
     ...withLocalToolPaths(env),
+    COLUMNS: "20000",
     FORCE_COLOR: "0",
     NO_COLOR: "1",
     PYTHONIOENCODING: "utf-8",
@@ -242,11 +243,9 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function getRecentError(snapshot: Record<string, unknown>): string {
   const logs = Array.isArray(snapshot.logs) ? snapshot.logs : [];
-  const errorEntry = [...logs]
-    .reverse()
-    .map((entry) => asRecord(entry))
-    .find((entry) => ["error", "critical"].includes(String(entry.level ?? "").toLowerCase()));
-  return errorEntry ? String(errorEntry.event ?? "").trim() : "";
+  const latestEntry = asRecord(logs[logs.length - 1]);
+  const latestLevel = String(latestEntry.level ?? "").toLowerCase();
+  return ["error", "critical"].includes(latestLevel) ? String(latestEntry.event ?? "").trim() : "";
 }
 
 function statusFromDashboardSnapshot(snapshot: unknown, installDir: string): RuntimeStatusResult {

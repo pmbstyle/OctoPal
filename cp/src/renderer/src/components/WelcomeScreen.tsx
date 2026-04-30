@@ -1,4 +1,4 @@
-import { ArrowRight, Globe2, Moon, Play, Settings, Square, Sun } from "lucide-react";
+import { ArrowRight, Globe2, Moon, Play, Settings, Sun } from "lucide-react";
 import { motion } from "framer-motion";
 
 import octoImage from "../../../../assets/octo.png";
@@ -15,11 +15,7 @@ export function WelcomeScreen({
   onThemeChange,
   onStart,
   onStartOctopal,
-  onStopOctopal,
   installed,
-  runtimeState,
-  runtimeTitle,
-  runtimeDetail,
 }: {
   copy: CopyFn;
   language: Language;
@@ -28,17 +24,8 @@ export function WelcomeScreen({
   onThemeChange: (theme: Theme) => void;
   onStart: () => void;
   onStartOctopal: () => void;
-  onStopOctopal: () => void;
   installed: boolean;
-  runtimeState: "checking" | "starting" | "running" | "stopping" | "stopped" | "error";
-  runtimeTitle: string;
-  runtimeDetail: string;
 }) {
-  const running = runtimeState === "running";
-  const stopping = runtimeState === "stopping";
-  const starting = runtimeState === "starting";
-  const canStop = running || stopping;
-
   return (
     <motion.section
       key="welcome"
@@ -74,18 +61,11 @@ export function WelcomeScreen({
         {installed ? (
           <Button
             className="welcome-button welcome-action-button"
-            variant={canStop ? "danger" : "success"}
-            disabled={starting || stopping}
-            onClick={canStop ? onStopOctopal : onStartOctopal}
+            variant="success"
+            onClick={onStartOctopal}
           >
-            {canStop ? <Square data-icon="inline-start" /> : <Play data-icon="inline-start" />}
-            {running
-              ? copy("stopOctopal")
-              : stopping
-                ? copy("stoppingOctopal")
-                : starting
-                  ? copy("startingOctopal")
-                  : copy("startOctopal")}
+            <Play data-icon="inline-start" />
+            {copy("startOctopal")}
           </Button>
         ) : null}
         <Button className={installed ? "welcome-button welcome-action-button" : "welcome-button"} variant={installed ? "secondary" : "primary"} onClick={onStart}>
@@ -94,15 +74,6 @@ export function WelcomeScreen({
           {!installed ? <ArrowRight data-icon="inline-end" /> : null}
         </Button>
       </div>
-      {installed ? (
-        <div className={`runtime-status runtime-status-${runtimeState}`} role={runtimeState === "error" ? "alert" : "status"}>
-          <span className="runtime-status-dot" aria-hidden="true" />
-          <div>
-            <strong>{runtimeTitle}</strong>
-            {runtimeDetail ? <p>{runtimeDetail}</p> : null}
-          </div>
-        </div>
-      ) : null}
     </motion.section>
   );
 }
