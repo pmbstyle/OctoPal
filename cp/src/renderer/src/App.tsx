@@ -191,6 +191,44 @@ export function App() {
   }, [installState.installed, refreshRuntimeStatus, screen, settingsLoaded]);
 
   useEffect(() => {
+    if (!settingsLoaded || !installState.installed || screen !== "welcome" || !window.octopalDesktop || !runtimeInstallDir) {
+      return;
+    }
+
+    let cancelled = false;
+    void window.octopalDesktop
+      .getOctopalStatus(runtimeInstallDir)
+      .then((result) => {
+        if (cancelled) {
+          return;
+        }
+
+        if (result.ok && result.state === "running") {
+          setRuntimeStatus(result);
+          setStartStatus("started");
+          setStartError("");
+          setStartErrorDetail("");
+          setScreen("done");
+          return;
+        }
+
+        setRuntimeStatus(null);
+        setStartStatus("idle");
+        setStartError("");
+        setStartErrorDetail("");
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRuntimeStatus(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [installState.installed, runtimeInstallDir, screen, settingsLoaded]);
+
+  useEffect(() => {
     setStepIndex((current) => Math.min(current, steps.length - 1));
   }, [steps.length]);
 
