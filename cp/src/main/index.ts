@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type OpenDialogOptions } from "electron";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -12,6 +12,14 @@ type DesktopSettings = {
   language: "en" | "fr" | "es" | "zh";
   theme: "light" | "dark" | "system";
   installDir: string;
+};
+
+type InstallState = {
+  installed: boolean;
+  installDir: string;
+  configPath: string;
+  planPath: string;
+  reason?: string;
 };
 
 const defaultSettings: DesktopSettings = {
@@ -39,6 +47,46 @@ async function writeSettings(settings: DesktopSettings): Promise<DesktopSettings
   await writeFile(settingsPath(), JSON.stringify(next, null, 2), "utf8");
   nativeTheme.themeSource = next.theme;
   return next;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function getInstallState(): Promise<InstallState> {
+  const settings = await readSettings();
+  const installDir = settings.installDir;
+  const configPath = installDir ? join(installDir, "config.json") : "";
+  const planPath = installDir ? join(installDir, ".octopal-desktop", "install-plan.json") : "";
+
+  if (!installDir) {
+    return { installed: false, installDir, configPath, planPath, reason: "Install directory is not selected." };
+  }
+
+  const hasProject = await pathExists(join(installDir, "pyproject.toml"));
+  const hasConfig = await pathExists(configPath);
+
+  return {
+    installed: hasProject && hasConfig,
+    installDir,
+    configPath,
+    planPath,
+    reason: hasProject && hasConfig ? undefined : "Octopal project or config.json was not found.",
+  };
+}
+
+async function loadInstalledConfig(): Promise<unknown> {
+  const state = await getInstallState();
+  if (!state.installed) {
+    throw new Error(state.reason ?? "Octopal is not installed.");
+  }
+
+  return JSON.parse(await readFile(state.configPath, "utf8"));
 }
 
 function createWindow(): void {
@@ -79,6 +127,8 @@ async function checkCommand(command: string, args: string[]): Promise<{ ok: bool
 
 ipcMain.handle("desktop:load-settings", async () => readSettings());
 ipcMain.handle("desktop:save-settings", async (_event, settings: DesktopSettings) => writeSettings(settings));
+ipcMain.handle("desktop:get-install-state", async () => getInstallState());
+ipcMain.handle("desktop:load-octopal-config", async () => loadInstalledConfig());
 
 ipcMain.handle("desktop:choose-install-dir", async (event) => {
   const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;

@@ -11,6 +11,7 @@ export const messages = {
   en: {
     appTitle: "Octopal Desktop",
     welcome: "Welcome to Octopal installation",
+    welcomeInstalled: "Welcome back. Octopal is ready",
     speechInstall: "First, choose where Octopal should live",
     speechChannel: "Now let's set up how Octopal talks to you",
     speechLlm: "Choose the brain Octopal will use",
@@ -18,6 +19,7 @@ export const messages = {
     speechSearch: "Add search tools if you want Octopal to browse better",
     speechReview: "Everything is ready to review",
     configure: "Configure Octopal",
+    modifyConfig: "Modify configuration",
     language: "Language",
     theme: "Theme",
     light: "Light",
@@ -92,6 +94,7 @@ export const messages = {
   fr: {
     appTitle: "Octopal Desktop",
     welcome: "Bienvenue dans l'installation d'Octopal",
+    welcomeInstalled: "Bon retour. Octopal est prêt",
     speechInstall: "Choisissons d'abord où installer Octopal",
     speechChannel: "Configurons maintenant comment Octopal vous parle",
     speechLlm: "Choisissez le cerveau qu'Octopal utilisera",
@@ -99,6 +102,7 @@ export const messages = {
     speechSearch: "Ajoutez des outils de recherche si nécessaire",
     speechReview: "Tout est prêt pour la vérification",
     configure: "Configurer Octopal",
+    modifyConfig: "Modifier la configuration",
     language: "Langue",
     theme: "Thème",
     light: "Clair",
@@ -173,6 +177,7 @@ export const messages = {
   es: {
     appTitle: "Octopal Desktop",
     welcome: "Bienvenido a la instalación de Octopal",
+    welcomeInstalled: "Bienvenido de nuevo. Octopal está listo",
     speechInstall: "Primero elige dónde vivirá Octopal",
     speechChannel: "Ahora configuremos cómo te hablará Octopal",
     speechLlm: "Elige el cerebro que usará Octopal",
@@ -180,6 +185,7 @@ export const messages = {
     speechSearch: "Añade herramientas de búsqueda si las necesitas",
     speechReview: "Todo está listo para revisar",
     configure: "Configurar Octopal",
+    modifyConfig: "Modificar configuración",
     language: "Idioma",
     theme: "Tema",
     light: "Claro",
@@ -254,6 +260,7 @@ export const messages = {
   zh: {
     appTitle: "Octopal Desktop",
     welcome: "欢迎安装 Octopal",
+    welcomeInstalled: "欢迎回来。Octopal 已准备就绪",
     speechInstall: "首先选择 Octopal 的安装位置",
     speechChannel: "现在配置 Octopal 如何联系你",
     speechLlm: "选择 Octopal 使用的主模型",
@@ -261,6 +268,7 @@ export const messages = {
     speechSearch: "如果需要，让 Octopal 使用搜索工具",
     speechReview: "现在可以检查配置了",
     configure: "配置 Octopal",
+    modifyConfig: "修改配置",
     language: "语言",
     theme: "主题",
     light: "浅色",

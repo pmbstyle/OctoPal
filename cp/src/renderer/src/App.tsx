@@ -14,6 +14,7 @@ import type { Screen, StepId, Theme } from "./lib/appTypes";
 import {
   buildOctopalConfig,
   defaultInstallValues,
+  formValuesFromOctopalConfig,
   installSchema,
   providers,
   type InstallForm,
@@ -34,6 +35,13 @@ export function App() {
   const [startStatus, setStartStatus] = useState<"idle" | "starting" | "started" | "failed">("idle");
   const [startError, setStartError] = useState("");
   const [startErrorDetail, setStartErrorDetail] = useState("");
+  const [installState, setInstallState] = useState<DesktopInstallState>({
+    installed: false,
+    installDir: "",
+    configPath: "",
+    planPath: "",
+  });
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   const form = useForm<InstallForm>({
     resolver: zodResolver(installSchema),
@@ -47,12 +55,16 @@ export function App() {
   const copy = useMemo(() => (key: keyof typeof messages.en) => t(language, key), [language]);
 
   useEffect(() => {
-    void loadSettings().then((settings) => {
+    void loadSettings().then(async (settings) => {
       setLanguage(settings.language);
       setTheme(settings.theme);
       if (settings.installDir) {
         form.setValue("installDir", settings.installDir, { shouldValidate: true });
       }
+      if (window.octopalDesktop) {
+        setInstallState(await window.octopalDesktop.getInstallState());
+      }
+      setSettingsLoaded(true);
     });
   }, [form]);
 
@@ -75,8 +87,12 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
+    if (!settingsLoaded) {
+      return;
+    }
+
     void saveSettings({ language, theme, installDir: values.installDir || "" });
-  }, [language, theme, values.installDir]);
+  }, [language, settingsLoaded, theme, values.installDir]);
 
   useEffect(() => {
     setStepIndex((current) => Math.min(current, steps.length - 1));
@@ -161,6 +177,21 @@ export function App() {
     setStepIndex((current) => Math.max(current - 1, 0));
   }
 
+  async function openConfiguration() {
+    const installDir = installState.installDir || values.installDir;
+    if (window.octopalDesktop && installState.installed && installDir) {
+      try {
+        const config = await window.octopalDesktop.loadOctopalConfig();
+        form.reset(formValuesFromOctopalConfig(config, installDir));
+      } catch (error) {
+        console.error("Unable to load installed Octopal config", error);
+      }
+    }
+
+    setStepIndex(0);
+    setScreen("wizard");
+  }
+
   async function prepareInstall() {
     const ok = await form.trigger();
     if (!ok) {
@@ -191,6 +222,12 @@ export function App() {
         const result = await window.octopalDesktop.installOctopal(payload);
         setSavedInstallResult(result);
         setSavedPlanPath(result.planPath);
+        setInstallState({
+          installed: true,
+          installDir: result.installDir,
+          configPath: result.configPath,
+          planPath: result.planPath,
+        });
         setScreen("done");
       } catch (error) {
         const message = error instanceof Error ? error.message : copy("installFailedBody");
@@ -207,7 +244,7 @@ export function App() {
   }
 
   async function startInstalledOctopal() {
-    const installDir = savedInstallResult?.installDir || values.installDir;
+    const installDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
     if (!window.octopalDesktop || !installDir) {
       return;
     }
@@ -247,7 +284,11 @@ export function App() {
             theme={theme}
             onLanguageChange={updateLanguage}
             onThemeChange={setTheme}
-            onStart={() => setScreen("wizard")}
+            onStart={() => void openConfiguration()}
+            onStartOctopal={() => void startInstalledOctopal()}
+            installed={installState.installed}
+            startStatus={startStatus}
+            startError={startError}
           />
         ) : null}
 

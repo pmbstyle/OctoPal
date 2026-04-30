@@ -19,6 +19,14 @@ type DesktopInstallResult = {
   planPath: string;
 };
 
+type DesktopInstallState = {
+  installed: boolean;
+  installDir: string;
+  configPath: string;
+  planPath: string;
+  reason?: string;
+};
+
 type DesktopStartResult = {
   ok: true;
   installDir: string;
@@ -43,6 +51,8 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     ipcRenderer.invoke("desktop:check-prerequisites") as Promise<
       Array<{ id: string; label: string; ok: boolean; detail: string }>
     >,
+  getInstallState: () => ipcRenderer.invoke("desktop:get-install-state") as Promise<DesktopInstallState>,
+  loadOctopalConfig: () => ipcRenderer.invoke("desktop:load-octopal-config") as Promise<unknown>,
   writeInstallPlan: (payload: unknown) =>
     ipcRenderer.invoke("desktop:write-install-plan", payload) as Promise<{ planPath: string }>,
   installOctopal: (payload: unknown) =>

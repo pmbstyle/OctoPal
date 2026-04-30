@@ -220,6 +220,31 @@ button {
   font-size: 19px;
 }
 
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px;
+  width: min(560px, calc(100vw - 48px));
+}
+
+.welcome-action-button {
+  flex: 1 1 230px;
+  min-width: min(260px, 100%);
+}
+
+.welcome-error {
+  width: min(560px, calc(100vw - 48px));
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 62%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-strong));
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .button {
   display: inline-flex;
   align-items: center;
