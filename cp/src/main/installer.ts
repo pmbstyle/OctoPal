@@ -342,7 +342,9 @@ async function writeInstallFiles(payload: InstallPayload, releaseTag: string, em
     planPath,
     JSON.stringify(
       {
-        ...payload,
+        createdBy: payload.createdBy,
+        createdAt: payload.createdAt,
+        installDir: payload.installDir,
         releaseTag,
         configPath,
       },

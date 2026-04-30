@@ -58,6 +58,21 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
+async function scrubInstallPlan(planPath: string): Promise<void> {
+  try {
+    const raw = await readFile(planPath, "utf8");
+    const plan = JSON.parse(raw) as Record<string, unknown>;
+    if (!plan || typeof plan !== "object" || !("octopalConfig" in plan)) {
+      return;
+    }
+
+    delete plan.octopalConfig;
+    await writeFile(planPath, JSON.stringify(plan, null, 2), "utf8");
+  } catch {
+    // Legacy install plans are optional metadata; failures should not block app startup.
+  }
+}
+
 async function getInstallState(): Promise<InstallState> {
   const settings = await readSettings();
   const installDir = settings.installDir;
@@ -70,6 +85,9 @@ async function getInstallState(): Promise<InstallState> {
 
   const hasProject = await pathExists(join(installDir, "pyproject.toml"));
   const hasConfig = await pathExists(configPath);
+  if (hasProject && hasConfig) {
+    await scrubInstallPlan(planPath);
+  }
 
   return {
     installed: hasProject && hasConfig,
@@ -193,7 +211,9 @@ ipcMain.handle("desktop:write-install-plan", async (_event, payload: unknown) =>
   const planDir = join(settings.installDir, ".octopal-desktop");
   await mkdir(planDir, { recursive: true });
   const planPath = join(planDir, "install-plan.json");
-  await writeFile(planPath, JSON.stringify(payload, null, 2), "utf8");
+  const payloadRecord = payload && typeof payload === "object" && !Array.isArray(payload) ? { ...payload } : {};
+  delete (payloadRecord as Record<string, unknown>).octopalConfig;
+  await writeFile(planPath, JSON.stringify(payloadRecord, null, 2), "utf8");
   return { planPath };
 });
 
