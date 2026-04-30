@@ -55,6 +55,7 @@ type OctopalDesktopApi = {
   checkPrerequisites: () => Promise<Array<{ id: string; label: string; ok: boolean; detail: string }>>;
   getInstallState: () => Promise<DesktopInstallState>;
   loadOctopalConfig: () => Promise<unknown>;
+  saveOctopalConfig: (config: unknown) => Promise<DesktopInstallState>;
   writeInstallPlan: (payload: unknown) => Promise<{ planPath: string }>;
   installOctopal: (payload: unknown) => Promise<DesktopInstallResult>;
   startOctopal: (installDir: string) => Promise<DesktopStartResult | DesktopStartFailure>;

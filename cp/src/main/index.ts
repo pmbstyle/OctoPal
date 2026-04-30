@@ -107,6 +107,16 @@ async function loadInstalledConfig(): Promise<unknown> {
   return JSON.parse(await readFile(state.configPath, "utf8"));
 }
 
+async function saveInstalledConfig(config: unknown): Promise<InstallState> {
+  const state = await getInstallState();
+  if (!state.installed) {
+    throw new Error(state.reason ?? "Octopal is not installed.");
+  }
+
+  await writeFile(state.configPath, JSON.stringify(config, null, 2), "utf8");
+  return getInstallState();
+}
+
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
     width: 1180,
@@ -147,6 +157,7 @@ ipcMain.handle("desktop:load-settings", async () => readSettings());
 ipcMain.handle("desktop:save-settings", async (_event, settings: DesktopSettings) => writeSettings(settings));
 ipcMain.handle("desktop:get-install-state", async () => getInstallState());
 ipcMain.handle("desktop:load-octopal-config", async () => loadInstalledConfig());
+ipcMain.handle("desktop:save-octopal-config", async (_event, config: unknown) => saveInstalledConfig(config));
 
 ipcMain.handle("desktop:choose-install-dir", async (event) => {
   const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;

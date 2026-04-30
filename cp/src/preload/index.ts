@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     >,
   getInstallState: () => ipcRenderer.invoke("desktop:get-install-state") as Promise<DesktopInstallState>,
   loadOctopalConfig: () => ipcRenderer.invoke("desktop:load-octopal-config") as Promise<unknown>,
+  saveOctopalConfig: (config: unknown) =>
+    ipcRenderer.invoke("desktop:save-octopal-config", config) as Promise<DesktopInstallState>,
   writeInstallPlan: (payload: unknown) =>
     ipcRenderer.invoke("desktop:write-install-plan", payload) as Promise<{ planPath: string }>,
   installOctopal: (payload: unknown) =>

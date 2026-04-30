@@ -35,6 +35,7 @@ export function App() {
   const [startStatus, setStartStatus] = useState<"idle" | "starting" | "started" | "failed">("idle");
   const [startError, setStartError] = useState("");
   const [startErrorDetail, setStartErrorDetail] = useState("");
+  const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
   const [installState, setInstallState] = useState<DesktopInstallState>({
     installed: false,
     installDir: "",
@@ -183,13 +184,47 @@ export function App() {
       try {
         const config = await window.octopalDesktop.loadOctopalConfig();
         form.reset(formValuesFromOctopalConfig(config, installDir));
+        setConfigurationMode("edit");
       } catch (error) {
         console.error("Unable to load installed Octopal config", error);
+        setConfigurationMode("install");
       }
+    } else {
+      setConfigurationMode("install");
     }
 
     setStepIndex(0);
     setScreen("wizard");
+  }
+
+  async function saveConfiguration() {
+    const ok = await form.trigger();
+    if (!ok || !window.octopalDesktop) {
+      return;
+    }
+
+    try {
+      const nextState = await window.octopalDesktop.saveOctopalConfig(buildOctopalConfig(values));
+      setInstallState(nextState);
+      setSavedInstallResult(null);
+      setSavedPlanPath("");
+      setStartStatus("idle");
+      setStartError("");
+      setStartErrorDetail("");
+      setScreen("welcome");
+    } catch (error) {
+      setInstallError(error instanceof Error ? error.message : copy("installFailedBody"));
+      setScreen("failed");
+    }
+  }
+
+  async function submitReview() {
+    if (configurationMode === "edit") {
+      await saveConfiguration();
+      return;
+    }
+
+    await prepareInstall();
   }
 
   async function prepareInstall() {
@@ -311,7 +346,9 @@ export function App() {
             onSearchProviderToggle={toggleSearchProvider}
             onBack={previousStep}
             onNext={() => void nextStep()}
-            onPrepareInstall={() => void prepareInstall()}
+            onPrepareInstall={() => void submitReview()}
+            reviewBody={configurationMode === "edit" ? copy("reviewBodyEdit") : copy("reviewBody")}
+            reviewActionLabel={configurationMode === "edit" ? copy("saveConfiguration") : copy("startInstall")}
           />
         ) : null}
 
