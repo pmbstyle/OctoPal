@@ -139,8 +139,10 @@ button {
 
 .speech-bubble {
   position: relative;
-  max-width: 360px;
-  padding: 24px 32px;
+  width: fit-content;
+  min-width: min(270px, calc(100vw - 48px));
+  max-width: min(320px, calc(100vw - 48px));
+  padding: 22px 28px;
   border: 1px solid var(--border);
   border-radius: 24px;
   background: var(--surface-strong);
@@ -149,12 +151,13 @@ button {
   line-height: 1.18;
   font-weight: 650;
   letter-spacing: 0;
+  text-wrap: balance;
 }
 
 .speech-bubble::after {
   content: "";
   position: absolute;
-  right: 72px;
+  right: 54px;
   bottom: -18px;
   width: 34px;
   height: 34px;
@@ -220,6 +223,98 @@ button {
   font-size: 19px;
 }
 
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 14px;
+  width: min(560px, calc(100vw - 48px));
+}
+
+.welcome-action-button {
+  flex: 1 1 230px;
+  min-width: min(260px, 100%);
+}
+
+.welcome-error {
+  width: min(560px, calc(100vw - 48px));
+  margin-top: 16px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 62%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-strong));
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.runtime-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(560px, calc(100vw - 48px));
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-strong) 84%, transparent);
+  text-align: left;
+}
+
+.runtime-status-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.runtime-status strong {
+  display: block;
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.runtime-status p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.runtime-status-running {
+  border-color: color-mix(in srgb, var(--success) 58%, var(--border));
+  background: color-mix(in srgb, var(--success) 9%, var(--surface-strong));
+}
+
+.runtime-status-running .runtime-status-dot {
+  background: var(--success);
+}
+
+.runtime-status-starting,
+.runtime-status-stopping,
+.runtime-status-checking {
+  border-color: color-mix(in srgb, var(--primary) 44%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-strong));
+}
+
+.runtime-status-starting .runtime-status-dot,
+.runtime-status-stopping .runtime-status-dot,
+.runtime-status-checking .runtime-status-dot {
+  background: var(--primary);
+}
+
+.runtime-status-error {
+  border-color: color-mix(in srgb, var(--danger) 62%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-strong));
+}
+
+.runtime-status-error .runtime-status-dot {
+  background: var(--danger);
+}
+
 .button {
   display: inline-flex;
   align-items: center;
@@ -258,6 +353,24 @@ button {
   background: linear-gradient(135deg, var(--primary), var(--primary-strong));
   color: var(--primary-foreground);
   box-shadow: 0 16px 30px color-mix(in srgb, var(--primary) 30%, transparent);
+}
+
+.button-success {
+  background: linear-gradient(135deg, #2fbf8f, #17a56f);
+  color: #ffffff;
+  box-shadow: 0 16px 30px rgba(47, 191, 143, 0.24);
+}
+
+.button-danger {
+  background: linear-gradient(135deg, #f06b7c, #d9465f);
+  color: #ffffff;
+  box-shadow: 0 16px 30px rgba(217, 70, 95, 0.22);
+}
+
+.button:disabled {
+  cursor: default;
+  opacity: 0.68;
+  transform: none;
 }
 
 .button-secondary,
@@ -1001,6 +1114,109 @@ p {
   margin: 18px auto 0;
 }
 
+.status-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 30px;
+}
+
+.status-error {
+  width: min(760px, 100%);
+  margin-top: 22px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 62%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-strong));
+  text-align: left;
+}
+
+.status-error strong {
+  display: block;
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.status-error pre {
+  max-height: 220px;
+  margin: 10px 0 0;
+  overflow: auto;
+  color: var(--muted-strong);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.status-action-button {
+  min-width: 210px;
+  min-height: 58px;
+  font-size: 17px;
+}
+
+.install-progress {
+  padding-right: 32px;
+  padding-left: 32px;
+}
+
+.install-progress .status-octo {
+  width: min(210px, 42vw);
+  margin-bottom: 22px;
+}
+
+.install-events {
+  display: grid;
+  gap: 10px;
+  width: min(720px, 100%);
+  max-height: 260px;
+  margin-top: 26px;
+  overflow: auto;
+  text-align: left;
+}
+
+.install-event {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-strong);
+}
+
+.install-event strong,
+.install-event span {
+  display: block;
+}
+
+.install-event strong {
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.install-event span {
+  margin-top: 4px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.install-event-log {
+  opacity: 0.78;
+}
+
+.install-event-warning {
+  border-color: color-mix(in srgb, #f6a524 56%, var(--border));
+}
+
+.install-event-error {
+  border-color: color-mix(in srgb, var(--danger) 70%, var(--border));
+}
+
+.install-event-done {
+  border-color: color-mix(in srgb, var(--success) 62%, var(--border));
+}
+
 .pulse {
   animation: pulse 1.2s ease-in-out infinite alternate;
 }
@@ -1039,8 +1255,9 @@ p {
   }
 
   .speech-bubble {
-    max-width: 300px;
-    padding: 20px 24px;
+    min-width: min(230px, calc(100vw - 48px));
+    max-width: min(280px, calc(100vw - 48px));
+    padding: 18px 22px;
     font-size: 24px;
   }
 

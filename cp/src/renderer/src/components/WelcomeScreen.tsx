@@ -1,4 +1,4 @@
-import { ArrowRight, Globe2, Moon, Sun } from "lucide-react";
+import { ArrowRight, Globe2, Moon, Play, Settings, Sun } from "lucide-react";
 import { motion } from "framer-motion";
 
 import octoImage from "../../../../assets/octo.png";
@@ -14,6 +14,8 @@ export function WelcomeScreen({
   onLanguageChange,
   onThemeChange,
   onStart,
+  onStartOctopal,
+  installed,
 }: {
   copy: CopyFn;
   language: Language;
@@ -21,6 +23,8 @@ export function WelcomeScreen({
   onLanguageChange: (language: Language) => void;
   onThemeChange: (theme: Theme) => void;
   onStart: () => void;
+  onStartOctopal: () => void;
+  installed: boolean;
 }) {
   return (
     <motion.section
@@ -31,7 +35,7 @@ export function WelcomeScreen({
       exit={{ opacity: 0, y: -16 }}
       transition={{ duration: 0.28 }}
     >
-      <div className="speech-bubble">{copy("welcome")}</div>
+      <div className="speech-bubble">{installed ? copy("welcomeInstalled") : copy("welcome")}</div>
       <img className="octo welcome-octo" src={octoImage} alt="Octopal mascot" />
       <div className="welcome-controls">
         <LabeledSelect
@@ -53,10 +57,23 @@ export function WelcomeScreen({
           ]}
         />
       </div>
-      <Button className="welcome-button" onClick={onStart}>
-        {copy("configure")}
-        <ArrowRight data-icon="inline-end" />
-      </Button>
+      <div className={installed ? "welcome-actions" : undefined}>
+        {installed ? (
+          <Button
+            className="welcome-button welcome-action-button"
+            variant="success"
+            onClick={onStartOctopal}
+          >
+            <Play data-icon="inline-start" />
+            {copy("startOctopal")}
+          </Button>
+        ) : null}
+        <Button className={installed ? "welcome-button welcome-action-button" : "welcome-button"} variant={installed ? "secondary" : "primary"} onClick={onStart}>
+          {installed ? <Settings data-icon="inline-start" /> : null}
+          {installed ? copy("modifyConfig") : copy("configure")}
+          {!installed ? <ArrowRight data-icon="inline-end" /> : null}
+        </Button>
+      </div>
     </motion.section>
   );
 }

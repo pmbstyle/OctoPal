@@ -33,6 +33,8 @@ export function WizardScreen({
   onBack,
   onNext,
   onPrepareInstall,
+  reviewBody,
+  reviewActionLabel,
 }: {
   copy: CopyFn;
   language: Language;
@@ -51,6 +53,8 @@ export function WizardScreen({
   onBack: () => void;
   onNext: () => void;
   onPrepareInstall: () => void;
+  reviewBody: string;
+  reviewActionLabel: string;
 }) {
   return (
     <motion.section
@@ -96,7 +100,7 @@ export function WizardScreen({
         {step === "search" ? (
           <SearchStep copy={copy} values={values} form={form} errors={errors} onSearchProviderToggle={onSearchProviderToggle} />
         ) : null}
-        {step === "review" ? <ReviewStep copy={copy} values={values} /> : null}
+        {step === "review" ? <ReviewStep body={reviewBody} copy={copy} values={values} /> : null}
       </section>
 
       <footer className="setup-footer">
@@ -112,7 +116,7 @@ export function WizardScreen({
         ) : (
           <Button type="button" onClick={onPrepareInstall}>
             <Check data-icon="inline-start" />
-            {copy("startInstall")}
+            {reviewActionLabel}
           </Button>
         )}
       </footer>

@@ -1851,7 +1851,7 @@ def dashboard(
     if not watch:
         snapshot = _build_dashboard_snapshot(settings, last, store=store)
         if json_output:
-            console.print(json.dumps(snapshot, ensure_ascii=False, indent=2))
+            typer.echo(json.dumps(snapshot, ensure_ascii=False, indent=2))
         else:
             _print_dashboard(snapshot, compact=compact)
         return

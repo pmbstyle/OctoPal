@@ -178,3 +178,57 @@ export function buildOctopalConfig(values: InstallForm) {
     },
   };
 }
+
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+function numberValue(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function listValue(value: unknown): string {
+  return Array.isArray(value) ? value.map((item) => String(item)).join(", ") : "";
+}
+
+export function formValuesFromOctopalConfig(config: unknown, installDir: string): InstallForm {
+  const root = recordValue(config);
+  const telegram = recordValue(root.telegram);
+  const whatsapp = recordValue(root.whatsapp);
+  const llm = recordValue(root.llm);
+  const workerLlm = recordValue(root.worker_llm_default);
+  const gateway = recordValue(root.gateway);
+  const search = recordValue(root.search);
+  const braveApiKey = stringValue(search.brave_api_key);
+  const firecrawlApiKey = stringValue(search.firecrawl_api_key);
+  const workerProviderId = stringValue(workerLlm.provider_id);
+
+  return {
+    ...defaultInstallValues,
+    installDir,
+    channel: root.user_channel === "whatsapp" ? "whatsapp" : "telegram",
+    telegramToken: stringValue(telegram.bot_token),
+    allowedChatIds: listValue(telegram.allowed_chat_ids),
+    whatsappMode: whatsapp.mode === "personal" ? "personal" : "separate",
+    whatsappAllowedNumbers: listValue(whatsapp.allowed_numbers),
+    providerId: stringValue(llm.provider_id, defaultInstallValues.providerId),
+    model: stringValue(llm.model, defaultInstallValues.model),
+    apiKey: stringValue(llm.api_key),
+    apiBase: stringValue(llm.api_base),
+    sameWorker: !workerProviderId,
+    workerProviderId: workerProviderId || defaultInstallValues.workerProviderId,
+    workerModel: stringValue(workerLlm.model, defaultInstallValues.workerModel),
+    workerApiKey: stringValue(workerLlm.api_key),
+    workerApiBase: stringValue(workerLlm.api_base),
+    searchProvider: braveApiKey ? "brave" : firecrawlApiKey ? "firecrawl" : undefined,
+    braveApiKey,
+    firecrawlApiKey,
+    dashboardEnabled: gateway.webapp_enabled !== false,
+    dashboardPort: numberValue(gateway.port, defaultInstallValues.dashboardPort),
+    dashboardToken: stringValue(gateway.dashboard_token),
+  };
+}

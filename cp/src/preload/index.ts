@@ -6,6 +6,64 @@ type DesktopSettings = {
   installDir: string;
 };
 
+type DesktopInstallEvent = {
+  kind: "step" | "log" | "warning" | "error" | "done";
+  message: string;
+  detail?: string;
+};
+
+type DesktopInstallResult = {
+  installDir: string;
+  releaseTag: string;
+  configPath: string;
+  planPath: string;
+};
+
+type DesktopInstallState = {
+  installed: boolean;
+  installDir: string;
+  configPath: string;
+  planPath: string;
+  reason?: string;
+};
+
+type DesktopStartResult = {
+  ok: true;
+  installDir: string;
+  detail: string;
+};
+
+type DesktopStartFailure = {
+  ok: false;
+  error: string;
+  detail: string;
+};
+
+type DesktopStopResult = {
+  ok: true;
+  installDir: string;
+  detail: string;
+};
+
+type DesktopStopFailure = {
+  ok: false;
+  error: string;
+  detail: string;
+};
+
+type DesktopRuntimeStatus = {
+  ok: boolean;
+  state: "running" | "stopped" | "error";
+  title: string;
+  detail: string;
+  installDir: string;
+  pid?: number | string | null;
+  uptime?: string;
+  channel?: string;
+  octoState?: string;
+  launcher?: string;
+};
+
 contextBridge.exposeInMainWorld("octopalDesktop", {
   loadSettings: () => ipcRenderer.invoke("desktop:load-settings") as Promise<DesktopSettings>,
   saveSettings: (settings: DesktopSettings) =>
@@ -18,6 +76,23 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     ipcRenderer.invoke("desktop:check-prerequisites") as Promise<
       Array<{ id: string; label: string; ok: boolean; detail: string }>
     >,
+  getInstallState: () => ipcRenderer.invoke("desktop:get-install-state") as Promise<DesktopInstallState>,
+  loadOctopalConfig: () => ipcRenderer.invoke("desktop:load-octopal-config") as Promise<unknown>,
+  saveOctopalConfig: (config: unknown) =>
+    ipcRenderer.invoke("desktop:save-octopal-config", config) as Promise<DesktopInstallState>,
   writeInstallPlan: (payload: unknown) =>
     ipcRenderer.invoke("desktop:write-install-plan", payload) as Promise<{ planPath: string }>,
+  installOctopal: (payload: unknown) =>
+    ipcRenderer.invoke("desktop:install-octopal", payload) as Promise<DesktopInstallResult>,
+  startOctopal: (installDir: string) =>
+    ipcRenderer.invoke("desktop:start-octopal", installDir) as Promise<DesktopStartResult | DesktopStartFailure>,
+  stopOctopal: (installDir: string) =>
+    ipcRenderer.invoke("desktop:stop-octopal", installDir) as Promise<DesktopStopResult | DesktopStopFailure>,
+  getOctopalStatus: (installDir: string) =>
+    ipcRenderer.invoke("desktop:get-octopal-status", installDir) as Promise<DesktopRuntimeStatus>,
+  onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, installEvent: DesktopInstallEvent) => callback(installEvent);
+    ipcRenderer.on("desktop:install-event", handler);
+    return () => ipcRenderer.removeListener("desktop:install-event", handler);
+  },
 });

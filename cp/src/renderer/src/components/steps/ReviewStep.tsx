@@ -3,9 +3,9 @@ import type { CopyFn } from "../../lib/appTypes";
 import { ReviewItem } from "../ReviewItem";
 import { StepSection } from "../StepSection";
 
-export function ReviewStep({ copy, values }: { copy: CopyFn; values: InstallForm }) {
+export function ReviewStep({ body, copy, values }: { body: string; copy: CopyFn; values: InstallForm }) {
   return (
-    <StepSection body={copy("reviewBody")}>
+    <StepSection body={body}>
       <div className="review-grid">
         <ReviewItem label={copy("installFolder")} value={values.installDir || "-"} />
         <ReviewItem label={copy("stepChannel")} value={values.channel === "telegram" ? copy("telegram") : copy("whatsapp")} />

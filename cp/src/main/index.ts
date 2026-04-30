@@ -1,8 +1,17 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type OpenDialogOptions } from "electron";
 import { execFile } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
+
+import {
+  getOctopalStatusSafely,
+  runInstall,
+  startOctopalSafely,
+  stopOctopalSafely,
+  type InstallEvent,
+  type InstallPayload,
+} from "./installer";
 
 const execFileAsync = promisify(execFile);
 
@@ -10,6 +19,14 @@ type DesktopSettings = {
   language: "en" | "fr" | "es" | "zh";
   theme: "light" | "dark" | "system";
   installDir: string;
+};
+
+type InstallState = {
+  installed: boolean;
+  installDir: string;
+  configPath: string;
+  planPath: string;
+  reason?: string;
 };
 
 const defaultSettings: DesktopSettings = {
@@ -37,6 +54,74 @@ async function writeSettings(settings: DesktopSettings): Promise<DesktopSettings
   await writeFile(settingsPath(), JSON.stringify(next, null, 2), "utf8");
   nativeTheme.themeSource = next.theme;
   return next;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function scrubInstallPlan(planPath: string): Promise<void> {
+  try {
+    const raw = await readFile(planPath, "utf8");
+    const plan = JSON.parse(raw) as Record<string, unknown>;
+    if (!plan || typeof plan !== "object" || !("octopalConfig" in plan)) {
+      return;
+    }
+
+    delete plan.octopalConfig;
+    await writeFile(planPath, JSON.stringify(plan, null, 2), "utf8");
+  } catch {
+    // Legacy install plans are optional metadata; failures should not block app startup.
+  }
+}
+
+async function getInstallState(): Promise<InstallState> {
+  const settings = await readSettings();
+  const installDir = settings.installDir;
+  const configPath = installDir ? join(installDir, "config.json") : "";
+  const planPath = installDir ? join(installDir, ".octopal-desktop", "install-plan.json") : "";
+
+  if (!installDir) {
+    return { installed: false, installDir, configPath, planPath, reason: "Install directory is not selected." };
+  }
+
+  const hasProject = await pathExists(join(installDir, "pyproject.toml"));
+  const hasConfig = await pathExists(configPath);
+  if (hasProject && hasConfig) {
+    await scrubInstallPlan(planPath);
+  }
+
+  return {
+    installed: hasProject && hasConfig,
+    installDir,
+    configPath,
+    planPath,
+    reason: hasProject && hasConfig ? undefined : "Octopal project or config.json was not found.",
+  };
+}
+
+async function loadInstalledConfig(): Promise<unknown> {
+  const state = await getInstallState();
+  if (!state.installed) {
+    throw new Error(state.reason ?? "Octopal is not installed.");
+  }
+
+  return JSON.parse(await readFile(state.configPath, "utf8"));
+}
+
+async function saveInstalledConfig(config: unknown): Promise<InstallState> {
+  const state = await getInstallState();
+  if (!state.installed) {
+    throw new Error(state.reason ?? "Octopal is not installed.");
+  }
+
+  await writeFile(state.configPath, JSON.stringify(config, null, 2), "utf8");
+  return getInstallState();
 }
 
 function createWindow(): void {
@@ -77,6 +162,9 @@ async function checkCommand(command: string, args: string[]): Promise<{ ok: bool
 
 ipcMain.handle("desktop:load-settings", async () => readSettings());
 ipcMain.handle("desktop:save-settings", async (_event, settings: DesktopSettings) => writeSettings(settings));
+ipcMain.handle("desktop:get-install-state", async () => getInstallState());
+ipcMain.handle("desktop:load-octopal-config", async () => loadInstalledConfig());
+ipcMain.handle("desktop:save-octopal-config", async (_event, config: unknown) => saveInstalledConfig(config));
 
 ipcMain.handle("desktop:choose-install-dir", async (event) => {
   const parentWindow = BrowserWindow.fromWebContents(event.sender) ?? undefined;
@@ -141,9 +229,32 @@ ipcMain.handle("desktop:write-install-plan", async (_event, payload: unknown) =>
   const planDir = join(settings.installDir, ".octopal-desktop");
   await mkdir(planDir, { recursive: true });
   const planPath = join(planDir, "install-plan.json");
-  await writeFile(planPath, JSON.stringify(payload, null, 2), "utf8");
+  const payloadRecord = payload && typeof payload === "object" && !Array.isArray(payload) ? { ...payload } : {};
+  delete (payloadRecord as Record<string, unknown>).octopalConfig;
+  await writeFile(planPath, JSON.stringify(payloadRecord, null, 2), "utf8");
   return { planPath };
 });
+
+ipcMain.handle("desktop:install-octopal", async (event, payload: InstallPayload) => {
+  const sender = event.sender;
+  const emit = (installEvent: InstallEvent) => {
+    if (!sender.isDestroyed()) {
+      sender.send("desktop:install-event", installEvent);
+    }
+  };
+
+  try {
+    return await runInstall(payload, emit);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Installation failed.";
+    emit({ kind: "error", message });
+    throw error;
+  }
+});
+
+ipcMain.handle("desktop:start-octopal", async (_event, installDir: string) => startOctopalSafely(installDir));
+ipcMain.handle("desktop:stop-octopal", async (_event, installDir: string) => stopOctopalSafely(installDir));
+ipcMain.handle("desktop:get-octopal-status", async (_event, installDir: string) => getOctopalStatusSafely(installDir));
 
 void app.whenReady().then(async () => {
   nativeTheme.themeSource = (await readSettings()).theme;
