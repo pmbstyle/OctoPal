@@ -50,6 +50,13 @@ type RunOptions = {
   quiet?: boolean;
 };
 
+type DetachedStartResult = {
+  stdout: string;
+  stderr: string;
+  exited: boolean;
+  code: number | null;
+};
+
 function sanitizeOutput(text: string): string {
   return text
     .replace(/\b\d{7,12}:[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
@@ -148,6 +155,56 @@ function runCommand(
         return;
       }
       reject(new Error(`${command} ${args.join(" ")} exited with code ${code}: ${sanitizeOutput(stderr || stdout).trim()}`));
+    });
+  });
+}
+
+function runDetachedStart(command: string, args: string[], options: RunOptions = {}): Promise<DetachedStartResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      detached: true,
+      env: options.env ?? withPythonDesktopEnv(),
+      shell: false,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const finish = (result: DetachedStartResult) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+
+    const timer = setTimeout(() => {
+      child.unref();
+      finish({ stdout, stderr, exited: false, code: null });
+    }, 3500);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += sanitizeOutput(chunk.toString());
+    });
+
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += sanitizeOutput(chunk.toString());
+    });
+
+    child.on("error", (error) => {
+      if (!settled) {
+        clearTimeout(timer);
+        reject(error);
+      }
+    });
+
+    child.on("close", (code) => {
+      finish({ stdout, stderr, exited: true, code });
     });
   });
 }
@@ -371,16 +428,22 @@ export async function startOctopal(installDir: string): Promise<StartResult> {
     throw new Error("uv is not available. Install uv or run the installer again.");
   }
 
-  const { stdout, stderr } = await runCommand(uvCommand, ["run", "octopal", "start"], () => undefined, {
+  const result = await runDetachedStart(uvCommand, ["run", "octopal", "start"], {
     cwd: installDir,
     env: withPythonDesktopEnv(),
     quiet: true,
   });
 
+  if (result.exited && result.code !== 0) {
+    throw new Error(
+      `${uvCommand} run octopal start exited with code ${result.code}: ${sanitizeOutput(result.stderr || result.stdout).trim()}`,
+    );
+  }
+
   return {
     ok: true,
     installDir,
-    detail: sanitizeOutput(stdout || stderr).trim(),
+    detail: sanitizeOutput(result.stdout || result.stderr).trim(),
   };
 }
 
