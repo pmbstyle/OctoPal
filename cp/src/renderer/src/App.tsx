@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { AnimatePresence } from "framer-motion";
-import { Play } from "lucide-react";
+import { Play, Square } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -32,7 +32,7 @@ export function App() {
   const [savedInstallResult, setSavedInstallResult] = useState<DesktopInstallResult | null>(null);
   const [installEvents, setInstallEvents] = useState<DesktopInstallEvent[]>([]);
   const [installError, setInstallError] = useState("");
-  const [startStatus, setStartStatus] = useState<"idle" | "starting" | "started" | "failed">("idle");
+  const [startStatus, setStartStatus] = useState<"idle" | "starting" | "started" | "stopping" | "failed">("idle");
   const [startError, setStartError] = useState("");
   const [startErrorDetail, setStartErrorDetail] = useState("");
   const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
@@ -303,6 +303,31 @@ export function App() {
     }
   }
 
+  async function stopInstalledOctopal() {
+    const installDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
+    if (!window.octopalDesktop || !installDir) {
+      return;
+    }
+
+    setStartStatus("stopping");
+    setStartError("");
+    setStartErrorDetail("");
+    try {
+      const result = await window.octopalDesktop.stopOctopal(installDir);
+      if (!result.ok) {
+        setStartStatus("failed");
+        setStartError(result.error || copy("stopFailed"));
+        setStartErrorDetail(result.detail);
+        return;
+      }
+      setStartStatus("idle");
+    } catch (error) {
+      setStartStatus("failed");
+      setStartError(error instanceof Error ? error.message : copy("stopFailed"));
+      setStartErrorDetail("");
+    }
+  }
+
   return (
     <AppShell
       title={copy("appTitle")}
@@ -321,6 +346,7 @@ export function App() {
             onThemeChange={setTheme}
             onStart={() => void openConfiguration()}
             onStartOctopal={() => void startInstalledOctopal()}
+            onStopOctopal={() => void stopInstalledOctopal()}
             installed={installState.installed}
             startStatus={startStatus}
             startError={startError}
@@ -371,7 +397,18 @@ export function App() {
             errorTitle={startStatus === "failed" ? startError : ""}
             errorDetail={startStatus === "failed" ? startErrorDetail : ""}
             action={
-              startStatus === "started" ? null : (
+              startStatus === "started" || startStatus === "stopping" ? (
+                <Button
+                  type="button"
+                  variant="danger"
+                  className="status-action-button"
+                  disabled={startStatus === "stopping"}
+                  onClick={() => void stopInstalledOctopal()}
+                >
+                  <Square data-icon="inline-start" />
+                  {startStatus === "stopping" ? copy("stoppingOctopal") : copy("stopOctopal")}
+                </Button>
+              ) : (
                 <Button
                   type="button"
                   variant="success"

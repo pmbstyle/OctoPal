@@ -33,6 +33,18 @@ type DesktopStartFailure = {
   detail: string;
 };
 
+type DesktopStopResult = {
+  ok: true;
+  installDir: string;
+  detail: string;
+};
+
+type DesktopStopFailure = {
+  ok: false;
+  error: string;
+  detail: string;
+};
+
 type OctopalDesktopApi = {
   loadSettings: () => Promise<{
     language: "en" | "fr" | "es" | "zh";
@@ -59,6 +71,7 @@ type OctopalDesktopApi = {
   writeInstallPlan: (payload: unknown) => Promise<{ planPath: string }>;
   installOctopal: (payload: unknown) => Promise<DesktopInstallResult>;
   startOctopal: (installDir: string) => Promise<DesktopStartResult | DesktopStartFailure>;
+  stopOctopal: (installDir: string) => Promise<DesktopStopResult | DesktopStopFailure>;
   onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => () => void;
 };
 

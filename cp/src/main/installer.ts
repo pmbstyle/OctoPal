@@ -39,6 +39,18 @@ export type StartFailure = {
   detail: string;
 };
 
+export type StopResult = {
+  ok: true;
+  installDir: string;
+  detail: string;
+};
+
+export type StopFailure = {
+  ok: false;
+  error: string;
+  detail: string;
+};
+
 type CommandResult = {
   stdout: string;
   stderr: string;
@@ -457,6 +469,46 @@ export async function startOctopalSafely(installDir: string): Promise<StartResul
     return {
       ok: false,
       error: "Could not start Octopal.",
+      detail: sanitizeOutput(message),
+    };
+  }
+}
+
+export async function stopOctopal(installDir: string): Promise<StopResult> {
+  if (!installDir) {
+    throw new Error("Install directory is not selected.");
+  }
+
+  if (!existsSync(join(installDir, "pyproject.toml"))) {
+    throw new Error("Install folder does not look like an Octopal checkout.");
+  }
+
+  const uvCommand = await resolveUv(() => undefined);
+  if (!uvCommand) {
+    throw new Error("uv is not available. Install uv or run the installer again.");
+  }
+
+  const { stdout, stderr } = await runCommand(uvCommand, ["run", "octopal", "stop"], () => undefined, {
+    cwd: installDir,
+    env: withPythonDesktopEnv(),
+    quiet: true,
+  });
+
+  return {
+    ok: true,
+    installDir,
+    detail: sanitizeOutput(stdout || stderr).trim(),
+  };
+}
+
+export async function stopOctopalSafely(installDir: string): Promise<StopResult | StopFailure> {
+  try {
+    return await stopOctopal(installDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not stop Octopal.";
+    return {
+      ok: false,
+      error: "Could not stop Octopal.",
       detail: sanitizeOutput(message),
     };
   }

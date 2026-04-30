@@ -1,4 +1,4 @@
-import { ArrowRight, Globe2, Moon, Play, Settings, Sun } from "lucide-react";
+import { ArrowRight, Globe2, Moon, Play, Settings, Square, Sun } from "lucide-react";
 import { motion } from "framer-motion";
 
 import octoImage from "../../../../assets/octo.png";
@@ -15,6 +15,7 @@ export function WelcomeScreen({
   onThemeChange,
   onStart,
   onStartOctopal,
+  onStopOctopal,
   installed,
   startStatus,
   startError,
@@ -26,11 +27,13 @@ export function WelcomeScreen({
   onThemeChange: (theme: Theme) => void;
   onStart: () => void;
   onStartOctopal: () => void;
+  onStopOctopal: () => void;
   installed: boolean;
-  startStatus: "idle" | "starting" | "started" | "failed";
+  startStatus: "idle" | "starting" | "started" | "stopping" | "failed";
   startError: string;
 }) {
   const started = startStatus === "started";
+  const stopping = startStatus === "stopping";
 
   return (
     <motion.section
@@ -65,9 +68,14 @@ export function WelcomeScreen({
       </div>
       <div className={installed ? "welcome-actions" : undefined}>
         {installed ? (
-          <Button className="welcome-button welcome-action-button" variant="success" disabled={startStatus === "starting" || started} onClick={onStartOctopal}>
-            <Play data-icon="inline-start" />
-            {started ? copy("octopalStarted") : startStatus === "starting" ? copy("startingOctopal") : copy("startOctopal")}
+          <Button
+            className="welcome-button welcome-action-button"
+            variant={started || stopping ? "danger" : "success"}
+            disabled={startStatus === "starting" || stopping}
+            onClick={started ? onStopOctopal : onStartOctopal}
+          >
+            {started || stopping ? <Square data-icon="inline-start" /> : <Play data-icon="inline-start" />}
+            {started ? copy("stopOctopal") : stopping ? copy("stoppingOctopal") : startStatus === "starting" ? copy("startingOctopal") : copy("startOctopal")}
           </Button>
         ) : null}
         <Button className={installed ? "welcome-button welcome-action-button" : "welcome-button"} variant={installed ? "secondary" : "primary"} onClick={onStart}>
