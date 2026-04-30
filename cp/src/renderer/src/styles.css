@@ -245,6 +245,73 @@ button {
   line-height: 1.45;
 }
 
+.runtime-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  width: min(560px, calc(100vw - 48px));
+  margin-top: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--surface-strong) 84%, transparent);
+  text-align: left;
+}
+
+.runtime-status-dot {
+  width: 10px;
+  height: 10px;
+  margin-top: 6px;
+  border-radius: 999px;
+  background: var(--muted);
+}
+
+.runtime-status strong {
+  display: block;
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.runtime-status p {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.runtime-status-running {
+  border-color: color-mix(in srgb, var(--success) 58%, var(--border));
+  background: color-mix(in srgb, var(--success) 9%, var(--surface-strong));
+}
+
+.runtime-status-running .runtime-status-dot {
+  background: var(--success);
+}
+
+.runtime-status-starting,
+.runtime-status-stopping,
+.runtime-status-checking {
+  border-color: color-mix(in srgb, var(--primary) 44%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-strong));
+}
+
+.runtime-status-starting .runtime-status-dot,
+.runtime-status-stopping .runtime-status-dot,
+.runtime-status-checking .runtime-status-dot {
+  background: var(--primary);
+}
+
+.runtime-status-error {
+  border-color: color-mix(in srgb, var(--danger) 62%, var(--border));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-strong));
+}
+
+.runtime-status-error .runtime-status-dot {
+  background: var(--danger);
+}
+
 .button {
   display: inline-flex;
   align-items: center;

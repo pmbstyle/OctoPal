@@ -17,8 +17,9 @@ export function WelcomeScreen({
   onStartOctopal,
   onStopOctopal,
   installed,
-  startStatus,
-  startError,
+  runtimeState,
+  runtimeTitle,
+  runtimeDetail,
 }: {
   copy: CopyFn;
   language: Language;
@@ -29,11 +30,14 @@ export function WelcomeScreen({
   onStartOctopal: () => void;
   onStopOctopal: () => void;
   installed: boolean;
-  startStatus: "idle" | "starting" | "started" | "stopping" | "failed";
-  startError: string;
+  runtimeState: "checking" | "starting" | "running" | "stopping" | "stopped" | "error";
+  runtimeTitle: string;
+  runtimeDetail: string;
 }) {
-  const started = startStatus === "started";
-  const stopping = startStatus === "stopping";
+  const running = runtimeState === "running";
+  const stopping = runtimeState === "stopping";
+  const starting = runtimeState === "starting";
+  const canStop = running || stopping;
 
   return (
     <motion.section
@@ -70,12 +74,18 @@ export function WelcomeScreen({
         {installed ? (
           <Button
             className="welcome-button welcome-action-button"
-            variant={started || stopping ? "danger" : "success"}
-            disabled={startStatus === "starting" || stopping}
-            onClick={started ? onStopOctopal : onStartOctopal}
+            variant={canStop ? "danger" : "success"}
+            disabled={starting || stopping}
+            onClick={canStop ? onStopOctopal : onStartOctopal}
           >
-            {started || stopping ? <Square data-icon="inline-start" /> : <Play data-icon="inline-start" />}
-            {started ? copy("stopOctopal") : stopping ? copy("stoppingOctopal") : startStatus === "starting" ? copy("startingOctopal") : copy("startOctopal")}
+            {canStop ? <Square data-icon="inline-start" /> : <Play data-icon="inline-start" />}
+            {running
+              ? copy("stopOctopal")
+              : stopping
+                ? copy("stoppingOctopal")
+                : starting
+                  ? copy("startingOctopal")
+                  : copy("startOctopal")}
           </Button>
         ) : null}
         <Button className={installed ? "welcome-button welcome-action-button" : "welcome-button"} variant={installed ? "secondary" : "primary"} onClick={onStart}>
@@ -84,9 +94,13 @@ export function WelcomeScreen({
           {!installed ? <ArrowRight data-icon="inline-end" /> : null}
         </Button>
       </div>
-      {startStatus === "failed" && startError ? (
-        <div className="welcome-error" role="alert">
-          {startError}
+      {installed ? (
+        <div className={`runtime-status runtime-status-${runtimeState}`} role={runtimeState === "error" ? "alert" : "status"}>
+          <span className="runtime-status-dot" aria-hidden="true" />
+          <div>
+            <strong>{runtimeTitle}</strong>
+            {runtimeDetail ? <p>{runtimeDetail}</p> : null}
+          </div>
         </div>
       ) : null}
     </motion.section>

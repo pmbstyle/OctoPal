@@ -1,7 +1,7 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { AnimatePresence } from "framer-motion";
 import { Play, Square } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { AppShell } from "./components/AppShell";
@@ -35,6 +35,7 @@ export function App() {
   const [startStatus, setStartStatus] = useState<"idle" | "starting" | "started" | "stopping" | "failed">("idle");
   const [startError, setStartError] = useState("");
   const [startErrorDetail, setStartErrorDetail] = useState("");
+  const [runtimeStatus, setRuntimeStatus] = useState<DesktopRuntimeStatus | null>(null);
   const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
   const [installState, setInstallState] = useState<DesktopInstallState>({
     installed: false,
@@ -54,6 +55,87 @@ export function App() {
   const steps = useMemo(() => getWizardSteps(values.sameWorker), [values.sameWorker]);
   const step = steps[Math.min(stepIndex, steps.length - 1)] ?? "location";
   const copy = useMemo(() => (key: keyof typeof messages.en) => t(language, key), [language]);
+  const runtimeInstallDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
+  const runtimeView = useMemo(() => {
+    if (startStatus === "starting") {
+      return {
+        state: "starting" as const,
+        title: copy("octopalStarting"),
+        detail: runtimeStatus?.detail || copy("octopalStartingDetail"),
+      };
+    }
+
+    if (startStatus === "stopping") {
+      return {
+        state: "stopping" as const,
+        title: copy("octopalStopping"),
+        detail: runtimeStatus?.detail || copy("octopalStoppingDetail"),
+      };
+    }
+
+    if (startStatus === "failed") {
+      return {
+        state: "error" as const,
+        title: startError || runtimeStatus?.title || copy("runtimeStatusError"),
+        detail: startErrorDetail || runtimeStatus?.detail || "",
+      };
+    }
+
+    if (runtimeStatus) {
+      return {
+        state: runtimeStatus.state,
+        title: runtimeStatus.title,
+        detail: runtimeStatus.detail,
+      };
+    }
+
+    if (installState.installed) {
+      return {
+        state: "checking" as const,
+        title: copy("octopalStatusChecking"),
+        detail: "",
+      };
+    }
+
+    return {
+      state: "stopped" as const,
+      title: copy("octopalStopped"),
+      detail: copy("octopalStoppedDetail"),
+    };
+  }, [copy, installState.installed, runtimeStatus, startError, startErrorDetail, startStatus]);
+
+  const refreshRuntimeStatus = useCallback(async () => {
+    if (!window.octopalDesktop || !installState.installed || !runtimeInstallDir) {
+      return;
+    }
+
+    const result = await window.octopalDesktop.getOctopalStatus(runtimeInstallDir);
+    setRuntimeStatus(result);
+    setStartStatus((current) => {
+      if (!result.ok || result.state === "error") {
+        return "failed";
+      }
+
+      if (result.state === "running") {
+        return "started";
+      }
+
+      if (result.state === "stopped") {
+        return current === "starting" ? current : "idle";
+      }
+
+      return current;
+    });
+
+    if (!result.ok || result.state === "error") {
+      setStartError(result.title);
+      setStartErrorDetail(result.detail);
+      return;
+    }
+
+    setStartError("");
+    setStartErrorDetail("");
+  }, [installState.installed, runtimeInstallDir]);
 
   useEffect(() => {
     void loadSettings().then(async (settings) => {
@@ -94,6 +176,19 @@ export function App() {
 
     void saveSettings({ language, theme, installDir: values.installDir || "" });
   }, [language, settingsLoaded, theme, values.installDir]);
+
+  useEffect(() => {
+    if (!settingsLoaded || !installState.installed) {
+      return;
+    }
+
+    void refreshRuntimeStatus();
+    const interval = window.setInterval(() => {
+      void refreshRuntimeStatus();
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [installState.installed, refreshRuntimeStatus, settingsLoaded]);
 
   useEffect(() => {
     setStepIndex((current) => Math.min(current, steps.length - 1));
@@ -208,6 +303,7 @@ export function App() {
       setInstallState(nextState);
       setSavedInstallResult(null);
       setSavedPlanPath("");
+      setRuntimeStatus(null);
       setStartStatus("idle");
       setStartError("");
       setStartErrorDetail("");
@@ -237,6 +333,7 @@ export function App() {
     setInstallEvents([]);
     setInstallError("");
     setSavedInstallResult(null);
+    setRuntimeStatus(null);
     setStartStatus("idle");
     setStartError("");
     setStartErrorDetail("");
@@ -296,6 +393,7 @@ export function App() {
         return;
       }
       setStartStatus("started");
+      void refreshRuntimeStatus();
     } catch (error) {
       setStartStatus("failed");
       setStartError(error instanceof Error ? error.message : copy("startFailed"));
@@ -321,12 +419,18 @@ export function App() {
         return;
       }
       setStartStatus("idle");
+      void refreshRuntimeStatus();
     } catch (error) {
       setStartStatus("failed");
       setStartError(error instanceof Error ? error.message : copy("stopFailed"));
       setStartErrorDetail("");
     }
   }
+
+  const doneTitle = startStatus === "idle" && !runtimeStatus ? copy("completeTitle") : runtimeView.title;
+  const doneBody = runtimeView.state === "error" || (startStatus === "idle" && !runtimeStatus) ? "" : runtimeView.detail;
+  const doneCanStop = runtimeView.state === "running" || runtimeView.state === "stopping";
+  const doneBusy = runtimeView.state === "starting" || runtimeView.state === "stopping";
 
   return (
     <AppShell
@@ -348,8 +452,9 @@ export function App() {
             onStartOctopal={() => void startInstalledOctopal()}
             onStopOctopal={() => void stopInstalledOctopal()}
             installed={installState.installed}
-            startStatus={startStatus}
-            startError={startError}
+            runtimeState={runtimeView.state}
+            runtimeTitle={runtimeView.title}
+            runtimeDetail={runtimeView.detail}
           />
         ) : null}
 
@@ -391,33 +496,33 @@ export function App() {
         {screen === "done" ? (
           <StatusScreen
             key="done"
-            title={startStatus === "started" ? copy("octopalStarted") : copy("completeTitle")}
-            body=""
+            title={doneTitle}
+            body={doneBody}
             octoAlt="Octopal mascot"
-            errorTitle={startStatus === "failed" ? startError : ""}
-            errorDetail={startStatus === "failed" ? startErrorDetail : ""}
+            errorTitle={runtimeView.state === "error" ? runtimeView.title : ""}
+            errorDetail={runtimeView.state === "error" ? runtimeView.detail : ""}
             action={
-              startStatus === "started" || startStatus === "stopping" ? (
+              doneCanStop ? (
                 <Button
                   type="button"
                   variant="danger"
                   className="status-action-button"
-                  disabled={startStatus === "stopping"}
+                  disabled={doneBusy}
                   onClick={() => void stopInstalledOctopal()}
                 >
                   <Square data-icon="inline-start" />
-                  {startStatus === "stopping" ? copy("stoppingOctopal") : copy("stopOctopal")}
+                  {runtimeView.state === "stopping" ? copy("stoppingOctopal") : copy("stopOctopal")}
                 </Button>
               ) : (
                 <Button
                   type="button"
                   variant="success"
                   className="status-action-button"
-                  disabled={startStatus === "starting"}
+                  disabled={doneBusy}
                   onClick={() => void startInstalledOctopal()}
                 >
                   <Play data-icon="inline-start" />
-                  {startStatus === "starting" ? copy("startingOctopal") : copy("startOctopal")}
+                  {runtimeView.state === "starting" ? copy("startingOctopal") : copy("startOctopal")}
                 </Button>
               )
             }

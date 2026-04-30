@@ -51,6 +51,21 @@ export type StopFailure = {
   detail: string;
 };
 
+export type RuntimeStatusState = "running" | "stopped" | "error";
+
+export type RuntimeStatusResult = {
+  ok: boolean;
+  state: RuntimeStatusState;
+  title: string;
+  detail: string;
+  installDir: string;
+  pid?: number | string | null;
+  uptime?: string;
+  channel?: string;
+  octoState?: string;
+  launcher?: string;
+};
+
 type CommandResult = {
   stdout: string;
   stderr: string;
@@ -219,6 +234,93 @@ function runDetachedStart(command: string, args: string[], options: RunOptions =
       finish({ stdout, stderr, exited: true, code });
     });
   });
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function getRecentError(snapshot: Record<string, unknown>): string {
+  const logs = Array.isArray(snapshot.logs) ? snapshot.logs : [];
+  const errorEntry = [...logs]
+    .reverse()
+    .map((entry) => asRecord(entry))
+    .find((entry) => ["error", "critical"].includes(String(entry.level ?? "").toLowerCase()));
+  return errorEntry ? String(errorEntry.event ?? "").trim() : "";
+}
+
+function statusFromDashboardSnapshot(snapshot: unknown, installDir: string): RuntimeStatusResult {
+  const root = asRecord(snapshot);
+  const system = asRecord(root.system);
+  const octo = asRecord(root.octo);
+  const launcher = asRecord(system.worker_launcher);
+  const running = system.running === true;
+  const pid = system.pid as number | string | null | undefined;
+  const channel = typeof system.active_channel === "string" ? system.active_channel : "";
+  const uptime = typeof system.uptime === "string" ? system.uptime : "";
+  const octoState = typeof octo.state === "string" ? octo.state : "";
+  const launcherReason = typeof launcher.reason === "string" ? launcher.reason : "";
+  const recentError = getRecentError(root);
+
+  if (running) {
+    const detailParts = [
+      pid ? `PID ${pid}` : "",
+      uptime && uptime !== "N/A" ? `uptime ${uptime}` : "",
+      channel ? `channel ${channel}` : "",
+      octoState ? `Octo ${octoState}` : "",
+    ].filter(Boolean);
+    return {
+      ok: true,
+      state: "running",
+      title: "Octopal is running",
+      detail: detailParts.join(" · ") || "Runtime is active.",
+      installDir,
+      pid,
+      uptime,
+      channel,
+      octoState,
+      launcher: launcherReason,
+    };
+  }
+
+  if (recentError) {
+    return {
+      ok: true,
+      state: "error",
+      title: "Octopal stopped with an error",
+      detail: recentError,
+      installDir,
+      pid,
+      uptime,
+      channel,
+      octoState,
+      launcher: launcherReason,
+    };
+  }
+
+  return {
+    ok: true,
+    state: "stopped",
+    title: "Octopal is stopped",
+    detail: "Runtime is not running.",
+    installDir,
+    pid,
+    uptime,
+    channel,
+    octoState,
+    launcher: launcherReason,
+  };
+}
+
+function parseDashboardSnapshot(output: string): unknown {
+  const trimmed = output.trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start === -1 || end === -1 || end <= start) {
+    throw new Error("Octopal status did not return JSON output.");
+  }
+
+  return JSON.parse(trimmed.slice(start, end + 1));
 }
 
 async function commandExists(command: string, emit: (event: InstallEvent) => void): Promise<boolean> {
@@ -510,6 +612,43 @@ export async function stopOctopalSafely(installDir: string): Promise<StopResult 
       ok: false,
       error: "Could not stop Octopal.",
       detail: sanitizeOutput(message),
+    };
+  }
+}
+
+export async function getOctopalStatus(installDir: string): Promise<RuntimeStatusResult> {
+  if (!installDir) {
+    throw new Error("Install directory is not selected.");
+  }
+
+  if (!existsSync(join(installDir, "pyproject.toml"))) {
+    throw new Error("Install folder does not look like an Octopal checkout.");
+  }
+
+  const uvCommand = await resolveUv(() => undefined);
+  if (!uvCommand) {
+    throw new Error("uv is not available. Install uv or run the installer again.");
+  }
+
+  const { stdout } = await runCommand(uvCommand, ["run", "octopal", "dashboard", "--once", "--json"], () => undefined, {
+    cwd: installDir,
+    env: withPythonDesktopEnv(),
+    quiet: true,
+  });
+  return statusFromDashboardSnapshot(parseDashboardSnapshot(stdout), installDir);
+}
+
+export async function getOctopalStatusSafely(installDir: string): Promise<RuntimeStatusResult> {
+  try {
+    return await getOctopalStatus(installDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not read Octopal status.";
+    return {
+      ok: false,
+      state: "error",
+      title: "Could not read Octopal status",
+      detail: sanitizeOutput(message),
+      installDir,
     };
   }
 }

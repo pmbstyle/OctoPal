@@ -45,6 +45,19 @@ type DesktopStopFailure = {
   detail: string;
 };
 
+type DesktopRuntimeStatus = {
+  ok: boolean;
+  state: "running" | "stopped" | "error";
+  title: string;
+  detail: string;
+  installDir: string;
+  pid?: number | string | null;
+  uptime?: string;
+  channel?: string;
+  octoState?: string;
+  launcher?: string;
+};
+
 type OctopalDesktopApi = {
   loadSettings: () => Promise<{
     language: "en" | "fr" | "es" | "zh";
@@ -72,6 +85,7 @@ type OctopalDesktopApi = {
   installOctopal: (payload: unknown) => Promise<DesktopInstallResult>;
   startOctopal: (installDir: string) => Promise<DesktopStartResult | DesktopStartFailure>;
   stopOctopal: (installDir: string) => Promise<DesktopStopResult | DesktopStopFailure>;
+  getOctopalStatus: (installDir: string) => Promise<DesktopRuntimeStatus>;
   onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => () => void;
 };
 

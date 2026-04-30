@@ -51,6 +51,19 @@ type DesktopStopFailure = {
   detail: string;
 };
 
+type DesktopRuntimeStatus = {
+  ok: boolean;
+  state: "running" | "stopped" | "error";
+  title: string;
+  detail: string;
+  installDir: string;
+  pid?: number | string | null;
+  uptime?: string;
+  channel?: string;
+  octoState?: string;
+  launcher?: string;
+};
+
 contextBridge.exposeInMainWorld("octopalDesktop", {
   loadSettings: () => ipcRenderer.invoke("desktop:load-settings") as Promise<DesktopSettings>,
   saveSettings: (settings: DesktopSettings) =>
@@ -75,6 +88,8 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     ipcRenderer.invoke("desktop:start-octopal", installDir) as Promise<DesktopStartResult | DesktopStartFailure>,
   stopOctopal: (installDir: string) =>
     ipcRenderer.invoke("desktop:stop-octopal", installDir) as Promise<DesktopStopResult | DesktopStopFailure>,
+  getOctopalStatus: (installDir: string) =>
+    ipcRenderer.invoke("desktop:get-octopal-status", installDir) as Promise<DesktopRuntimeStatus>,
   onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, installEvent: DesktopInstallEvent) => callback(installEvent);
     ipcRenderer.on("desktop:install-event", handler);
