@@ -1094,7 +1094,8 @@ p {
   gap: 12px;
   min-width: 0;
   overflow-x: auto;
-  padding: 2px;
+  padding: 12px 2px 18px;
+  margin: -10px 0 -16px;
   scroll-behavior: smooth;
   scroll-snap-type: x mandatory;
   scrollbar-width: none;
