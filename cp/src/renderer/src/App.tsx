@@ -47,6 +47,7 @@ export function App() {
   const [whatsappLinkError, setWhatsappLinkError] = useState("");
   const [whatsappLinkStarted, setWhatsappLinkStarted] = useState(false);
   const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
+  const [loadedConfigChannel, setLoadedConfigChannel] = useState<InstallForm["channel"] | null>(null);
   const [installState, setInstallState] = useState<DesktopInstallState>({
     installed: false,
     installDir: "",
@@ -453,13 +454,17 @@ export function App() {
     if (window.octopalDesktop && installState.installed && installDir) {
       try {
         const config = await window.octopalDesktop.loadOctopalConfig();
-        form.reset(formValuesFromOctopalConfig(config, installDir));
+        const loadedValues = formValuesFromOctopalConfig(config, installDir);
+        form.reset(loadedValues);
+        setLoadedConfigChannel(loadedValues.channel);
         setConfigurationMode("edit");
       } catch (error) {
         console.error("Unable to load installed Octopal config", error);
+        setLoadedConfigChannel(null);
         setConfigurationMode("install");
       }
     } else {
+      setLoadedConfigChannel(null);
       setConfigurationMode("install");
       if (!form.getValues("dashboardToken")?.trim()) {
         form.setValue("dashboardToken", generateDashboardToken(), { shouldDirty: true, shouldValidate: true });
@@ -477,8 +482,10 @@ export function App() {
     }
 
     try {
+      const shouldLinkWhatsApp = values.channel === "whatsapp" && loadedConfigChannel !== "whatsapp";
       const nextState = await window.octopalDesktop.saveOctopalConfig(buildOctopalConfig(values));
       setInstallState(nextState);
+      setLoadedConfigChannel(values.channel);
       setSavedInstallResult(null);
       setSavedPlanPath("");
       setRuntimeStatus(null);
@@ -488,7 +495,7 @@ export function App() {
       setWhatsappLinkStatus(null);
       setWhatsappLinkError("");
       setWhatsappLinkStarted(false);
-      setScreen(values.channel === "whatsapp" ? "whatsapp-link" : "welcome");
+      setScreen(shouldLinkWhatsApp ? "whatsapp-link" : "welcome");
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : copy("installFailedBody"));
       setScreen("failed");
