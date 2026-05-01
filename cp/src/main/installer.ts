@@ -205,6 +205,58 @@ function extractProcessIds(text: string): number[] {
   return [...ids].filter((id) => Number.isInteger(id) && id > 0).sort((left, right) => left - right);
 }
 
+function looksLikeOctopalRuntimeCommand(commandLine: string): boolean {
+  const lowered = commandLine.toLowerCase();
+  if (lowered.includes("uv run octopal start") && !lowered.includes("--foreground")) {
+    return false;
+  }
+  if (lowered.includes("octopal.cli start")) {
+    return true;
+  }
+  if (` ${lowered}`.includes(" octopal start --foreground")) {
+    return true;
+  }
+  return lowered.includes(" -m octopal.cli start");
+}
+
+function processIdValue(value: unknown): number | null {
+  const pid = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+async function listWindowsOctopalRuntimePids(): Promise<number[]> {
+  if (process.platform !== "win32") {
+    return [];
+  }
+
+  const { stdout } = await runCommand(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    () => undefined,
+    { env: withPythonDesktopEnv(), quiet: true },
+  );
+
+  const parsed: unknown = JSON.parse(stdout.trim() || "[]");
+  const rows = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  const pids = new Set<number>();
+  for (const row of rows) {
+    const record = asRecord(row);
+    const pid = processIdValue(record.ProcessId);
+    const commandLine = typeof record.CommandLine === "string" ? record.CommandLine : "";
+    if (pid && commandLine && looksLikeOctopalRuntimeCommand(commandLine)) {
+      pids.add(pid);
+    }
+  }
+
+  return [...pids].sort((left, right) => left - right);
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -235,13 +287,9 @@ async function waitForProcessesToExit(pids: number[], timeoutMs = 5000): Promise
 async function forceStopWindowsProcesses(pids: number[]): Promise<string> {
   const details: string[] = [];
   const failures: string[] = [];
+  const uniquePids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
 
-  for (const pid of pids) {
-    if (!isProcessAlive(pid)) {
-      details.push(`PID ${pid} is already stopped.`);
-      continue;
-    }
-
+  for (const pid of uniquePids) {
     try {
       await runCommand("taskkill", ["/T", "/F", "/PID", String(pid)], () => undefined, {
         env: withPythonDesktopEnv(),
@@ -250,6 +298,10 @@ async function forceStopWindowsProcesses(pids: number[]): Promise<string> {
       details.push(`Stopped PID ${pid} with taskkill.`);
       continue;
     } catch (taskkillError) {
+      if (!isProcessAlive(pid)) {
+        details.push(`PID ${pid} is already stopped.`);
+        continue;
+      }
       failures.push(`taskkill PID ${pid}: ${taskkillError instanceof Error ? taskkillError.message : String(taskkillError)}`);
     }
 
@@ -268,7 +320,7 @@ async function forceStopWindowsProcesses(pids: number[]): Promise<string> {
     }
   }
 
-  const alive = await waitForProcessesToExit(pids);
+  const alive = await waitForProcessesToExit(uniquePids);
   if (alive.length > 0) {
     throw new Error(
       [`Native Windows stop fallback could not stop PID(s): ${alive.join(", ")}.`, ...failures].join("\n"),
@@ -703,22 +755,45 @@ export async function stopOctopal(installDir: string): Promise<StopResult> {
       };
     }
 
-    const pids = extractProcessIds(cliDetail);
-    if (process.platform === "win32" && pids.length > 0) {
-      const fallbackDetail = await forceStopWindowsProcesses(pids);
-      const statusAfterFallback = await getOctopalStatus(installDir).catch(() => null);
+    const pids = new Set(extractProcessIds(cliDetail));
+    if (process.platform === "win32") {
+      for (const pid of await listWindowsOctopalRuntimePids().catch(() => [])) {
+        pids.add(pid);
+      }
+    }
+
+    if (process.platform === "win32" && pids.size > 0) {
+      const fallbackDetails: string[] = [await forceStopWindowsProcesses([...pids])].filter(Boolean);
+      let statusAfterFallback = await getOctopalStatus(installDir).catch(() => null);
+      if (statusAfterFallback?.state === "running") {
+        const retryPids = new Set<number>();
+        const statusPid = processIdValue(statusAfterFallback.pid);
+        if (statusPid) {
+          retryPids.add(statusPid);
+        }
+        for (const pid of await listWindowsOctopalRuntimePids().catch(() => [])) {
+          retryPids.add(pid);
+        }
+
+        const remainingPids = [...retryPids].filter((pid) => !pids.has(pid));
+        if (remainingPids.length > 0) {
+          fallbackDetails.push(await forceStopWindowsProcesses(remainingPids));
+          statusAfterFallback = await getOctopalStatus(installDir).catch(() => null);
+        }
+      }
+
       if (!statusAfterFallback || statusAfterFallback.state === "stopped") {
         return {
           ok: true,
           installDir,
-          detail: [fallbackDetail, cliDetail].filter(Boolean).join("\n"),
+          detail: [...fallbackDetails, cliDetail].filter(Boolean).join("\n"),
         };
       }
 
       throw new Error(
         [
           cliDetail,
-          fallbackDetail,
+          ...fallbackDetails,
           `Octopal still reports ${statusAfterFallback.state}: ${statusAfterFallback.detail}`,
         ]
           .filter(Boolean)

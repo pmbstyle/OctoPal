@@ -853,7 +853,7 @@ def stop() -> None:
 
     discovered = list_octopal_runtime_pids()
     targets: list[int] = []
-    if pid and is_pid_running(pid):
+    if pid and is_octopal_runtime_pid(pid):
         targets.append(pid)
     targets.extend(discovered)
     targets = sorted(set(targets))
@@ -874,7 +874,7 @@ def stop() -> None:
             for target in targets:
                 try:
                     subprocess.run(
-                        ["taskkill", "/F", "/PID", str(target)],
+                        ["taskkill", "/T", "/F", "/PID", str(target)],
                         check=True,
                         capture_output=True,
                     )
@@ -892,12 +892,12 @@ def stop() -> None:
                     failures.append((target, str(exc)))
 
             while time.time() < deadline:
-                alive = [p for p in targets if is_pid_running(p)]
+                alive = [p for p in targets if is_octopal_runtime_pid(p)]
                 if not alive:
                     break
                 time.sleep(0.2)
 
-            alive = [p for p in targets if is_pid_running(p)]
+            alive = [p for p in targets if is_octopal_runtime_pid(p)]
             for target in alive:
                 try:
                     os.kill(target, signal.SIGKILL)
@@ -906,7 +906,7 @@ def stop() -> None:
                 except Exception as exc:
                     failures.append((target, str(exc)))
 
-        still_running = [p for p in targets if is_pid_running(p)]
+        still_running = [p for p in targets if is_octopal_runtime_pid(p)]
         if still_running:
             for target in still_running:
                 cmdline = pid_command_line(target)

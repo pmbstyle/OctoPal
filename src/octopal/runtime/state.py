@@ -215,6 +215,8 @@ def _looks_like_octopal_runtime_cmd(cmdline: str) -> bool:
 def _iter_process_cmdlines() -> list[tuple[int, str]]:
     import platform
 
+    if platform.system() == "Windows":
+        return _iter_process_cmdlines_windows()
     if platform.system() == "Linux":
         return _iter_process_cmdlines_linux_procfs()
     return _iter_process_cmdlines_ps()
@@ -240,6 +242,47 @@ def _iter_process_cmdlines_linux_procfs() -> list[tuple[int, str]]:
         if not parts:
             continue
         rows.append((pid, " ".join(parts)))
+    return rows
+
+
+def _iter_process_cmdlines_windows() -> list[tuple[int, str]]:
+    rows: list[tuple[int, str]] = []
+    try:
+        out = subprocess.check_output(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "Get-CimInstance Win32_Process | "
+                "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except Exception:
+        return rows
+    try:
+        parsed = json.loads(out.strip() or "[]")
+    except json.JSONDecodeError:
+        return rows
+    if isinstance(parsed, dict):
+        records = [parsed]
+    elif isinstance(parsed, list):
+        records = parsed
+    else:
+        return rows
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        try:
+            pid = int(record.get("ProcessId") or 0)
+        except (TypeError, ValueError):
+            continue
+        cmdline = record.get("CommandLine")
+        if pid > 0 and isinstance(cmdline, str) and cmdline:
+            rows.append((pid, cmdline))
     return rows
 
 
