@@ -45,4 +45,20 @@ def test_list_octopal_runtime_pids_ignores_non_foreground_uv_wrapper(monkeypatch
         ],
     )
 
-    assert state.list_octopal_runtime_pids() == [11, 12]
+    assert state.list_octopal_runtime_pids() == [11]
+
+
+def test_list_octopal_runtime_pids_ignores_shells_containing_runtime_text(monkeypatch) -> None:
+    monkeypatch.setattr(state.os, "getpid", lambda: 999)
+    monkeypatch.setattr(state, "_current_process_ancestry", lambda: set())
+    monkeypatch.setattr(
+        state,
+        "_iter_process_cmdlines",
+        lambda: [
+            (20, 'powershell.exe -Command "python -m octopal.cli start --foreground"'),
+            (21, 'node.exe .tmp-probe.mjs "octopal.cli start --foreground"'),
+            (22, r"C:\Octopal\.venv\Scripts\python.exe -m octopal.cli start --foreground"),
+        ],
+    )
+
+    assert state.list_octopal_runtime_pids() == [22]

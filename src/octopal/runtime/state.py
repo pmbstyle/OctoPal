@@ -220,6 +220,17 @@ def _is_pid_running_impl(pid: int) -> bool:
 
 def _looks_like_octopal_runtime_cmd(cmdline: str) -> bool:
     lowered = cmdline.lower()
+    executable = _command_executable_name(cmdline)
+    if executable not in {
+        "octopal",
+        "octopal.exe",
+        "python",
+        "python.exe",
+        "python3",
+        "python3.exe",
+        "pythonw.exe",
+    }:
+        return False
     # Ignore command wrappers like `uv run octopal start` that invoke this CLI.
     if "uv run octopal start" in lowered and "--foreground" not in lowered:
         return False
@@ -228,6 +239,19 @@ def _looks_like_octopal_runtime_cmd(cmdline: str) -> bool:
     if " octopal start --foreground" in f" {lowered}":
         return True
     return " -m octopal.cli start" in lowered
+
+
+def _command_executable_name(cmdline: str) -> str:
+    stripped = cmdline.strip()
+    if not stripped:
+        return ""
+    if stripped[0] in {'"', "'"}:
+        quote = stripped[0]
+        end = stripped.find(quote, 1)
+        token = stripped[1:end] if end > 1 else stripped[1:]
+    else:
+        token = stripped.split(maxsplit=1)[0]
+    return Path(token).name.lower()
 
 
 def _iter_process_cmdlines() -> list[tuple[int, str]]:
