@@ -17,6 +17,7 @@ import {
   defaultInstallValues,
   formValuesFromOctopalConfig,
   installSchema,
+  isExistingSecret,
   providers,
   type InstallForm,
 } from "./lib/install";
@@ -365,6 +366,9 @@ export function App() {
   function updateProvider(providerId: string, target: "octo" | "worker") {
     const provider = providers.find((item) => item.id === providerId);
     if (target === "octo") {
+      if (form.getValues("providerId") !== providerId && isExistingSecret(form.getValues("apiKey"))) {
+        form.setValue("apiKey", "", { shouldDirty: true, shouldValidate: true });
+      }
       form.setValue("providerId", providerId, { shouldValidate: true });
       if (provider?.model) {
         form.setValue("model", provider.model, { shouldValidate: true });
@@ -372,6 +376,9 @@ export function App() {
       return;
     }
 
+    if (form.getValues("workerProviderId") !== providerId && isExistingSecret(form.getValues("workerApiKey"))) {
+      form.setValue("workerApiKey", "", { shouldDirty: true, shouldValidate: true });
+    }
     form.setValue("workerProviderId", providerId, { shouldValidate: true });
     if (provider?.model) {
       form.setValue("workerModel", provider.model, { shouldValidate: true });

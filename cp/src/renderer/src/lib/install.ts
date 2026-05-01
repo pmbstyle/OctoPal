@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export const EXISTING_SECRET_VALUE = "__OCTOPAL_DESKTOP_EXISTING_SECRET__";
+
+export function isExistingSecret(value: string | undefined | null): boolean {
+  return value === EXISTING_SECRET_VALUE;
+}
+
 export const providers = [
   { id: "openrouter", label: "OpenRouter", model: "anthropic/claude-sonnet-4" },
   { id: "zai", label: "Z.AI", model: "glm-4.6" },
@@ -43,7 +49,7 @@ export const installSchema = z
   })
   .superRefine((values, context) => {
     const requireField = (path: string, value: string | undefined) => {
-      if (!value?.trim()) {
+      if (!value?.trim() && !isExistingSecret(value)) {
         context.addIssue({ code: "custom", path: [path], message: "Required" });
       }
     };
@@ -82,6 +88,14 @@ export const installSchema = z
   });
 
 export type InstallForm = z.infer<typeof installSchema>;
+
+function secretString(value: string | undefined): string {
+  return isExistingSecret(value) ? "" : value || "";
+}
+
+function secretNullable(value: string | undefined): string | null {
+  return isExistingSecret(value) ? null : value || null;
+}
 
 export const defaultInstallValues: InstallForm = {
   installDir: "",
@@ -123,14 +137,14 @@ export function buildOctopalConfig(values: InstallForm) {
   return {
     user_channel: values.channel,
     telegram: {
-      bot_token: values.telegramToken || "",
+      bot_token: secretString(values.telegramToken),
       allowed_chat_ids: chatIds ?? [],
       parse_mode: "MarkdownV2",
     },
     llm: {
       provider_id: values.providerId,
       model: values.model,
-      api_key: values.apiKey || null,
+      api_key: secretNullable(values.apiKey),
       api_base: values.apiBase || null,
       model_prefix: null,
     },
@@ -145,7 +159,7 @@ export function buildOctopalConfig(values: InstallForm) {
       : {
           provider_id: workerProviderId,
           model: workerModel,
-          api_key: values.workerApiKey || null,
+          api_key: secretNullable(values.workerApiKey),
           api_base: values.workerApiBase || null,
           model_prefix: null,
         },
@@ -157,7 +171,7 @@ export function buildOctopalConfig(values: InstallForm) {
     gateway: {
       host: "0.0.0.0",
       port: values.dashboardPort,
-      dashboard_token: values.dashboardToken || "",
+      dashboard_token: secretString(values.dashboardToken),
       tailscale_auto_serve: true,
       tailscale_ips: "",
       webapp_enabled: values.dashboardEnabled,
@@ -173,8 +187,8 @@ export function buildOctopalConfig(values: InstallForm) {
       node_command: "node",
     },
     search: {
-      brave_api_key: values.searchProvider === "brave" ? values.braveApiKey || null : null,
-      firecrawl_api_key: values.searchProvider === "firecrawl" ? values.firecrawlApiKey || null : null,
+      brave_api_key: values.searchProvider === "brave" ? secretNullable(values.braveApiKey) : null,
+      firecrawl_api_key: values.searchProvider === "firecrawl" ? secretNullable(values.firecrawlApiKey) : null,
     },
   };
 }

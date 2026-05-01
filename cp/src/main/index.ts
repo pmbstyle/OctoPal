@@ -15,6 +15,7 @@ import {
 import { getWhatsAppLinkStatus, startWhatsAppLink, stopWhatsAppLink } from "./whatsapp";
 
 const execFileAsync = promisify(execFile);
+const EXISTING_SECRET_VALUE = "__OCTOPAL_DESKTOP_EXISTING_SECRET__";
 
 type DesktopSettings = {
   language: "en" | "fr" | "es" | "zh";
@@ -165,14 +166,23 @@ function mergeConfigForDesktopSave(existingConfig: unknown, incomingConfig: unkn
 
 function sanitizeConfigForRenderer(config: unknown): Record<string, unknown> {
   const sanitized = cloneJsonRecord(config);
-  setNested(sanitized, ["telegram", "bot_token"], "");
-  setNested(sanitized, ["llm", "api_key"], null);
-  setNested(sanitized, ["worker_llm_default", "api_key"], null);
-  setNested(sanitized, ["gateway", "dashboard_token"], "");
-  setNested(sanitized, ["whatsapp", "callback_token"], "");
-  setNested(sanitized, ["search", "brave_api_key"], null);
-  setNested(sanitized, ["search", "firecrawl_api_key"], null);
-  setNested(sanitized, ["observability", "langfuse_secret_key"], null);
+  const original = cloneJsonRecord(config);
+  const maskedValue = (path: string[]) => {
+    const value = getNested(original, path);
+    return typeof value === "string" && value.trim() ? EXISTING_SECRET_VALUE : "";
+  };
+  const maskedNullableValue = (path: string[]) => {
+    const value = getNested(original, path);
+    return typeof value === "string" && value.trim() ? EXISTING_SECRET_VALUE : null;
+  };
+  setNested(sanitized, ["telegram", "bot_token"], maskedValue(["telegram", "bot_token"]));
+  setNested(sanitized, ["llm", "api_key"], maskedNullableValue(["llm", "api_key"]));
+  setNested(sanitized, ["worker_llm_default", "api_key"], maskedNullableValue(["worker_llm_default", "api_key"]));
+  setNested(sanitized, ["gateway", "dashboard_token"], maskedValue(["gateway", "dashboard_token"]));
+  setNested(sanitized, ["whatsapp", "callback_token"], maskedValue(["whatsapp", "callback_token"]));
+  setNested(sanitized, ["search", "brave_api_key"], maskedNullableValue(["search", "brave_api_key"]));
+  setNested(sanitized, ["search", "firecrawl_api_key"], maskedNullableValue(["search", "firecrawl_api_key"]));
+  setNested(sanitized, ["observability", "langfuse_secret_key"], maskedNullableValue(["observability", "langfuse_secret_key"]));
   delete sanitized.connectors;
   return sanitized;
 }

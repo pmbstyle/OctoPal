@@ -5,7 +5,7 @@ import { Button } from "../Button";
 import { Field, Input } from "../Field";
 import { StepSection } from "../StepSection";
 import { ToggleCard } from "../ToggleCard";
-import type { InstallForm } from "../../lib/install";
+import { isExistingSecret, type InstallForm } from "../../lib/install";
 import type { CopyFn } from "../../lib/appTypes";
 import { generateDashboardToken } from "../../lib/security";
 
@@ -56,7 +56,7 @@ export function DashboardStep({
               type="number"
             />
           </Field>
-          <Field label={copy("dashboardToken")} hint={copy("recommended")}>
+          <Field label={copy("dashboardToken")} hint={isExistingSecret(values.dashboardToken) ? copy("configured") : copy("recommended")}>
             <div className="input-action-row">
               <Input {...form.register("dashboardToken")} type="password" />
               <Button
