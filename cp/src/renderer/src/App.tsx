@@ -20,6 +20,7 @@ import {
   type InstallForm,
 } from "./lib/install";
 import { messages, t, type Language } from "./lib/i18n";
+import { generateDashboardToken } from "./lib/security";
 import { getPreferredTheme, loadSettings, saveSettings } from "./lib/settings";
 import { getValidationFields, getWizardSteps } from "./lib/wizard";
 
@@ -359,6 +360,9 @@ export function App() {
       }
     } else {
       setConfigurationMode("install");
+      if (!form.getValues("dashboardToken")?.trim()) {
+        form.setValue("dashboardToken", generateDashboardToken(), { shouldDirty: true, shouldValidate: true });
+      }
     }
 
     setStepIndex(0);

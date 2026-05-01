@@ -20,6 +20,10 @@ export function ReviewStep({ body, copy, values }: { body: string; copy: CopyFn;
               : searchProviders.find((item) => item.id === values.searchProvider)?.label ?? values.searchProvider
           }
         />
+        <ReviewItem
+          label={copy("stepDashboard")}
+          value={values.dashboardEnabled ? `${copy("dashboardEnabled")} · ${values.dashboardPort}` : copy("dashboardDisabled")}
+        />
       </div>
       <pre className="config-preview">{JSON.stringify(buildOctopalConfig(values), null, 2)}</pre>
     </StepSection>
