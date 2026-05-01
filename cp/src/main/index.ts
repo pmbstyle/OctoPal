@@ -264,25 +264,13 @@ function createWindow(): void {
   }
 }
 
-function commandNotFoundDetail(command: string): string {
-  return `${command} was not found in PATH. Install it or restart Octopal Desktop after updating PATH.`;
-}
-
-function commandForPlatform(command: string): string {
-  if (process.platform === "win32" && command === "npm") {
-    return "npm.cmd";
-  }
-  return command;
-}
-
 async function checkCommand(command: string, args: string[]): Promise<{ ok: boolean; detail: string }> {
   try {
-    const executable = commandForPlatform(command);
-    const { stdout, stderr } = await execFileAsync(executable, args, { timeout: 5000, windowsHide: true });
+    const { stdout, stderr } = await execFileAsync(command, args, { timeout: 5000, windowsHide: true });
     return { ok: true, detail: (stdout || stderr).trim().split(/\r?\n/)[0] || "Available" };
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-      return { ok: false, detail: commandNotFoundDetail(command) };
+      return { ok: false, detail: `${command} was not found in PATH. Install it or restart Octopal Desktop after updating PATH.` };
     }
     const message = error instanceof Error ? error.message : "Unavailable";
     return { ok: false, detail: message };
@@ -379,7 +367,6 @@ ipcMain.handle("desktop:check-prerequisites", async (): Promise<PrerequisiteChec
     checkCommand("uv", ["--version"]),
     checkDockerRuntime(),
     checkNode20(),
-    checkCommand("npm", ["--version"]),
   ]);
 
   return [
@@ -387,7 +374,6 @@ ipcMain.handle("desktop:check-prerequisites", async (): Promise<PrerequisiteChec
     { id: "uv", label: "uv", required: false, ...checks[1] },
     { id: "docker", label: "Docker runtime", required: false, ...checks[2] },
     { id: "node", label: "Node.js 20+", required: false, ...checks[3] },
-    { id: "npm", label: "npm", required: false, ...checks[4] },
   ];
 });
 

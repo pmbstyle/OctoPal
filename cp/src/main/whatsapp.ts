@@ -56,7 +56,7 @@ function runCommand(command: string, args: string[], options: { cwd?: string; en
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? process.env,
-      shell: false,
+      shell: process.platform === "win32" && command === "npm",
       windowsHide: true,
     });
 
@@ -109,16 +109,12 @@ async function resolveWhatsAppConfig(installDir: string): Promise<WhatsAppConfig
   };
 }
 
-function npmCommand(): string {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
-}
-
 async function ensureBridgeReady(config: WhatsAppConfig): Promise<void> {
   if (!existsSync(join(config.bridgeDir, "package.json"))) {
     throw new Error(`WhatsApp bridge sources were not found at ${config.bridgeDir}.`);
   }
   if (!existsSync(join(config.bridgeDir, "node_modules", "@whiskeysockets", "baileys", "package.json"))) {
-    await runCommand(npmCommand(), ["install"], { cwd: config.bridgeDir });
+    await runCommand("npm", ["install"], { cwd: config.bridgeDir });
   }
 }
 

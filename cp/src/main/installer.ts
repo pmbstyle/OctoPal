@@ -143,11 +143,8 @@ function getUvCandidates(): string[] {
     : [join(home, ".local", "bin", "uv"), join(home, ".cargo", "bin", "uv")];
 }
 
-function commandForPlatform(command: string): string {
-  if (process.platform === "win32" && command === "npm") {
-    return "npm.cmd";
-  }
-  return command;
+function commandUsesShell(command: string): boolean {
+  return process.platform === "win32" && command === "npm";
 }
 
 function runCommand(
@@ -157,11 +154,10 @@ function runCommand(
   options: RunOptions = {},
 ): Promise<CommandResult> {
   return new Promise((resolve, reject) => {
-    const executable = commandForPlatform(command);
-    const child = spawn(executable, args, {
+    const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? withLocalToolPaths(),
-      shell: false,
+      shell: commandUsesShell(command),
       windowsHide: true,
     });
 
