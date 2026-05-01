@@ -189,13 +189,31 @@ def _is_pid_running_impl(pid: int) -> bool:
         import ctypes.wintypes
 
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
-        )
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.BOOL,
+            ctypes.wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+        kernel32.GetExitCodeProcess.argtypes = [
+            ctypes.wintypes.HANDLE,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        kernel32.GetExitCodeProcess.restype = ctypes.wintypes.BOOL
+
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+        try:
+            exit_code = ctypes.wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     except Exception:
         return False
 

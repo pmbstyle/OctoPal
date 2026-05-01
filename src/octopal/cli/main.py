@@ -1852,7 +1852,10 @@ def dashboard(
     if not watch:
         snapshot = _build_dashboard_snapshot(settings, last, store=store)
         if json_output:
-            typer.echo(json.dumps(snapshot, ensure_ascii=False, indent=2))
+            import sys
+
+            sys.stdout.write(json.dumps(snapshot, ensure_ascii=False, indent=2))
+            sys.stdout.write("\n")
         else:
             _print_dashboard(snapshot, compact=compact)
         return

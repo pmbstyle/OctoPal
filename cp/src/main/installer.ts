@@ -454,6 +454,74 @@ function statusFromDashboardSnapshot(snapshot: unknown, installDir: string): Run
   };
 }
 
+async function windowsNativeRuntimeStatus(installDir: string): Promise<RuntimeStatusResult | null> {
+  if (process.platform !== "win32") {
+    return null;
+  }
+
+  const pids = await listWindowsOctopalRuntimePids().catch(() => []);
+  const pid = pids[0] ?? null;
+  if (pid) {
+    return {
+      ok: true,
+      state: "running",
+      title: "Octopal is running",
+      detail: `PID ${pid}`,
+      installDir,
+      pid,
+    };
+  }
+
+  return {
+    ok: true,
+    state: "stopped",
+    title: "Octopal is stopped",
+    detail: "Runtime is not running.",
+    installDir,
+    pid: null,
+  };
+}
+
+async function reconcileWindowsRuntimeStatus(status: RuntimeStatusResult): Promise<RuntimeStatusResult> {
+  const nativeStatus = await windowsNativeRuntimeStatus(status.installDir);
+  if (!nativeStatus) {
+    return status;
+  }
+
+  if (nativeStatus.state === "running") {
+    if (status.state === "running" && status.pid === nativeStatus.pid) {
+      return status;
+    }
+    const detailParts = [
+      nativeStatus.pid ? `PID ${nativeStatus.pid}` : "",
+      status.uptime && status.uptime !== "N/A" ? `uptime ${status.uptime}` : "",
+      status.channel ? `channel ${status.channel}` : "",
+      status.octoState ? `Octo ${status.octoState}` : "",
+    ].filter(Boolean);
+    return {
+      ...status,
+      ok: true,
+      state: "running",
+      title: "Octopal is running",
+      detail: detailParts.join(" · ") || nativeStatus.detail,
+      pid: nativeStatus.pid,
+    };
+  }
+
+  if (status.state === "running") {
+    return {
+      ...status,
+      ok: true,
+      state: "stopped",
+      title: "Octopal is stopped",
+      detail: "Runtime is not running.",
+      pid: null,
+    };
+  }
+
+  return status;
+}
+
 function parseDashboardSnapshot(output: string): unknown {
   const trimmed = output.trim();
   const start = trimmed.indexOf("{");
@@ -837,7 +905,16 @@ export async function getOctopalStatus(installDir: string): Promise<RuntimeStatu
     env: withPythonDesktopEnv(),
     quiet: true,
   });
-  return statusFromDashboardSnapshot(parseDashboardSnapshot(stdout), installDir);
+
+  try {
+    return await reconcileWindowsRuntimeStatus(statusFromDashboardSnapshot(parseDashboardSnapshot(stdout), installDir));
+  } catch (error) {
+    const nativeStatus = await windowsNativeRuntimeStatus(installDir);
+    if (nativeStatus) {
+      return nativeStatus;
+    }
+    throw error;
+  }
 }
 
 export async function getOctopalStatusSafely(installDir: string): Promise<RuntimeStatusResult> {

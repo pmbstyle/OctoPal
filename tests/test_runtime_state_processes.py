@@ -1,6 +1,20 @@
 from __future__ import annotations
 
+import platform
+import subprocess
+import sys
+
+import pytest
+
 from octopal.runtime import state
+
+
+@pytest.mark.skipif(platform.system() != "Windows", reason="Windows PID semantics")
+def test_windows_is_pid_running_rejects_exited_process() -> None:
+    process = subprocess.Popen([sys.executable, "-c", "raise SystemExit(7)"])
+    process.wait(timeout=5)
+
+    assert state.is_pid_running(process.pid) is False
 
 
 def test_windows_process_cmdline_parser_reads_cim_json(monkeypatch) -> None:
