@@ -680,7 +680,26 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.requirements-card-expanded .requirements-head {
   margin-bottom: 14px;
+}
+
+.requirements-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.requirements-toggle svg {
+  transition: transform 160ms ease;
+}
+
+.requirements-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 
 .requirement {

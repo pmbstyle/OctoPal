@@ -1,5 +1,6 @@
-import { AlertTriangle, ArrowRight, CheckCircle2, Globe2, Moon, Play, RefreshCw, Settings, Sun } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Globe2, Moon, Play, RefreshCw, Settings, Sun } from "lucide-react";
 import { motion } from "framer-motion";
+import { useState } from "react";
 
 import octoImage from "../../../../assets/octo.png";
 import { languages, type Language } from "../lib/i18n";
@@ -44,8 +45,24 @@ export function WelcomeScreen({
   preflightStatus: "idle" | "checking" | "ready" | "failed";
   preflightError: string;
 }) {
+  const [requirementsExpanded, setRequirementsExpanded] = useState(false);
   const hasBlockingIssue = preflightChecks.some((check) => check.required && !check.ok);
   const showPreflight = preflightStatus !== "idle" || preflightChecks.length > 0 || preflightError;
+  const availableCount = preflightChecks.filter((check) => check.ok).length;
+  const missingRequiredCount = preflightChecks.filter((check) => check.required && !check.ok).length;
+  const recommendedCount = preflightChecks.filter((check) => !check.required && !check.ok).length;
+  const preflightSummary =
+    preflightStatus === "checking"
+      ? copy("checking")
+      : preflightError
+        ? copy("preflightFailed")
+        : [
+            availableCount ? `${availableCount} ${copy("available")}` : "",
+            missingRequiredCount ? `${missingRequiredCount} ${copy("missing")}` : "",
+            recommendedCount ? `${recommendedCount} ${copy("recommended")}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · ") || copy("preflightReady");
 
   return (
     <motion.section
@@ -79,28 +96,45 @@ export function WelcomeScreen({
         />
       </div>
       {showPreflight ? (
-        <section className="requirements-card welcome-requirements" aria-live="polite">
+        <section
+          className={requirementsExpanded ? "requirements-card requirements-card-expanded welcome-requirements" : "requirements-card welcome-requirements"}
+          aria-live="polite"
+        >
           <div className="requirements-head">
             <div>
               <strong>{copy("requirements")}</strong>
               <small>
-                {preflightStatus === "checking"
-                  ? copy("checking")
-                  : hasBlockingIssue
-                    ? copy("installBlocked")
-                    : copy("preflightReady")}
+                {requirementsExpanded
+                  ? preflightStatus === "checking"
+                    ? copy("checking")
+                    : hasBlockingIssue
+                      ? copy("installBlocked")
+                      : copy("preflightReady")
+                  : preflightSummary}
               </small>
             </div>
-            <Button type="button" variant="ghost" onClick={onRefreshPrerequisites} disabled={preflightStatus === "checking"}>
-              <RefreshCw data-icon="inline-start" />
-              {copy("refresh")}
-            </Button>
+            <div className="requirements-actions">
+              <Button
+                type="button"
+                variant="ghost"
+                className="requirements-toggle"
+                aria-expanded={requirementsExpanded}
+                onClick={() => setRequirementsExpanded((current) => !current)}
+              >
+                <ChevronDown data-icon="inline-start" />
+                {requirementsExpanded ? copy("hideDetails") : copy("showDetails")}
+              </Button>
+              <Button type="button" variant="ghost" onClick={onRefreshPrerequisites} disabled={preflightStatus === "checking"}>
+                <RefreshCw data-icon="inline-start" />
+                {copy("refresh")}
+              </Button>
+            </div>
           </div>
-          {preflightError ? (
+          {requirementsExpanded && preflightError ? (
             <div className="welcome-error" role="alert">{preflightError}</div>
           ) : null}
-          {preflightChecks.length > 0 ? (
-            <div className="requirements-grid">
+          {requirementsExpanded && preflightChecks.length > 0 ? (
+            <motion.div className="requirements-grid" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
               {preflightChecks.map((check) => (
                 <div className={check.ok ? "requirement requirement-ok" : "requirement requirement-missing"} key={check.id}>
                   <div className="requirement-title">
@@ -111,7 +145,7 @@ export function WelcomeScreen({
                   <p title={check.detail}>{check.detail}</p>
                 </div>
               ))}
-            </div>
+            </motion.div>
           ) : null}
         </section>
       ) : null}
