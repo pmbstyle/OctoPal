@@ -1,5 +1,7 @@
 import { CheckCircle2, Loader2, RefreshCw, Smartphone, XCircle } from "lucide-react";
 import { motion } from "framer-motion";
+import QRCode from "qrcode";
+import { useEffect, useState } from "react";
 
 import octoImage from "../../../../assets/octo.png";
 import type { CopyFn } from "../lib/appTypes";
@@ -23,9 +25,43 @@ export function WhatsAppLinkScreen({
   onSkip: () => void;
 }) {
   const linked = status?.linked || status?.connected;
+  const qrPayload = status?.qr?.trim() || "";
   const terminalQr = status?.terminal?.trim() || "";
   const title = linked ? copy("whatsappLinkedTitle") : copy("whatsappLinkTitle");
   const body = linked ? copy("whatsappLinkedBody") : copy("whatsappLinkBody");
+  const [qrDataUrl, setQrDataUrl] = useState("");
+
+  useEffect(() => {
+    if (!qrPayload) {
+      setQrDataUrl("");
+      return;
+    }
+
+    let cancelled = false;
+    void QRCode.toDataURL(qrPayload, {
+      errorCorrectionLevel: "M",
+      margin: 2,
+      scale: 8,
+      color: {
+        dark: "#111827",
+        light: "#ffffff",
+      },
+    })
+      .then((url) => {
+        if (!cancelled) {
+          setQrDataUrl(url);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setQrDataUrl("");
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [qrPayload]);
 
   return (
     <motion.section
@@ -54,11 +90,17 @@ export function WhatsAppLinkScreen({
         </div>
       ) : null}
 
-      {!linked && terminalQr ? (
+      {!linked && qrDataUrl ? (
+        <div className="whatsapp-qr-image-wrap">
+          <img className="whatsapp-qr-image" src={qrDataUrl} alt={copy("whatsappQrAlt")} />
+        </div>
+      ) : null}
+
+      {!linked && !qrDataUrl && terminalQr ? (
         <pre className="whatsapp-qr" aria-label={copy("whatsappQrAlt")}>{terminalQr}</pre>
       ) : null}
 
-      {!linked && !terminalQr && !error ? <p className="whatsapp-wait-copy">{copy("whatsappQrWaiting")}</p> : null}
+      {!linked && !qrDataUrl && !terminalQr && !error ? <p className="whatsapp-wait-copy">{copy("whatsappQrWaiting")}</p> : null}
 
       <div className="status-actions whatsapp-actions">
         <Button type="button" variant="ghost" onClick={onRefresh} disabled={busy}>
