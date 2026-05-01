@@ -999,7 +999,7 @@ p {
 .setup-content {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   min-height: 0;
   padding: 18px 0 10px;
@@ -1009,7 +1009,7 @@ p {
 .clean-step-section {
   flex: 0 1 auto;
   width: min(960px, 100%);
-  margin: 0;
+  margin: auto 0;
   padding: 0 0 18px;
   overflow: visible;
 }
@@ -1616,6 +1616,7 @@ p {
   }
 
   .clean-step-section {
+    margin: 0;
     padding-bottom: 12px;
   }
 
