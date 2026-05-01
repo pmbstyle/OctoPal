@@ -144,6 +144,13 @@ def is_pid_running(pid: int | None) -> bool:
         return False
 
 
+def is_octopal_runtime_pid(pid: int | None) -> bool:
+    if not pid or not is_pid_running(pid):
+        return False
+    cmdline = pid_command_line(pid)
+    return bool(cmdline and _looks_like_octopal_runtime_cmd(cmdline))
+
+
 def list_octopal_runtime_pids() -> list[int]:
     """Return running PIDs that look like `octopal start` runtime processes."""
     current_pid = os.getpid()

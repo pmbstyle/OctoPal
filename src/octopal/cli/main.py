@@ -33,6 +33,7 @@ from octopal.infrastructure.logging import configure_logging
 from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.runtime.metrics import read_metrics_snapshot
 from octopal.runtime.state import (
+    is_octopal_runtime_pid,
     is_pid_running,
     list_octopal_runtime_pids,
     mark_runtime_running,
@@ -2335,7 +2336,13 @@ def _build_tool_resolution_table(
 def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore | None = None) -> dict:
     status_data = read_status(settings) or {}
     pid = status_data.get("pid")
-    running = is_pid_running(pid)
+    pid_running = is_octopal_runtime_pid(pid)
+    discovered_pids = list_octopal_runtime_pids()
+    running = pid_running or bool(discovered_pids)
+    if not pid_running and discovered_pids:
+        pid = discovered_pids[0]
+    elif not running:
+        pid = None
     metrics = read_metrics_snapshot(settings.state_dir) or {}
     octo_metrics = metrics.get("octo", {}) if isinstance(metrics, dict) else {}
     telegram_metrics = metrics.get("telegram", {}) if isinstance(metrics, dict) else {}
