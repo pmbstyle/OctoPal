@@ -1,4 +1,5 @@
-import { KeyRound, LayoutDashboard } from "lucide-react";
+import { Eye, EyeOff, KeyRound, LayoutDashboard } from "lucide-react";
+import { useState } from "react";
 import type { FieldErrors, UseFormReturn } from "react-hook-form";
 
 import { Button } from "../Button";
@@ -20,6 +21,8 @@ export function DashboardStep({
   form: UseFormReturn<InstallForm>;
   errors: FieldErrors<InstallForm>;
 }) {
+  const [tokenVisible, setTokenVisible] = useState(false);
+  const tokenIsConfiguredSecret = isExistingSecret(values.dashboardToken);
   const updateEnabled = (enabled: boolean) => {
     form.setValue("dashboardEnabled", enabled, { shouldDirty: true, shouldValidate: true });
     if (enabled && !form.getValues("dashboardToken")?.trim()) {
@@ -58,11 +61,23 @@ export function DashboardStep({
           </Field>
           <Field label={copy("dashboardToken")} hint={isExistingSecret(values.dashboardToken) ? copy("configured") : copy("recommended")}>
             <div className="input-action-row">
-              <Input {...form.register("dashboardToken")} type="password" />
+              <Input {...form.register("dashboardToken")} type={tokenVisible && !tokenIsConfiguredSecret ? "text" : "password"} />
               <Button
                 type="button"
                 variant="secondary"
-                onClick={() => form.setValue("dashboardToken", generateDashboardToken(), { shouldDirty: true, shouldValidate: true })}
+                disabled={!values.dashboardToken || tokenIsConfiguredSecret}
+                onClick={() => setTokenVisible((current) => !current)}
+              >
+                {tokenVisible ? <EyeOff data-icon="inline-start" /> : <Eye data-icon="inline-start" />}
+                {tokenVisible ? copy("hideToken") : copy("showToken")}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  form.setValue("dashboardToken", generateDashboardToken(), { shouldDirty: true, shouldValidate: true });
+                  setTokenVisible(true);
+                }}
               >
                 <KeyRound data-icon="inline-start" />
                 {copy("generateToken")}
