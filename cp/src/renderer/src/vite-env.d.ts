@@ -66,6 +66,17 @@ type DesktopPrerequisiteCheck = {
   detail: string;
 };
 
+type DesktopWhatsAppLinkStatus = {
+  ok: boolean;
+  running: boolean;
+  connected: boolean;
+  linked: boolean;
+  qr: string;
+  terminal: string;
+  self: string;
+  detail: string;
+};
+
 type OctopalDesktopApi = {
   loadSettings: () => Promise<{
     language: "en" | "fr" | "es" | "zh";
@@ -94,6 +105,9 @@ type OctopalDesktopApi = {
   startOctopal: (installDir: string) => Promise<DesktopStartResult | DesktopStartFailure>;
   stopOctopal: (installDir: string) => Promise<DesktopStopResult | DesktopStopFailure>;
   getOctopalStatus: (installDir: string) => Promise<DesktopRuntimeStatus>;
+  startWhatsAppLink: (installDir: string) => Promise<DesktopWhatsAppLinkStatus>;
+  getWhatsAppLinkStatus: (installDir: string) => Promise<DesktopWhatsAppLinkStatus>;
+  stopWhatsAppLink: (installDir: string) => Promise<DesktopWhatsAppLinkStatus>;
   onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => () => void;
 };
 

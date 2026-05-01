@@ -1204,6 +1204,94 @@ p {
   font-size: 17px;
 }
 
+.whatsapp-link-screen {
+  justify-content: flex-start;
+  overflow: auto;
+}
+
+.whatsapp-link-screen .status-octo {
+  width: min(190px, 34vw);
+  margin-bottom: 18px;
+}
+
+.whatsapp-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  width: min(640px, 100%);
+  margin-top: 22px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-strong);
+  text-align: left;
+}
+
+.whatsapp-status svg {
+  width: 24px;
+  height: 24px;
+  color: var(--primary);
+}
+
+.whatsapp-status-linked {
+  border-color: color-mix(in srgb, var(--success) 60%, var(--border));
+  background: color-mix(in srgb, var(--success) 9%, var(--surface-strong));
+}
+
+.whatsapp-status-linked svg {
+  color: var(--success);
+}
+
+.whatsapp-status strong,
+.whatsapp-status span {
+  display: block;
+}
+
+.whatsapp-status strong {
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.whatsapp-status span {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.whatsapp-qr {
+  width: min(640px, 100%);
+  max-height: 300px;
+  margin: 20px 0 0;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-strong) 72%, #000);
+  color: var(--foreground);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  line-height: 1;
+  text-align: left;
+  white-space: pre;
+}
+
+.whatsapp-wait-copy {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.whatsapp-actions {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.spin-icon {
+  animation: spin 0.9s linear infinite;
+}
+
 .install-progress {
   padding-right: 32px;
   padding-left: 32px;
@@ -1290,6 +1378,12 @@ p {
 
   to {
     transform: translateY(-6px) scale(1.015);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

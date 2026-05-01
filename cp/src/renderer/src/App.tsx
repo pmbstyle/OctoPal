@@ -9,6 +9,7 @@ import { Button } from "./components/Button";
 import { InstallProgressScreen } from "./components/InstallProgressScreen";
 import { StatusScreen } from "./components/StatusScreen";
 import { WelcomeScreen } from "./components/WelcomeScreen";
+import { WhatsAppLinkScreen } from "./components/WhatsAppLinkScreen";
 import { WizardScreen } from "./components/WizardScreen";
 import type { Screen, StepId, Theme } from "./lib/appTypes";
 import {
@@ -40,6 +41,10 @@ export function App() {
   const [preflightChecks, setPreflightChecks] = useState<DesktopPrerequisiteCheck[]>([]);
   const [preflightStatus, setPreflightStatus] = useState<"idle" | "checking" | "ready" | "failed">("idle");
   const [preflightError, setPreflightError] = useState("");
+  const [whatsappLinkStatus, setWhatsappLinkStatus] = useState<DesktopWhatsAppLinkStatus | null>(null);
+  const [whatsappLinkBusy, setWhatsappLinkBusy] = useState(false);
+  const [whatsappLinkError, setWhatsappLinkError] = useState("");
+  const [whatsappLinkStarted, setWhatsappLinkStarted] = useState(false);
   const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
   const [installState, setInstallState] = useState<DesktopInstallState>({
     installed: false,
@@ -165,6 +170,61 @@ export function App() {
     setStartErrorDetail("");
   }, [installState.installed, runtimeInstallDir]);
 
+  const startWhatsappLinkFlow = useCallback(async () => {
+    if (!window.octopalDesktop || !runtimeInstallDir) {
+      return;
+    }
+
+    setWhatsappLinkBusy(true);
+    setWhatsappLinkError("");
+    try {
+      const result = await window.octopalDesktop.startWhatsAppLink(runtimeInstallDir);
+      setWhatsappLinkStatus(result);
+      setWhatsappLinkError("");
+    } catch (error) {
+      setWhatsappLinkError(error instanceof Error ? error.message : copy("whatsappLinkFailed"));
+    } finally {
+      setWhatsappLinkStarted(true);
+      setWhatsappLinkBusy(false);
+    }
+  }, [copy, runtimeInstallDir]);
+
+  const refreshWhatsappLinkStatus = useCallback(
+    async (showBusy = false) => {
+      if (!window.octopalDesktop || !runtimeInstallDir) {
+        return;
+      }
+
+      if (showBusy) {
+        setWhatsappLinkBusy(true);
+      }
+      try {
+        const result = await window.octopalDesktop.getWhatsAppLinkStatus(runtimeInstallDir);
+        setWhatsappLinkStatus(result);
+        setWhatsappLinkError("");
+      } catch (error) {
+        setWhatsappLinkError(error instanceof Error ? error.message : copy("whatsappLinkFailed"));
+      } finally {
+        if (showBusy) {
+          setWhatsappLinkBusy(false);
+        }
+      }
+    },
+    [copy, runtimeInstallDir],
+  );
+
+  const stopWhatsappLinkFlow = useCallback(async () => {
+    if (!window.octopalDesktop || !runtimeInstallDir) {
+      return;
+    }
+
+    try {
+      await window.octopalDesktop.stopWhatsAppLink(runtimeInstallDir);
+    } catch (error) {
+      console.error("Unable to stop WhatsApp link bridge", error);
+    }
+  }, [runtimeInstallDir]);
+
   useEffect(() => {
     void loadSettings().then(async (settings) => {
       setLanguage(settings.language);
@@ -225,6 +285,30 @@ export function App() {
 
     return () => window.clearInterval(interval);
   }, [installState.installed, refreshRuntimeStatus, screen, settingsLoaded]);
+
+  useEffect(() => {
+    if (screen !== "whatsapp-link" || !runtimeInstallDir) {
+      return;
+    }
+
+    if (!whatsappLinkStarted && !whatsappLinkBusy) {
+      void startWhatsappLinkFlow();
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void refreshWhatsappLinkStatus();
+    }, 2500);
+
+    return () => window.clearInterval(interval);
+  }, [
+    refreshWhatsappLinkStatus,
+    runtimeInstallDir,
+    screen,
+    startWhatsappLinkFlow,
+    whatsappLinkBusy,
+    whatsappLinkStarted,
+  ]);
 
   useEffect(() => {
     if (!settingsLoaded || !installState.installed || screen !== "welcome" || !window.octopalDesktop || !runtimeInstallDir) {
@@ -414,6 +498,9 @@ export function App() {
     setStartStatus("idle");
     setStartError("");
     setStartErrorDetail("");
+    setWhatsappLinkStatus(null);
+    setWhatsappLinkError("");
+    setWhatsappLinkStarted(false);
 
     const payload = {
       createdBy: "Octopal Desktop",
@@ -437,7 +524,7 @@ export function App() {
           configPath: result.configPath,
           planPath: result.planPath,
         });
-        setScreen("done");
+        setScreen(values.channel === "whatsapp" ? "whatsapp-link" : "done");
       } catch (error) {
         const message = error instanceof Error ? error.message : copy("installFailedBody");
         setInstallError(message);
@@ -463,6 +550,7 @@ export function App() {
     setStartError("");
     setStartErrorDetail("");
     try {
+      await window.octopalDesktop.stopWhatsAppLink(installDir).catch(() => undefined);
       const result = await window.octopalDesktop.startOctopal(installDir);
       if (!result.ok) {
         setStartStatus("failed");
@@ -477,6 +565,13 @@ export function App() {
       setStartError(error instanceof Error ? error.message : copy("startFailed"));
       setStartErrorDetail("");
     }
+  }
+
+  async function finishWhatsappLink() {
+    await stopWhatsappLinkFlow();
+    setWhatsappLinkBusy(false);
+    setWhatsappLinkError("");
+    setScreen("done");
   }
 
   async function stopInstalledOctopal() {
@@ -605,6 +700,19 @@ export function App() {
                 </Button>
               )
             }
+          />
+        ) : null}
+
+        {screen === "whatsapp-link" ? (
+          <WhatsAppLinkScreen
+            key="whatsapp-link"
+            copy={copy}
+            status={whatsappLinkStatus}
+            busy={whatsappLinkBusy}
+            error={whatsappLinkError}
+            onRefresh={() => void refreshWhatsappLinkStatus(true)}
+            onContinue={() => void finishWhatsappLink()}
+            onSkip={() => void finishWhatsappLink()}
           />
         ) : null}
 

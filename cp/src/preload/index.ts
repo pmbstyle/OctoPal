@@ -72,6 +72,17 @@ type DesktopPrerequisiteCheck = {
   detail: string;
 };
 
+type DesktopWhatsAppLinkStatus = {
+  ok: boolean;
+  running: boolean;
+  connected: boolean;
+  linked: boolean;
+  qr: string;
+  terminal: string;
+  self: string;
+  detail: string;
+};
+
 contextBridge.exposeInMainWorld("octopalDesktop", {
   loadSettings: () => ipcRenderer.invoke("desktop:load-settings") as Promise<DesktopSettings>,
   saveSettings: (settings: DesktopSettings) =>
@@ -96,6 +107,12 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     ipcRenderer.invoke("desktop:stop-octopal", installDir) as Promise<DesktopStopResult | DesktopStopFailure>,
   getOctopalStatus: (installDir: string) =>
     ipcRenderer.invoke("desktop:get-octopal-status", installDir) as Promise<DesktopRuntimeStatus>,
+  startWhatsAppLink: (installDir: string) =>
+    ipcRenderer.invoke("desktop:start-whatsapp-link", installDir) as Promise<DesktopWhatsAppLinkStatus>,
+  getWhatsAppLinkStatus: (installDir: string) =>
+    ipcRenderer.invoke("desktop:get-whatsapp-link-status", installDir) as Promise<DesktopWhatsAppLinkStatus>,
+  stopWhatsAppLink: (installDir: string) =>
+    ipcRenderer.invoke("desktop:stop-whatsapp-link", installDir) as Promise<DesktopWhatsAppLinkStatus>,
   onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, installEvent: DesktopInstallEvent) => callback(installEvent);
     ipcRenderer.on("desktop:install-event", handler);

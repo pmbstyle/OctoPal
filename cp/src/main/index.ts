@@ -12,6 +12,7 @@ import {
   type InstallEvent,
   type InstallPayload,
 } from "./installer";
+import { getWhatsAppLinkStatus, startWhatsAppLink, stopWhatsAppLink } from "./whatsapp";
 
 const execFileAsync = promisify(execFile);
 
@@ -410,6 +411,9 @@ ipcMain.handle("desktop:install-octopal", async (event, payload: InstallPayload)
 ipcMain.handle("desktop:start-octopal", async (_event, installDir: string) => startOctopalSafely(installDir));
 ipcMain.handle("desktop:stop-octopal", async (_event, installDir: string) => stopOctopalSafely(installDir));
 ipcMain.handle("desktop:get-octopal-status", async (_event, installDir: string) => getOctopalStatusSafely(installDir));
+ipcMain.handle("desktop:start-whatsapp-link", async (_event, installDir: string) => startWhatsAppLink(installDir));
+ipcMain.handle("desktop:get-whatsapp-link-status", async (_event, installDir: string) => getWhatsAppLinkStatus(installDir));
+ipcMain.handle("desktop:stop-whatsapp-link", async (_event, installDir: string) => stopWhatsAppLink(installDir));
 
 void app.whenReady().then(async () => {
   nativeTheme.themeSource = (await readSettings()).theme;
