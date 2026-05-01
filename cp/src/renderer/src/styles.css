@@ -1053,6 +1053,14 @@ p {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.dashboard-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 245px) minmax(0, 1fr);
+  gap: 16px;
+  max-width: 760px;
+  margin: 22px auto 0;
+}
+
 .provider-carousel {
   display: grid;
   grid-template-columns: 42px minmax(0, 1fr) 42px;
@@ -1535,10 +1543,15 @@ p {
   }
 
   .path-row,
+  .dashboard-form,
   .form-grid,
   .choice-grid,
   .review-grid,
   .requirements-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .input-action-row {
     grid-template-columns: 1fr;
   }
 

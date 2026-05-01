@@ -49,7 +49,7 @@ export function DashboardStep({
         />
       </div>
       {values.dashboardEnabled ? (
-        <div className="form-grid reveal-form">
+        <div className="dashboard-form reveal-form">
           <Field label={copy("dashboardPort")} hint="1-65535" invalid={!!errors.dashboardPort}>
             <Input
               {...form.register("dashboardPort", { valueAsNumber: true })}
