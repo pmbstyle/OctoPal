@@ -158,14 +158,26 @@ function normalizeStatus(payload: Record<string, unknown>, detail = ""): WhatsAp
   };
 }
 
+function bridgeUnavailableStatus(detail: string): WhatsAppLinkStatus {
+  return {
+    ok: false,
+    running: false,
+    connected: false,
+    linked: false,
+    qr: "",
+    terminal: "",
+    self: "",
+    detail,
+  };
+}
+
 export async function startWhatsAppLink(installDir: string): Promise<WhatsAppLinkStatus> {
   const config = await resolveWhatsAppConfig(installDir);
   await ensureBridgeReady(config);
 
-  try {
-    return await getWhatsAppLinkStatus(installDir);
-  } catch {
-    // Start a desktop-owned bridge below.
+  const existing = await getWhatsAppLinkStatus(installDir).catch(() => null);
+  if (existing?.running) {
+    return existing;
   }
 
   await mkdir(config.authDir, { recursive: true });
@@ -198,8 +210,19 @@ export async function startWhatsAppLink(installDir: string): Promise<WhatsAppLin
 
 export async function getWhatsAppLinkStatus(installDir: string): Promise<WhatsAppLinkStatus> {
   const config = await resolveWhatsAppConfig(installDir);
-  const terminal = await fetchJson(`${linkBaseUrl(config)}/qr-terminal`);
-  const status = await fetchJson(`${linkBaseUrl(config)}/status`).catch(() => ({}));
+  let status: Record<string, unknown>;
+  try {
+    status = await fetchJson(`${linkBaseUrl(config)}/status`);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return bridgeUnavailableStatus(`WhatsApp bridge is not running yet. ${detail}`);
+  }
+
+  if (status.linked === true || status.connected === true) {
+    return normalizeStatus(status);
+  }
+
+  const terminal = await fetchJson(`${linkBaseUrl(config)}/qr-terminal`).catch(() => ({}));
   return normalizeStatus({ ...status, ...terminal });
 }
 

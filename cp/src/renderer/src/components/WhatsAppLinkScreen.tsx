@@ -27,8 +27,9 @@ export function WhatsAppLinkScreen({
   const linked = status?.linked || status?.connected;
   const qrPayload = status?.qr?.trim() || "";
   const terminalQr = status?.terminal?.trim() || "";
+  const hasQr = !!qrPayload || !!terminalQr;
   const title = linked ? copy("whatsappLinkedTitle") : copy("whatsappLinkTitle");
-  const body = linked ? copy("whatsappLinkedBody") : copy("whatsappLinkBody");
+  const body = linked ? copy("whatsappLinkedBody") : hasQr ? copy("whatsappLinkBody") : copy("whatsappQrWaiting");
   const [qrDataUrl, setQrDataUrl] = useState("");
 
   useEffect(() => {
