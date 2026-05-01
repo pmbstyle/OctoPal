@@ -64,6 +64,14 @@ type DesktopRuntimeStatus = {
   launcher?: string;
 };
 
+type DesktopPrerequisiteCheck = {
+  id: string;
+  label: string;
+  ok: boolean;
+  required: boolean;
+  detail: string;
+};
+
 contextBridge.exposeInMainWorld("octopalDesktop", {
   loadSettings: () => ipcRenderer.invoke("desktop:load-settings") as Promise<DesktopSettings>,
   saveSettings: (settings: DesktopSettings) =>
@@ -73,9 +81,7 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
   minimizeWindow: () => ipcRenderer.invoke("desktop:window-control", "minimize") as Promise<void>,
   toggleMaximizeWindow: () => ipcRenderer.invoke("desktop:window-control", "maximize") as Promise<void>,
   checkPrerequisites: () =>
-    ipcRenderer.invoke("desktop:check-prerequisites") as Promise<
-      Array<{ id: string; label: string; ok: boolean; detail: string }>
-    >,
+    ipcRenderer.invoke("desktop:check-prerequisites") as Promise<DesktopPrerequisiteCheck[]>,
   getInstallState: () => ipcRenderer.invoke("desktop:get-install-state") as Promise<DesktopInstallState>,
   loadOctopalConfig: () => ipcRenderer.invoke("desktop:load-octopal-config") as Promise<unknown>,
   saveOctopalConfig: (config: unknown) =>

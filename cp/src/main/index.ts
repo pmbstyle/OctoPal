@@ -29,6 +29,14 @@ type InstallState = {
   reason?: string;
 };
 
+type PrerequisiteCheck = {
+  id: string;
+  label: string;
+  ok: boolean;
+  required: boolean;
+  detail: string;
+};
+
 const defaultSettings: DesktopSettings = {
   language: "en",
   theme: "system",
@@ -152,12 +160,52 @@ function createWindow(): void {
 
 async function checkCommand(command: string, args: string[]): Promise<{ ok: boolean; detail: string }> {
   try {
-    const { stdout, stderr } = await execFileAsync(command, args, { timeout: 5000 });
+    const { stdout, stderr } = await execFileAsync(command, args, { timeout: 5000, windowsHide: true });
     return { ok: true, detail: (stdout || stderr).trim().split(/\r?\n/)[0] || "Available" };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unavailable";
     return { ok: false, detail: message };
   }
+}
+
+function parseNodeMajor(version: string): number | null {
+  const match = version.trim().match(/^v?(?<major>\d+)/);
+  if (!match?.groups?.major) {
+    return null;
+  }
+  return Number.parseInt(match.groups.major, 10);
+}
+
+async function checkNode20(): Promise<{ ok: boolean; detail: string }> {
+  const node = await checkCommand("node", ["--version"]);
+  if (!node.ok) {
+    return node;
+  }
+
+  const major = parseNodeMajor(node.detail);
+  if (major === null) {
+    return { ok: false, detail: `Could not read Node.js version: ${node.detail}` };
+  }
+
+  if (major < 20) {
+    return { ok: false, detail: `Node.js 20+ is required for WhatsApp bridge. Found ${node.detail}.` };
+  }
+
+  return node;
+}
+
+async function checkDockerRuntime(): Promise<{ ok: boolean; detail: string }> {
+  const docker = await checkCommand("docker", ["--version"]);
+  if (!docker.ok) {
+    return docker;
+  }
+
+  const daemon = await checkCommand("docker", ["info", "--format", "{{.ServerVersion}}"]);
+  if (!daemon.ok) {
+    return { ok: false, detail: `Docker CLI is installed, but the daemon is unavailable: ${daemon.detail}` };
+  }
+
+  return { ok: true, detail: `Docker ${daemon.detail}` };
 }
 
 ipcMain.handle("desktop:load-settings", async () => readSettings());
@@ -204,19 +252,21 @@ ipcMain.handle("desktop:window-control", (event, action: "close" | "minimize" | 
   }
 });
 
-ipcMain.handle("desktop:check-prerequisites", async () => {
+ipcMain.handle("desktop:check-prerequisites", async (): Promise<PrerequisiteCheck[]> => {
   const checks = await Promise.all([
     checkCommand("git", ["--version"]),
     checkCommand("uv", ["--version"]),
-    checkCommand("docker", ["--version"]),
-    checkCommand("node", ["--version"]),
+    checkDockerRuntime(),
+    checkNode20(),
+    checkCommand("npm", ["--version"]),
   ]);
 
   return [
-    { id: "git", label: "Git", ...checks[0] },
-    { id: "uv", label: "uv", ...checks[1] },
-    { id: "docker", label: "Docker", ...checks[2] },
-    { id: "node", label: "Node.js", ...checks[3] },
+    { id: "git", label: "Git", required: true, ...checks[0] },
+    { id: "uv", label: "uv", required: false, ...checks[1] },
+    { id: "docker", label: "Docker runtime", required: false, ...checks[2] },
+    { id: "node", label: "Node.js 20+", required: false, ...checks[3] },
+    { id: "npm", label: "npm", required: false, ...checks[4] },
   ];
 });
 

@@ -58,6 +58,14 @@ type DesktopRuntimeStatus = {
   launcher?: string;
 };
 
+type DesktopPrerequisiteCheck = {
+  id: string;
+  label: string;
+  ok: boolean;
+  required: boolean;
+  detail: string;
+};
+
 type OctopalDesktopApi = {
   loadSettings: () => Promise<{
     language: "en" | "fr" | "es" | "zh";
@@ -77,7 +85,7 @@ type OctopalDesktopApi = {
   closeWindow: () => Promise<void>;
   minimizeWindow: () => Promise<void>;
   toggleMaximizeWindow: () => Promise<void>;
-  checkPrerequisites: () => Promise<Array<{ id: string; label: string; ok: boolean; detail: string }>>;
+  checkPrerequisites: () => Promise<DesktopPrerequisiteCheck[]>;
   getInstallState: () => Promise<DesktopInstallState>;
   loadOctopalConfig: () => Promise<unknown>;
   saveOctopalConfig: (config: unknown) => Promise<DesktopInstallState>;

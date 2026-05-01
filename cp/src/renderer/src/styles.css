@@ -130,10 +130,12 @@ button {
 .welcome-screen,
 .status-screen {
   min-height: calc(100vh - 58px);
+  max-height: calc(100vh - 58px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  overflow-y: auto;
   padding: 32px 24px 28px;
 }
 
@@ -185,7 +187,7 @@ button {
   flex-wrap: wrap;
   justify-content: center;
   gap: 18px;
-  margin-bottom: 28px;
+  margin-bottom: 22px;
 }
 
 .labeled-select {
@@ -246,6 +248,22 @@ button {
   color: var(--foreground);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.welcome-requirements {
+  width: min(760px, calc(100vw - 48px));
+  margin: 0 0 24px;
+}
+
+.requirements-head strong,
+.requirements-head small {
+  display: block;
+}
+
+.requirements-head small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .runtime-status {
@@ -621,6 +639,32 @@ p {
   border: 1px solid var(--border);
   border-radius: 16px;
   background: color-mix(in srgb, var(--surface-strong) 80%, transparent);
+}
+
+.requirement-ok {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+}
+
+.requirement-missing {
+  border-color: color-mix(in srgb, var(--danger) 46%, var(--border));
+}
+
+.requirement-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.requirement-title svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: var(--danger);
+}
+
+.requirement-ok .requirement-title svg {
+  color: var(--success);
 }
 
 .requirement strong,

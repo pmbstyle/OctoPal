@@ -36,6 +36,9 @@ export function App() {
   const [startError, setStartError] = useState("");
   const [startErrorDetail, setStartErrorDetail] = useState("");
   const [runtimeStatus, setRuntimeStatus] = useState<DesktopRuntimeStatus | null>(null);
+  const [preflightChecks, setPreflightChecks] = useState<DesktopPrerequisiteCheck[]>([]);
+  const [preflightStatus, setPreflightStatus] = useState<"idle" | "checking" | "ready" | "failed">("idle");
+  const [preflightError, setPreflightError] = useState("");
   const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
   const [installState, setInstallState] = useState<DesktopInstallState>({
     installed: false,
@@ -56,6 +59,10 @@ export function App() {
   const step = steps[Math.min(stepIndex, steps.length - 1)] ?? "location";
   const copy = useMemo(() => (key: keyof typeof messages.en) => t(language, key), [language]);
   const runtimeInstallDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
+  const preflightHasBlockingIssue = useMemo(
+    () => preflightChecks.some((check) => check.required && !check.ok),
+    [preflightChecks],
+  );
   const runtimeView = useMemo(() => {
     if (startStatus === "starting") {
       return {
@@ -104,6 +111,26 @@ export function App() {
     };
   }, [copy, installState.installed, runtimeStatus, startError, startErrorDetail, startStatus]);
 
+  const refreshPrerequisites = useCallback(async () => {
+    if (!window.octopalDesktop) {
+      setPreflightChecks([]);
+      setPreflightStatus("ready");
+      setPreflightError("");
+      return;
+    }
+
+    setPreflightStatus("checking");
+    setPreflightError("");
+    try {
+      const result = await window.octopalDesktop.checkPrerequisites();
+      setPreflightChecks(result);
+      setPreflightStatus("ready");
+    } catch (error) {
+      setPreflightStatus("failed");
+      setPreflightError(error instanceof Error ? error.message : copy("preflightFailed"));
+    }
+  }, [copy]);
+
   const refreshRuntimeStatus = useCallback(async () => {
     if (!window.octopalDesktop || !installState.installed || !runtimeInstallDir) {
       return;
@@ -150,6 +177,14 @@ export function App() {
       setSettingsLoaded(true);
     });
   }, [form]);
+
+  useEffect(() => {
+    if (!settingsLoaded) {
+      return;
+    }
+
+    void refreshPrerequisites();
+  }, [refreshPrerequisites, settingsLoaded]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = getPreferredTheme(theme);
@@ -489,7 +524,12 @@ export function App() {
             onThemeChange={setTheme}
             onStart={() => void openConfiguration()}
             onStartOctopal={() => void startInstalledOctopal()}
+            onRefreshPrerequisites={() => void refreshPrerequisites()}
             installed={installState.installed}
+            canConfigure={!preflightHasBlockingIssue}
+            preflightChecks={preflightChecks}
+            preflightStatus={preflightStatus}
+            preflightError={preflightError}
           />
         ) : null}
 
