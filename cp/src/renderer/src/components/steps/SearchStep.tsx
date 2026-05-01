@@ -6,7 +6,7 @@ import { ImageLogo } from "../ImageLogo";
 import { StepSection } from "../StepSection";
 import { ToggleCard } from "../ToggleCard";
 import type { CopyFn } from "../../lib/appTypes";
-import { searchProviders, type InstallForm } from "../../lib/install";
+import { isExistingSecret, searchProviders, type InstallForm } from "../../lib/install";
 import { searchLogos } from "../../lib/logos";
 
 export function SearchStep({
@@ -38,14 +38,14 @@ export function SearchStep({
       </div>
       {values.searchProvider === "brave" ? (
         <motion.div className="single-field reveal-form" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-          <Field label={copy("braveKey")} hint={copy("required")} invalid={!!errors.braveApiKey}>
+          <Field label={copy("braveKey")} hint={isExistingSecret(values.braveApiKey) ? copy("configured") : copy("required")} invalid={!!errors.braveApiKey}>
             <Input {...form.register("braveApiKey")} type="password" />
           </Field>
         </motion.div>
       ) : null}
       {values.searchProvider === "firecrawl" ? (
         <motion.div className="single-field reveal-form" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-          <Field label={copy("firecrawlKey")} hint={copy("required")} invalid={!!errors.firecrawlApiKey}>
+          <Field label={copy("firecrawlKey")} hint={isExistingSecret(values.firecrawlApiKey) ? copy("configured") : copy("required")} invalid={!!errors.firecrawlApiKey}>
             <Input {...form.register("firecrawlApiKey")} type="password" />
           </Field>
         </motion.div>

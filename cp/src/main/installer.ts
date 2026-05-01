@@ -143,6 +143,10 @@ function getUvCandidates(): string[] {
     : [join(home, ".local", "bin", "uv"), join(home, ".cargo", "bin", "uv")];
 }
 
+function commandUsesShell(command: string): boolean {
+  return process.platform === "win32" && command === "npm";
+}
+
 function runCommand(
   command: string,
   args: string[],
@@ -153,7 +157,7 @@ function runCommand(
     const child = spawn(command, args, {
       cwd: options.cwd,
       env: options.env ?? withLocalToolPaths(),
-      shell: false,
+      shell: commandUsesShell(command),
       windowsHide: true,
     });
 
@@ -185,6 +189,93 @@ function runCommand(
       reject(new Error(`${command} ${args.join(" ")} exited with code ${code}: ${sanitizeOutput(stderr || stdout).trim()}`));
     });
   });
+}
+
+function extractProcessIds(text: string): number[] {
+  const ids = new Set<number>();
+  for (const match of text.matchAll(/\bPID\s+(\d+)\b/gi)) {
+    ids.add(Number(match[1]));
+  }
+
+  const targetList = text.match(/\bprocess(?:\(es\))?\):\s*([0-9,\s]+)/i)?.[1] ?? "";
+  for (const match of targetList.matchAll(/\d+/g)) {
+    ids.add(Number(match[0]));
+  }
+
+  return [...ids].filter((id) => Number.isInteger(id) && id > 0).sort((left, right) => left - right);
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForProcessesToExit(pids: number[], timeoutMs = 5000): Promise<number[]> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const alive = pids.filter(isProcessAlive);
+    if (alive.length === 0) {
+      return [];
+    }
+    await sleep(200);
+  }
+  return pids.filter(isProcessAlive);
+}
+
+async function forceStopWindowsProcesses(pids: number[]): Promise<string> {
+  const details: string[] = [];
+  const failures: string[] = [];
+
+  for (const pid of pids) {
+    if (!isProcessAlive(pid)) {
+      details.push(`PID ${pid} is already stopped.`);
+      continue;
+    }
+
+    try {
+      await runCommand("taskkill", ["/T", "/F", "/PID", String(pid)], () => undefined, {
+        env: withPythonDesktopEnv(),
+        quiet: true,
+      });
+      details.push(`Stopped PID ${pid} with taskkill.`);
+      continue;
+    } catch (taskkillError) {
+      failures.push(`taskkill PID ${pid}: ${taskkillError instanceof Error ? taskkillError.message : String(taskkillError)}`);
+    }
+
+    try {
+      await runCommand(
+        "powershell.exe",
+        ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", `Stop-Process -Id ${pid} -Force -ErrorAction Stop`],
+        () => undefined,
+        { env: withPythonDesktopEnv(), quiet: true },
+      );
+      details.push(`Stopped PID ${pid} with Stop-Process.`);
+    } catch (powershellError) {
+      failures.push(
+        `Stop-Process PID ${pid}: ${powershellError instanceof Error ? powershellError.message : String(powershellError)}`,
+      );
+    }
+  }
+
+  const alive = await waitForProcessesToExit(pids);
+  if (alive.length > 0) {
+    throw new Error(
+      [`Native Windows stop fallback could not stop PID(s): ${alive.join(", ")}.`, ...failures].join("\n"),
+    );
+  }
+
+  return details.join("\n");
 }
 
 function runDetachedStart(command: string, args: string[], options: RunOptions = {}): Promise<DetachedStartResult> {
@@ -589,17 +680,54 @@ export async function stopOctopal(installDir: string): Promise<StopResult> {
     throw new Error("uv is not available. Install uv or run the installer again.");
   }
 
-  const { stdout, stderr } = await runCommand(uvCommand, ["run", "octopal", "stop"], () => undefined, {
-    cwd: installDir,
-    env: withPythonDesktopEnv(),
-    quiet: true,
-  });
+  try {
+    const { stdout, stderr } = await runCommand(uvCommand, ["run", "octopal", "stop"], () => undefined, {
+      cwd: installDir,
+      env: withPythonDesktopEnv(),
+      quiet: true,
+    });
 
-  return {
-    ok: true,
-    installDir,
-    detail: sanitizeOutput(stdout || stderr).trim(),
-  };
+    return {
+      ok: true,
+      installDir,
+      detail: sanitizeOutput(stdout || stderr).trim(),
+    };
+  } catch (error) {
+    const cliDetail = sanitizeOutput(error instanceof Error ? error.message : String(error)).trim();
+    const statusAfterCli = await getOctopalStatus(installDir).catch(() => null);
+    if (statusAfterCli?.state === "stopped") {
+      return {
+        ok: true,
+        installDir,
+        detail: `Octopal is stopped.\n${cliDetail}`,
+      };
+    }
+
+    const pids = extractProcessIds(cliDetail);
+    if (process.platform === "win32" && pids.length > 0) {
+      const fallbackDetail = await forceStopWindowsProcesses(pids);
+      const statusAfterFallback = await getOctopalStatus(installDir).catch(() => null);
+      if (!statusAfterFallback || statusAfterFallback.state === "stopped") {
+        return {
+          ok: true,
+          installDir,
+          detail: [fallbackDetail, cliDetail].filter(Boolean).join("\n"),
+        };
+      }
+
+      throw new Error(
+        [
+          cliDetail,
+          fallbackDetail,
+          `Octopal still reports ${statusAfterFallback.state}: ${statusAfterFallback.detail}`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    }
+
+    throw error;
+  }
 }
 
 export async function stopOctopalSafely(installDir: string): Promise<StopResult | StopFailure> {

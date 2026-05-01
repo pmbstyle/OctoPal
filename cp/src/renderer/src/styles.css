@@ -65,6 +65,50 @@ select {
   font: inherit;
 }
 
+select {
+  accent-color: var(--primary);
+}
+
+select option {
+  background: #ffffff;
+  color: #172033;
+}
+
+:root[data-theme="dark"] select option {
+  background: #1d2438;
+  color: #edf2ff;
+}
+
+input::placeholder {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+  opacity: 1;
+}
+
+* {
+  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 44%, transparent);
+  background-clip: content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted-strong) 58%, transparent);
+  background-clip: content-box;
+}
+
 button {
   cursor: pointer;
 }
@@ -130,10 +174,12 @@ button {
 .welcome-screen,
 .status-screen {
   min-height: calc(100vh - 58px);
+  max-height: calc(100vh - 58px);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  overflow-y: auto;
   padding: 32px 24px 28px;
 }
 
@@ -176,8 +222,8 @@ button {
 }
 
 .welcome-octo {
-  width: min(270px, 50vw);
-  margin: 24px 0 28px;
+  width: min(238px, 45vw);
+  margin: 18px 0 20px;
 }
 
 .welcome-controls {
@@ -185,7 +231,7 @@ button {
   flex-wrap: wrap;
   justify-content: center;
   gap: 18px;
-  margin-bottom: 28px;
+  margin-bottom: 18px;
 }
 
 .labeled-select {
@@ -219,7 +265,7 @@ button {
 
 .welcome-button {
   min-width: min(390px, calc(100vw - 48px));
-  height: 66px;
+  height: 62px;
   font-size: 19px;
 }
 
@@ -246,6 +292,22 @@ button {
   color: var(--foreground);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.welcome-requirements {
+  width: min(760px, calc(100vw - 48px));
+  margin: 0 0 18px;
+}
+
+.requirements-head strong,
+.requirements-head small {
+  display: block;
+}
+
+.requirements-head small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .runtime-status {
@@ -549,6 +611,12 @@ p {
   gap: 14px;
 }
 
+.input-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 10px;
+}
+
 .form-grid,
 .choice-grid,
 .review-grid,
@@ -612,7 +680,26 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.requirements-card-expanded .requirements-head {
   margin-bottom: 14px;
+}
+
+.requirements-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.requirements-toggle svg {
+  transition: transform 160ms ease;
+}
+
+.requirements-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
 }
 
 .requirement {
@@ -621,6 +708,32 @@ p {
   border: 1px solid var(--border);
   border-radius: 16px;
   background: color-mix(in srgb, var(--surface-strong) 80%, transparent);
+}
+
+.requirement-ok {
+  border-color: color-mix(in srgb, var(--success) 40%, var(--border));
+}
+
+.requirement-missing {
+  border-color: color-mix(in srgb, var(--danger) 46%, var(--border));
+}
+
+.requirement-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.requirement-title svg {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  color: var(--danger);
+}
+
+.requirement-ok .requirement-title svg {
+  color: var(--success);
 }
 
 .requirement strong,
@@ -697,6 +810,24 @@ p {
 .provider-image-logo {
   width: 34px;
   height: 34px;
+}
+
+.provider-card .provider-image-logo {
+  padding: 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.12);
+}
+
+:root[data-theme="dark"] .provider-card .provider-image-logo,
+:root[data-theme="dark"] .search-grid .toggle-icon .image-logo {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+:root[data-theme="dark"] .search-grid .toggle-icon .image-logo {
+  padding: 4px;
+  border-radius: 10px;
 }
 
 .toggle-card strong,
@@ -868,7 +999,7 @@ p {
 .setup-content {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   min-height: 0;
   padding: 18px 0 10px;
@@ -878,7 +1009,7 @@ p {
 .clean-step-section {
   flex: 0 1 auto;
   width: min(960px, 100%);
-  margin: 0;
+  margin: auto 0;
   padding: 0 0 18px;
   overflow: visible;
 }
@@ -920,6 +1051,14 @@ p {
   max-width: 760px;
   margin: 0 auto;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboard-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 245px) minmax(0, 1fr);
+  gap: 16px;
+  max-width: 760px;
+  margin: 22px auto 0;
 }
 
 .provider-carousel {
@@ -1000,9 +1139,7 @@ p {
 
 .provider-card-active {
   border-color: color-mix(in srgb, var(--primary) 58%, var(--border));
-  box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent),
-    0 18px 34px color-mix(in srgb, var(--primary) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
 }
 
 .provider-logo {
@@ -1154,6 +1291,113 @@ p {
   font-size: 17px;
 }
 
+.whatsapp-link-screen {
+  justify-content: flex-start;
+  overflow: auto;
+}
+
+.whatsapp-link-screen .status-octo {
+  width: min(190px, 34vw);
+  margin-bottom: 18px;
+}
+
+.whatsapp-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  align-items: center;
+  width: min(640px, 100%);
+  margin-top: 22px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-strong);
+  text-align: left;
+}
+
+.whatsapp-status svg {
+  width: 24px;
+  height: 24px;
+  color: var(--primary);
+}
+
+.whatsapp-status-linked {
+  border-color: color-mix(in srgb, var(--success) 60%, var(--border));
+  background: color-mix(in srgb, var(--success) 9%, var(--surface-strong));
+}
+
+.whatsapp-status-linked svg {
+  color: var(--success);
+}
+
+.whatsapp-status strong,
+.whatsapp-status span {
+  display: block;
+}
+
+.whatsapp-status strong {
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.whatsapp-status span {
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.whatsapp-qr {
+  width: min(640px, 100%);
+  max-height: 300px;
+  margin: 20px 0 0;
+  padding: 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-strong) 72%, #000);
+  color: var(--foreground);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  line-height: 1;
+  text-align: left;
+  white-space: pre;
+}
+
+.whatsapp-qr-image-wrap {
+  display: grid;
+  width: min(300px, 100%);
+  margin: 20px 0 0;
+  padding: 14px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--shadow) 18%, transparent);
+}
+
+.whatsapp-qr-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+}
+
+.whatsapp-wait-copy {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.whatsapp-actions {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.spin-icon {
+  animation: spin 0.9s linear infinite;
+}
+
 .install-progress {
   padding-right: 32px;
   padding-left: 32px;
@@ -1243,6 +1487,12 @@ p {
   }
 }
 
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 @media (max-width: 860px) {
   .titlebar {
     height: 52px;
@@ -1312,10 +1562,15 @@ p {
   }
 
   .path-row,
+  .dashboard-form,
   .form-grid,
   .choice-grid,
   .review-grid,
   .requirements-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .input-action-row {
     grid-template-columns: 1fr;
   }
 
@@ -1380,6 +1635,7 @@ p {
   }
 
   .clean-step-section {
+    margin: 0;
     padding-bottom: 12px;
   }
 

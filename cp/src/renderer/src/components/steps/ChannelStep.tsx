@@ -6,7 +6,7 @@ import { ImageLogo } from "../ImageLogo";
 import { StepSection } from "../StepSection";
 import { ToggleCard } from "../ToggleCard";
 import type { CopyFn } from "../../lib/appTypes";
-import type { InstallForm } from "../../lib/install";
+import { isExistingSecret, type InstallForm } from "../../lib/install";
 import { channelLogos } from "../../lib/logos";
 
 const channelCopy = {
@@ -45,7 +45,7 @@ export function ChannelStep({
       </div>
       {values.channel === "telegram" ? (
         <motion.div className="form-grid reveal-form" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}>
-          <Field label={copy("telegramToken")} hint={copy("required")} invalid={!!errors.telegramToken}>
+          <Field label={copy("telegramToken")} hint={isExistingSecret(values.telegramToken) ? copy("configured") : copy("required")} invalid={!!errors.telegramToken}>
             <Input {...form.register("telegramToken")} type="password" placeholder="123456:ABC..." />
           </Field>
           <Field label={copy("allowedChatIds")} hint="123, 456">

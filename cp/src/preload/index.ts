@@ -64,6 +64,25 @@ type DesktopRuntimeStatus = {
   launcher?: string;
 };
 
+type DesktopPrerequisiteCheck = {
+  id: string;
+  label: string;
+  ok: boolean;
+  required: boolean;
+  detail: string;
+};
+
+type DesktopWhatsAppLinkStatus = {
+  ok: boolean;
+  running: boolean;
+  connected: boolean;
+  linked: boolean;
+  qr: string;
+  terminal: string;
+  self: string;
+  detail: string;
+};
+
 contextBridge.exposeInMainWorld("octopalDesktop", {
   loadSettings: () => ipcRenderer.invoke("desktop:load-settings") as Promise<DesktopSettings>,
   saveSettings: (settings: DesktopSettings) =>
@@ -73,9 +92,7 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
   minimizeWindow: () => ipcRenderer.invoke("desktop:window-control", "minimize") as Promise<void>,
   toggleMaximizeWindow: () => ipcRenderer.invoke("desktop:window-control", "maximize") as Promise<void>,
   checkPrerequisites: () =>
-    ipcRenderer.invoke("desktop:check-prerequisites") as Promise<
-      Array<{ id: string; label: string; ok: boolean; detail: string }>
-    >,
+    ipcRenderer.invoke("desktop:check-prerequisites") as Promise<DesktopPrerequisiteCheck[]>,
   getInstallState: () => ipcRenderer.invoke("desktop:get-install-state") as Promise<DesktopInstallState>,
   loadOctopalConfig: () => ipcRenderer.invoke("desktop:load-octopal-config") as Promise<unknown>,
   saveOctopalConfig: (config: unknown) =>
@@ -90,6 +107,12 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     ipcRenderer.invoke("desktop:stop-octopal", installDir) as Promise<DesktopStopResult | DesktopStopFailure>,
   getOctopalStatus: (installDir: string) =>
     ipcRenderer.invoke("desktop:get-octopal-status", installDir) as Promise<DesktopRuntimeStatus>,
+  startWhatsAppLink: (installDir: string) =>
+    ipcRenderer.invoke("desktop:start-whatsapp-link", installDir) as Promise<DesktopWhatsAppLinkStatus>,
+  getWhatsAppLinkStatus: (installDir: string) =>
+    ipcRenderer.invoke("desktop:get-whatsapp-link-status", installDir) as Promise<DesktopWhatsAppLinkStatus>,
+  stopWhatsAppLink: (installDir: string) =>
+    ipcRenderer.invoke("desktop:stop-whatsapp-link", installDir) as Promise<DesktopWhatsAppLinkStatus>,
   onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, installEvent: DesktopInstallEvent) => callback(installEvent);
     ipcRenderer.on("desktop:install-event", handler);

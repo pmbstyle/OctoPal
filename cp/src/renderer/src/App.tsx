@@ -9,6 +9,7 @@ import { Button } from "./components/Button";
 import { InstallProgressScreen } from "./components/InstallProgressScreen";
 import { StatusScreen } from "./components/StatusScreen";
 import { WelcomeScreen } from "./components/WelcomeScreen";
+import { WhatsAppLinkScreen } from "./components/WhatsAppLinkScreen";
 import { WizardScreen } from "./components/WizardScreen";
 import type { Screen, StepId, Theme } from "./lib/appTypes";
 import {
@@ -16,10 +17,12 @@ import {
   defaultInstallValues,
   formValuesFromOctopalConfig,
   installSchema,
+  isExistingSecret,
   providers,
   type InstallForm,
 } from "./lib/install";
 import { messages, t, type Language } from "./lib/i18n";
+import { generateDashboardToken } from "./lib/security";
 import { getPreferredTheme, loadSettings, saveSettings } from "./lib/settings";
 import { getValidationFields, getWizardSteps } from "./lib/wizard";
 
@@ -36,7 +39,15 @@ export function App() {
   const [startError, setStartError] = useState("");
   const [startErrorDetail, setStartErrorDetail] = useState("");
   const [runtimeStatus, setRuntimeStatus] = useState<DesktopRuntimeStatus | null>(null);
+  const [preflightChecks, setPreflightChecks] = useState<DesktopPrerequisiteCheck[]>([]);
+  const [preflightStatus, setPreflightStatus] = useState<"idle" | "checking" | "ready" | "failed">("idle");
+  const [preflightError, setPreflightError] = useState("");
+  const [whatsappLinkStatus, setWhatsappLinkStatus] = useState<DesktopWhatsAppLinkStatus | null>(null);
+  const [whatsappLinkBusy, setWhatsappLinkBusy] = useState(false);
+  const [whatsappLinkError, setWhatsappLinkError] = useState("");
+  const [whatsappLinkStarted, setWhatsappLinkStarted] = useState(false);
   const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
+  const [loadedConfigChannel, setLoadedConfigChannel] = useState<InstallForm["channel"] | null>(null);
   const [installState, setInstallState] = useState<DesktopInstallState>({
     installed: false,
     installDir: "",
@@ -56,6 +67,10 @@ export function App() {
   const step = steps[Math.min(stepIndex, steps.length - 1)] ?? "location";
   const copy = useMemo(() => (key: keyof typeof messages.en) => t(language, key), [language]);
   const runtimeInstallDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
+  const preflightHasBlockingIssue = useMemo(
+    () => preflightChecks.some((check) => check.required && !check.ok),
+    [preflightChecks],
+  );
   const runtimeView = useMemo(() => {
     if (startStatus === "starting") {
       return {
@@ -104,6 +119,26 @@ export function App() {
     };
   }, [copy, installState.installed, runtimeStatus, startError, startErrorDetail, startStatus]);
 
+  const refreshPrerequisites = useCallback(async () => {
+    if (!window.octopalDesktop) {
+      setPreflightChecks([]);
+      setPreflightStatus("ready");
+      setPreflightError("");
+      return;
+    }
+
+    setPreflightStatus("checking");
+    setPreflightError("");
+    try {
+      const result = await window.octopalDesktop.checkPrerequisites();
+      setPreflightChecks(result);
+      setPreflightStatus("ready");
+    } catch (error) {
+      setPreflightStatus("failed");
+      setPreflightError(error instanceof Error ? error.message : copy("preflightFailed"));
+    }
+  }, [copy]);
+
   const refreshRuntimeStatus = useCallback(async () => {
     if (!window.octopalDesktop || !installState.installed || !runtimeInstallDir) {
       return;
@@ -137,6 +172,61 @@ export function App() {
     setStartErrorDetail("");
   }, [installState.installed, runtimeInstallDir]);
 
+  const startWhatsappLinkFlow = useCallback(async () => {
+    if (!window.octopalDesktop || !runtimeInstallDir) {
+      return;
+    }
+
+    setWhatsappLinkBusy(true);
+    setWhatsappLinkError("");
+    try {
+      const result = await window.octopalDesktop.startWhatsAppLink(runtimeInstallDir);
+      setWhatsappLinkStatus(result);
+      setWhatsappLinkError("");
+    } catch (error) {
+      setWhatsappLinkError(error instanceof Error ? error.message : copy("whatsappLinkFailed"));
+    } finally {
+      setWhatsappLinkStarted(true);
+      setWhatsappLinkBusy(false);
+    }
+  }, [copy, runtimeInstallDir]);
+
+  const refreshWhatsappLinkStatus = useCallback(
+    async (showBusy = false) => {
+      if (!window.octopalDesktop || !runtimeInstallDir) {
+        return;
+      }
+
+      if (showBusy) {
+        setWhatsappLinkBusy(true);
+      }
+      try {
+        const result = await window.octopalDesktop.getWhatsAppLinkStatus(runtimeInstallDir);
+        setWhatsappLinkStatus(result);
+        setWhatsappLinkError("");
+      } catch (error) {
+        setWhatsappLinkError(error instanceof Error ? error.message : copy("whatsappLinkFailed"));
+      } finally {
+        if (showBusy) {
+          setWhatsappLinkBusy(false);
+        }
+      }
+    },
+    [copy, runtimeInstallDir],
+  );
+
+  const stopWhatsappLinkFlow = useCallback(async () => {
+    if (!window.octopalDesktop || !runtimeInstallDir) {
+      return;
+    }
+
+    try {
+      await window.octopalDesktop.stopWhatsAppLink(runtimeInstallDir);
+    } catch (error) {
+      console.error("Unable to stop WhatsApp link bridge", error);
+    }
+  }, [runtimeInstallDir]);
+
   useEffect(() => {
     void loadSettings().then(async (settings) => {
       setLanguage(settings.language);
@@ -150,6 +240,14 @@ export function App() {
       setSettingsLoaded(true);
     });
   }, [form]);
+
+  useEffect(() => {
+    if (!settingsLoaded) {
+      return;
+    }
+
+    void refreshPrerequisites();
+  }, [refreshPrerequisites, settingsLoaded]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = getPreferredTheme(theme);
@@ -189,6 +287,40 @@ export function App() {
 
     return () => window.clearInterval(interval);
   }, [installState.installed, refreshRuntimeStatus, screen, settingsLoaded]);
+
+  useEffect(() => {
+    if (!settingsLoaded || !installState.installed || screen !== "done" || startStatus !== "idle") {
+      return;
+    }
+
+    if (runtimeStatus?.state === "stopped") {
+      setScreen("welcome");
+    }
+  }, [installState.installed, runtimeStatus?.state, screen, settingsLoaded, startStatus]);
+
+  useEffect(() => {
+    if (screen !== "whatsapp-link" || !runtimeInstallDir) {
+      return;
+    }
+
+    if (!whatsappLinkStarted && !whatsappLinkBusy) {
+      void startWhatsappLinkFlow();
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      void refreshWhatsappLinkStatus();
+    }, 2500);
+
+    return () => window.clearInterval(interval);
+  }, [
+    refreshWhatsappLinkStatus,
+    runtimeInstallDir,
+    screen,
+    startWhatsappLinkFlow,
+    whatsappLinkBusy,
+    whatsappLinkStarted,
+  ]);
 
   useEffect(() => {
     if (!settingsLoaded || !installState.installed || screen !== "welcome" || !window.octopalDesktop || !runtimeInstallDir) {
@@ -245,6 +377,9 @@ export function App() {
   function updateProvider(providerId: string, target: "octo" | "worker") {
     const provider = providers.find((item) => item.id === providerId);
     if (target === "octo") {
+      if (form.getValues("providerId") !== providerId && isExistingSecret(form.getValues("apiKey"))) {
+        form.setValue("apiKey", "", { shouldDirty: true, shouldValidate: true });
+      }
       form.setValue("providerId", providerId, { shouldValidate: true });
       if (provider?.model) {
         form.setValue("model", provider.model, { shouldValidate: true });
@@ -252,6 +387,9 @@ export function App() {
       return;
     }
 
+    if (form.getValues("workerProviderId") !== providerId && isExistingSecret(form.getValues("workerApiKey"))) {
+      form.setValue("workerApiKey", "", { shouldDirty: true, shouldValidate: true });
+    }
     form.setValue("workerProviderId", providerId, { shouldValidate: true });
     if (provider?.model) {
       form.setValue("workerModel", provider.model, { shouldValidate: true });
@@ -316,14 +454,21 @@ export function App() {
     if (window.octopalDesktop && installState.installed && installDir) {
       try {
         const config = await window.octopalDesktop.loadOctopalConfig();
-        form.reset(formValuesFromOctopalConfig(config, installDir));
+        const loadedValues = formValuesFromOctopalConfig(config, installDir);
+        form.reset(loadedValues);
+        setLoadedConfigChannel(loadedValues.channel);
         setConfigurationMode("edit");
       } catch (error) {
         console.error("Unable to load installed Octopal config", error);
+        setLoadedConfigChannel(null);
         setConfigurationMode("install");
       }
     } else {
+      setLoadedConfigChannel(null);
       setConfigurationMode("install");
+      if (!form.getValues("dashboardToken")?.trim()) {
+        form.setValue("dashboardToken", generateDashboardToken(), { shouldDirty: true, shouldValidate: true });
+      }
     }
 
     setStepIndex(0);
@@ -337,15 +482,20 @@ export function App() {
     }
 
     try {
+      const shouldLinkWhatsApp = values.channel === "whatsapp" && loadedConfigChannel !== "whatsapp";
       const nextState = await window.octopalDesktop.saveOctopalConfig(buildOctopalConfig(values));
       setInstallState(nextState);
+      setLoadedConfigChannel(values.channel);
       setSavedInstallResult(null);
       setSavedPlanPath("");
       setRuntimeStatus(null);
       setStartStatus("idle");
       setStartError("");
       setStartErrorDetail("");
-      setScreen("welcome");
+      setWhatsappLinkStatus(null);
+      setWhatsappLinkError("");
+      setWhatsappLinkStarted(false);
+      setScreen(shouldLinkWhatsApp ? "whatsapp-link" : "welcome");
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : copy("installFailedBody"));
       setScreen("failed");
@@ -375,6 +525,9 @@ export function App() {
     setStartStatus("idle");
     setStartError("");
     setStartErrorDetail("");
+    setWhatsappLinkStatus(null);
+    setWhatsappLinkError("");
+    setWhatsappLinkStarted(false);
 
     const payload = {
       createdBy: "Octopal Desktop",
@@ -398,7 +551,7 @@ export function App() {
           configPath: result.configPath,
           planPath: result.planPath,
         });
-        setScreen("done");
+        setScreen(values.channel === "whatsapp" ? "whatsapp-link" : "done");
       } catch (error) {
         const message = error instanceof Error ? error.message : copy("installFailedBody");
         setInstallError(message);
@@ -424,6 +577,7 @@ export function App() {
     setStartError("");
     setStartErrorDetail("");
     try {
+      await window.octopalDesktop.stopWhatsAppLink(installDir).catch(() => undefined);
       const result = await window.octopalDesktop.startOctopal(installDir);
       if (!result.ok) {
         setStartStatus("failed");
@@ -438,6 +592,13 @@ export function App() {
       setStartError(error instanceof Error ? error.message : copy("startFailed"));
       setStartErrorDetail("");
     }
+  }
+
+  async function finishWhatsappLink() {
+    await stopWhatsappLinkFlow();
+    setWhatsappLinkBusy(false);
+    setWhatsappLinkError("");
+    setScreen(configurationMode === "edit" ? "welcome" : "done");
   }
 
   async function stopInstalledOctopal() {
@@ -458,6 +619,7 @@ export function App() {
         return;
       }
       setStartStatus("idle");
+      setScreen("welcome");
       void refreshRuntimeStatus();
     } catch (error) {
       setStartStatus("failed");
@@ -468,7 +630,10 @@ export function App() {
 
   const doneTitle = startStatus === "idle" && !runtimeStatus ? copy("completeTitle") : runtimeView.title;
   const doneBody = runtimeView.state === "error" || (startStatus === "idle" && !runtimeStatus) ? "" : runtimeView.detail;
-  const doneCanStop = runtimeView.state === "running" || runtimeView.state === "stopping";
+  const doneCanStop =
+    runtimeView.state === "running" ||
+    runtimeView.state === "stopping" ||
+    (startStatus === "failed" && runtimeStatus?.state === "running");
   const doneBusy = runtimeView.state === "starting" || runtimeView.state === "stopping";
 
   return (
@@ -489,7 +654,12 @@ export function App() {
             onThemeChange={setTheme}
             onStart={() => void openConfiguration()}
             onStartOctopal={() => void startInstalledOctopal()}
+            onRefreshPrerequisites={() => void refreshPrerequisites()}
             installed={installState.installed}
+            canConfigure={!preflightHasBlockingIssue}
+            preflightChecks={preflightChecks}
+            preflightStatus={preflightStatus}
+            preflightError={preflightError}
           />
         ) : null}
 
@@ -561,6 +731,19 @@ export function App() {
                 </Button>
               )
             }
+          />
+        ) : null}
+
+        {screen === "whatsapp-link" ? (
+          <WhatsAppLinkScreen
+            key="whatsapp-link"
+            copy={copy}
+            status={whatsappLinkStatus}
+            busy={whatsappLinkBusy}
+            error={whatsappLinkError}
+            onRefresh={() => void refreshWhatsappLinkStatus(true)}
+            onContinue={() => void finishWhatsappLink()}
+            onSkip={() => void finishWhatsappLink()}
           />
         ) : null}
 

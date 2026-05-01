@@ -12,8 +12,10 @@ import {
   type InstallEvent,
   type InstallPayload,
 } from "./installer";
+import { getWhatsAppLinkStatus, startWhatsAppLink, stopWhatsAppLink } from "./whatsapp";
 
 const execFileAsync = promisify(execFile);
+const EXISTING_SECRET_VALUE = "__OCTOPAL_DESKTOP_EXISTING_SECRET__";
 
 type DesktopSettings = {
   language: "en" | "fr" | "es" | "zh";
@@ -27,6 +29,14 @@ type InstallState = {
   configPath: string;
   planPath: string;
   reason?: string;
+};
+
+type PrerequisiteCheck = {
+  id: string;
+  label: string;
+  ok: boolean;
+  required: boolean;
+  detail: string;
 };
 
 const defaultSettings: DesktopSettings = {
@@ -63,6 +73,118 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function cloneJsonRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+}
+
+function deepMergeRecords(existing: Record<string, unknown>, incoming: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...existing };
+  for (const [key, value] of Object.entries(incoming)) {
+    const current = merged[key];
+    if (isRecord(current) && isRecord(value)) {
+      merged[key] = deepMergeRecords(current, value);
+      continue;
+    }
+    merged[key] = value;
+  }
+  return merged;
+}
+
+function getNested(root: Record<string, unknown>, path: string[]): unknown {
+  let current: unknown = root;
+  for (const segment of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[segment];
+  }
+  return current;
+}
+
+function setNested(root: Record<string, unknown>, path: string[], value: unknown): void {
+  let current = root;
+  for (const segment of path.slice(0, -1)) {
+    const next = current[segment];
+    if (!isRecord(next)) {
+      current[segment] = {};
+    }
+    current = current[segment] as Record<string, unknown>;
+  }
+  current[path[path.length - 1]] = value;
+}
+
+function isBlankSecret(value: unknown): boolean {
+  return value === null || value === undefined || (typeof value === "string" && value.trim() === "");
+}
+
+function preserveSecretIfBlank(
+  merged: Record<string, unknown>,
+  existing: Record<string, unknown>,
+  path: string[],
+  options: { sameProviderPath?: string[] } = {},
+): void {
+  const incomingValue = getNested(merged, path);
+  const existingValue = getNested(existing, path);
+  if (isBlankSecret(incomingValue) && !isBlankSecret(existingValue)) {
+    if (options.sameProviderPath) {
+      const mergedProvider = getNested(merged, options.sameProviderPath);
+      const existingProvider = getNested(existing, options.sameProviderPath);
+      if (mergedProvider !== existingProvider) {
+        return;
+      }
+    }
+    setNested(merged, path, existingValue);
+  }
+}
+
+function mergeConfigForDesktopSave(existingConfig: unknown, incomingConfig: unknown): Record<string, unknown> {
+  const existing = cloneJsonRecord(existingConfig);
+  const incoming = cloneJsonRecord(incomingConfig);
+  const merged = deepMergeRecords(existing, incoming);
+
+  preserveSecretIfBlank(merged, existing, ["telegram", "bot_token"]);
+  preserveSecretIfBlank(merged, existing, ["llm", "api_key"], { sameProviderPath: ["llm", "provider_id"] });
+  preserveSecretIfBlank(merged, existing, ["worker_llm_default", "api_key"], {
+    sameProviderPath: ["worker_llm_default", "provider_id"],
+  });
+  preserveSecretIfBlank(merged, existing, ["gateway", "dashboard_token"]);
+  preserveSecretIfBlank(merged, existing, ["whatsapp", "callback_token"]);
+  preserveSecretIfBlank(merged, existing, ["search", "brave_api_key"]);
+  preserveSecretIfBlank(merged, existing, ["search", "firecrawl_api_key"]);
+
+  return merged;
+}
+
+function sanitizeConfigForRenderer(config: unknown): Record<string, unknown> {
+  const sanitized = cloneJsonRecord(config);
+  const original = cloneJsonRecord(config);
+  const maskedValue = (path: string[]) => {
+    const value = getNested(original, path);
+    return typeof value === "string" && value.trim() ? EXISTING_SECRET_VALUE : "";
+  };
+  const maskedNullableValue = (path: string[]) => {
+    const value = getNested(original, path);
+    return typeof value === "string" && value.trim() ? EXISTING_SECRET_VALUE : null;
+  };
+  setNested(sanitized, ["telegram", "bot_token"], maskedValue(["telegram", "bot_token"]));
+  setNested(sanitized, ["llm", "api_key"], maskedNullableValue(["llm", "api_key"]));
+  setNested(sanitized, ["worker_llm_default", "api_key"], maskedNullableValue(["worker_llm_default", "api_key"]));
+  setNested(sanitized, ["gateway", "dashboard_token"], maskedValue(["gateway", "dashboard_token"]));
+  setNested(sanitized, ["whatsapp", "callback_token"], maskedValue(["whatsapp", "callback_token"]));
+  setNested(sanitized, ["search", "brave_api_key"], maskedNullableValue(["search", "brave_api_key"]));
+  setNested(sanitized, ["search", "firecrawl_api_key"], maskedNullableValue(["search", "firecrawl_api_key"]));
+  setNested(sanitized, ["observability", "langfuse_secret_key"], maskedNullableValue(["observability", "langfuse_secret_key"]));
+  delete sanitized.connectors;
+  return sanitized;
 }
 
 async function scrubInstallPlan(planPath: string): Promise<void> {
@@ -111,7 +233,7 @@ async function loadInstalledConfig(): Promise<unknown> {
     throw new Error(state.reason ?? "Octopal is not installed.");
   }
 
-  return JSON.parse(await readFile(state.configPath, "utf8"));
+  return sanitizeConfigForRenderer(JSON.parse(await readFile(state.configPath, "utf8")));
 }
 
 async function saveInstalledConfig(config: unknown): Promise<InstallState> {
@@ -120,7 +242,9 @@ async function saveInstalledConfig(config: unknown): Promise<InstallState> {
     throw new Error(state.reason ?? "Octopal is not installed.");
   }
 
-  await writeFile(state.configPath, JSON.stringify(config, null, 2), "utf8");
+  const existing = JSON.parse(await readFile(state.configPath, "utf8"));
+  const merged = mergeConfigForDesktopSave(existing, config);
+  await writeFile(state.configPath, JSON.stringify(merged, null, 2), "utf8");
   return getInstallState();
 }
 
@@ -152,12 +276,55 @@ function createWindow(): void {
 
 async function checkCommand(command: string, args: string[]): Promise<{ ok: boolean; detail: string }> {
   try {
-    const { stdout, stderr } = await execFileAsync(command, args, { timeout: 5000 });
+    const { stdout, stderr } = await execFileAsync(command, args, { timeout: 5000, windowsHide: true });
     return { ok: true, detail: (stdout || stderr).trim().split(/\r?\n/)[0] || "Available" };
   } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return { ok: false, detail: `${command} was not found in PATH. Install it or restart Octopal Desktop after updating PATH.` };
+    }
     const message = error instanceof Error ? error.message : "Unavailable";
     return { ok: false, detail: message };
   }
+}
+
+function parseNodeMajor(version: string): number | null {
+  const match = version.trim().match(/^v?(?<major>\d+)/);
+  if (!match?.groups?.major) {
+    return null;
+  }
+  return Number.parseInt(match.groups.major, 10);
+}
+
+async function checkNode20(): Promise<{ ok: boolean; detail: string }> {
+  const node = await checkCommand("node", ["--version"]);
+  if (!node.ok) {
+    return node;
+  }
+
+  const major = parseNodeMajor(node.detail);
+  if (major === null) {
+    return { ok: false, detail: `Could not read Node.js version: ${node.detail}` };
+  }
+
+  if (major < 20) {
+    return { ok: false, detail: `Node.js 20+ is required for WhatsApp bridge. Found ${node.detail}.` };
+  }
+
+  return node;
+}
+
+async function checkDockerRuntime(): Promise<{ ok: boolean; detail: string }> {
+  const docker = await checkCommand("docker", ["--version"]);
+  if (!docker.ok) {
+    return docker;
+  }
+
+  const daemon = await checkCommand("docker", ["info", "--format", "{{.ServerVersion}}"]);
+  if (!daemon.ok) {
+    return { ok: false, detail: `Docker CLI is installed, but the daemon is unavailable: ${daemon.detail}` };
+  }
+
+  return { ok: true, detail: `Docker ${daemon.detail}` };
 }
 
 ipcMain.handle("desktop:load-settings", async () => readSettings());
@@ -204,19 +371,19 @@ ipcMain.handle("desktop:window-control", (event, action: "close" | "minimize" | 
   }
 });
 
-ipcMain.handle("desktop:check-prerequisites", async () => {
+ipcMain.handle("desktop:check-prerequisites", async (): Promise<PrerequisiteCheck[]> => {
   const checks = await Promise.all([
     checkCommand("git", ["--version"]),
     checkCommand("uv", ["--version"]),
-    checkCommand("docker", ["--version"]),
-    checkCommand("node", ["--version"]),
+    checkDockerRuntime(),
+    checkNode20(),
   ]);
 
   return [
-    { id: "git", label: "Git", ...checks[0] },
-    { id: "uv", label: "uv", ...checks[1] },
-    { id: "docker", label: "Docker", ...checks[2] },
-    { id: "node", label: "Node.js", ...checks[3] },
+    { id: "git", label: "Git", required: true, ...checks[0] },
+    { id: "uv", label: "uv", required: false, ...checks[1] },
+    { id: "docker", label: "Docker runtime", required: false, ...checks[2] },
+    { id: "node", label: "Node.js 20+", required: false, ...checks[3] },
   ];
 });
 
@@ -255,6 +422,9 @@ ipcMain.handle("desktop:install-octopal", async (event, payload: InstallPayload)
 ipcMain.handle("desktop:start-octopal", async (_event, installDir: string) => startOctopalSafely(installDir));
 ipcMain.handle("desktop:stop-octopal", async (_event, installDir: string) => stopOctopalSafely(installDir));
 ipcMain.handle("desktop:get-octopal-status", async (_event, installDir: string) => getOctopalStatusSafely(installDir));
+ipcMain.handle("desktop:start-whatsapp-link", async (_event, installDir: string) => startWhatsAppLink(installDir));
+ipcMain.handle("desktop:get-whatsapp-link-status", async (_event, installDir: string) => getWhatsAppLinkStatus(installDir));
+ipcMain.handle("desktop:stop-whatsapp-link", async (_event, installDir: string) => stopWhatsAppLink(installDir));
 
 void app.whenReady().then(async () => {
   nativeTheme.themeSource = (await readSettings()).theme;

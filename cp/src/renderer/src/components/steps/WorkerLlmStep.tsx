@@ -4,7 +4,7 @@ import { LlmForm } from "../LlmForm";
 import { ProviderPicker } from "../ProviderPicker";
 import { StepSection } from "../StepSection";
 import type { CopyFn } from "../../lib/appTypes";
-import type { InstallForm } from "../../lib/install";
+import { isExistingSecret, type InstallForm } from "../../lib/install";
 
 export function WorkerLlmStep({
   copy,
@@ -26,7 +26,7 @@ export function WorkerLlmStep({
         modelLabel={copy("model")}
         apiKeyLabel={copy("apiKey")}
         apiBaseLabel={copy("apiBase")}
-        apiKeyHint={values.workerProviderId === "custom" ? copy("optional") : copy("required")}
+        apiKeyHint={isExistingSecret(values.workerApiKey) ? copy("configured") : values.workerProviderId === "custom" ? copy("optional") : copy("required")}
         apiBaseHint={values.workerProviderId === "custom" ? copy("required") : copy("optional")}
         modelInvalid={!!errors.workerModel}
         apiKeyInvalid={!!errors.workerApiKey}

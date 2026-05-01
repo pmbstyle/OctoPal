@@ -9,6 +9,7 @@ import { ChannelStep } from "./steps/ChannelStep";
 import { LlmStep } from "./steps/LlmStep";
 import { WorkerLlmStep } from "./steps/WorkerLlmStep";
 import { SearchStep } from "./steps/SearchStep";
+import { DashboardStep } from "./steps/DashboardStep";
 import { ReviewStep } from "./steps/ReviewStep";
 import type { CopyFn, StepId, Theme } from "../lib/appTypes";
 import type { Language } from "../lib/i18n";
@@ -100,6 +101,7 @@ export function WizardScreen({
         {step === "search" ? (
           <SearchStep copy={copy} values={values} form={form} errors={errors} onSearchProviderToggle={onSearchProviderToggle} />
         ) : null}
+        {step === "dashboard" ? <DashboardStep copy={copy} values={values} form={form} errors={errors} /> : null}
         {step === "review" ? <ReviewStep body={reviewBody} copy={copy} values={values} /> : null}
       </section>
 
