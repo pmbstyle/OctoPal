@@ -485,7 +485,10 @@ export function App() {
       setStartStatus("idle");
       setStartError("");
       setStartErrorDetail("");
-      setScreen("welcome");
+      setWhatsappLinkStatus(null);
+      setWhatsappLinkError("");
+      setWhatsappLinkStarted(false);
+      setScreen(values.channel === "whatsapp" ? "whatsapp-link" : "welcome");
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : copy("installFailedBody"));
       setScreen("failed");
@@ -588,7 +591,7 @@ export function App() {
     await stopWhatsappLinkFlow();
     setWhatsappLinkBusy(false);
     setWhatsappLinkError("");
-    setScreen("done");
+    setScreen(configurationMode === "edit" ? "welcome" : "done");
   }
 
   async function stopInstalledOctopal() {
