@@ -288,6 +288,16 @@ export function App() {
   }, [installState.installed, refreshRuntimeStatus, screen, settingsLoaded]);
 
   useEffect(() => {
+    if (!settingsLoaded || !installState.installed || screen !== "done" || startStatus !== "idle") {
+      return;
+    }
+
+    if (runtimeStatus?.state === "stopped") {
+      setScreen("welcome");
+    }
+  }, [installState.installed, runtimeStatus?.state, screen, settingsLoaded, startStatus]);
+
+  useEffect(() => {
     if (screen !== "whatsapp-link" || !runtimeInstallDir) {
       return;
     }
@@ -599,6 +609,7 @@ export function App() {
         return;
       }
       setStartStatus("idle");
+      setScreen("welcome");
       void refreshRuntimeStatus();
     } catch (error) {
       setStartStatus("failed");
@@ -609,7 +620,10 @@ export function App() {
 
   const doneTitle = startStatus === "idle" && !runtimeStatus ? copy("completeTitle") : runtimeView.title;
   const doneBody = runtimeView.state === "error" || (startStatus === "idle" && !runtimeStatus) ? "" : runtimeView.detail;
-  const doneCanStop = runtimeView.state === "running" || runtimeView.state === "stopping";
+  const doneCanStop =
+    runtimeView.state === "running" ||
+    runtimeView.state === "stopping" ||
+    (startStatus === "failed" && runtimeStatus?.state === "running");
   const doneBusy = runtimeView.state === "starting" || runtimeView.state === "stopping";
 
   return (
