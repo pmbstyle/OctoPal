@@ -144,6 +144,13 @@ def is_pid_running(pid: int | None) -> bool:
         return False
 
 
+def is_octopal_runtime_pid(pid: int | None) -> bool:
+    if not pid or not is_pid_running(pid):
+        return False
+    cmdline = pid_command_line(pid)
+    return bool(cmdline and _looks_like_octopal_runtime_cmd(cmdline))
+
+
 def list_octopal_runtime_pids() -> list[int]:
     """Return running PIDs that look like `octopal start` runtime processes."""
     current_pid = os.getpid()
@@ -182,19 +189,48 @@ def _is_pid_running_impl(pid: int) -> bool:
         import ctypes.wintypes
 
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(
-            PROCESS_QUERY_LIMITED_INFORMATION, False, pid
-        )
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.BOOL,
+            ctypes.wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = ctypes.wintypes.HANDLE
+        kernel32.CloseHandle.argtypes = [ctypes.wintypes.HANDLE]
+        kernel32.CloseHandle.restype = ctypes.wintypes.BOOL
+        kernel32.GetExitCodeProcess.argtypes = [
+            ctypes.wintypes.HANDLE,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        ]
+        kernel32.GetExitCodeProcess.restype = ctypes.wintypes.BOOL
+
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+        try:
+            exit_code = ctypes.wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                return False
+            return exit_code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
     except Exception:
         return False
 
 
 def _looks_like_octopal_runtime_cmd(cmdline: str) -> bool:
     lowered = cmdline.lower()
+    executable = _command_executable_name(cmdline)
+    if executable not in {
+        "octopal",
+        "octopal.exe",
+        "python",
+        "python.exe",
+        "python3",
+        "python3.exe",
+        "pythonw.exe",
+    }:
+        return False
     # Ignore command wrappers like `uv run octopal start` that invoke this CLI.
     if "uv run octopal start" in lowered and "--foreground" not in lowered:
         return False
@@ -205,9 +241,24 @@ def _looks_like_octopal_runtime_cmd(cmdline: str) -> bool:
     return " -m octopal.cli start" in lowered
 
 
+def _command_executable_name(cmdline: str) -> str:
+    stripped = cmdline.strip()
+    if not stripped:
+        return ""
+    if stripped[0] in {'"', "'"}:
+        quote = stripped[0]
+        end = stripped.find(quote, 1)
+        token = stripped[1:end] if end > 1 else stripped[1:]
+    else:
+        token = stripped.split(maxsplit=1)[0]
+    return Path(token.replace("\\", "/")).name.lower()
+
+
 def _iter_process_cmdlines() -> list[tuple[int, str]]:
     import platform
 
+    if platform.system() == "Windows":
+        return _iter_process_cmdlines_windows()
     if platform.system() == "Linux":
         return _iter_process_cmdlines_linux_procfs()
     return _iter_process_cmdlines_ps()
@@ -233,6 +284,47 @@ def _iter_process_cmdlines_linux_procfs() -> list[tuple[int, str]]:
         if not parts:
             continue
         rows.append((pid, " ".join(parts)))
+    return rows
+
+
+def _iter_process_cmdlines_windows() -> list[tuple[int, str]]:
+    rows: list[tuple[int, str]] = []
+    try:
+        out = subprocess.check_output(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                "Get-CimInstance Win32_Process | "
+                "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+            ],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except Exception:
+        return rows
+    try:
+        parsed = json.loads(out.strip() or "[]")
+    except json.JSONDecodeError:
+        return rows
+    if isinstance(parsed, dict):
+        records = [parsed]
+    elif isinstance(parsed, list):
+        records = parsed
+    else:
+        return rows
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        try:
+            pid = int(record.get("ProcessId") or 0)
+        except (TypeError, ValueError):
+            continue
+        cmdline = record.get("CommandLine")
+        if pid > 0 and isinstance(cmdline, str) and cmdline:
+            rows.append((pid, cmdline))
     return rows
 
 

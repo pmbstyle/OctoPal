@@ -205,6 +205,78 @@ function extractProcessIds(text: string): number[] {
   return [...ids].filter((id) => Number.isInteger(id) && id > 0).sort((left, right) => left - right);
 }
 
+function commandExecutableName(commandLine: string): string {
+  const stripped = commandLine.trim();
+  if (!stripped) {
+    return "";
+  }
+  let token = "";
+  if (stripped.startsWith("\"") || stripped.startsWith("'")) {
+    const quote = stripped[0];
+    const end = stripped.indexOf(quote, 1);
+    token = end > 1 ? stripped.slice(1, end) : stripped.slice(1);
+  } else {
+    token = stripped.split(/\s+/, 1)[0] ?? "";
+  }
+  return token.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+}
+
+function looksLikeOctopalRuntimeCommand(commandLine: string): boolean {
+  const lowered = commandLine.toLowerCase();
+  const executable = commandExecutableName(commandLine);
+  if (!["octopal", "octopal.exe", "python", "python.exe", "python3", "python3.exe", "pythonw.exe"].includes(executable)) {
+    return false;
+  }
+  if (lowered.includes("uv run octopal start") && !lowered.includes("--foreground")) {
+    return false;
+  }
+  if (lowered.includes("octopal.cli start")) {
+    return true;
+  }
+  if (` ${lowered}`.includes(" octopal start --foreground")) {
+    return true;
+  }
+  return lowered.includes(" -m octopal.cli start");
+}
+
+function processIdValue(value: unknown): number | null {
+  const pid = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+async function listWindowsOctopalRuntimePids(): Promise<number[]> {
+  if (process.platform !== "win32") {
+    return [];
+  }
+
+  const { stdout } = await runCommand(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress",
+    ],
+    () => undefined,
+    { env: withPythonDesktopEnv(), quiet: true },
+  );
+
+  const parsed: unknown = JSON.parse(stdout.trim() || "[]");
+  const rows = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  const pids = new Set<number>();
+  for (const row of rows) {
+    const record = asRecord(row);
+    const pid = processIdValue(record.ProcessId);
+    const commandLine = typeof record.CommandLine === "string" ? record.CommandLine : "";
+    if (pid && commandLine && looksLikeOctopalRuntimeCommand(commandLine)) {
+      pids.add(pid);
+    }
+  }
+
+  return [...pids].sort((left, right) => left - right);
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -235,13 +307,9 @@ async function waitForProcessesToExit(pids: number[], timeoutMs = 5000): Promise
 async function forceStopWindowsProcesses(pids: number[]): Promise<string> {
   const details: string[] = [];
   const failures: string[] = [];
+  const uniquePids = [...new Set(pids)].filter((pid) => Number.isInteger(pid) && pid > 0);
 
-  for (const pid of pids) {
-    if (!isProcessAlive(pid)) {
-      details.push(`PID ${pid} is already stopped.`);
-      continue;
-    }
-
+  for (const pid of uniquePids) {
     try {
       await runCommand("taskkill", ["/T", "/F", "/PID", String(pid)], () => undefined, {
         env: withPythonDesktopEnv(),
@@ -250,6 +318,10 @@ async function forceStopWindowsProcesses(pids: number[]): Promise<string> {
       details.push(`Stopped PID ${pid} with taskkill.`);
       continue;
     } catch (taskkillError) {
+      if (!isProcessAlive(pid)) {
+        details.push(`PID ${pid} is already stopped.`);
+        continue;
+      }
       failures.push(`taskkill PID ${pid}: ${taskkillError instanceof Error ? taskkillError.message : String(taskkillError)}`);
     }
 
@@ -268,7 +340,7 @@ async function forceStopWindowsProcesses(pids: number[]): Promise<string> {
     }
   }
 
-  const alive = await waitForProcessesToExit(pids);
+  const alive = await waitForProcessesToExit(uniquePids);
   if (alive.length > 0) {
     throw new Error(
       [`Native Windows stop fallback could not stop PID(s): ${alive.join(", ")}.`, ...failures].join("\n"),
@@ -400,6 +472,74 @@ function statusFromDashboardSnapshot(snapshot: unknown, installDir: string): Run
     octoState,
     launcher: launcherReason,
   };
+}
+
+async function windowsNativeRuntimeStatus(installDir: string): Promise<RuntimeStatusResult | null> {
+  if (process.platform !== "win32") {
+    return null;
+  }
+
+  const pids = await listWindowsOctopalRuntimePids().catch(() => []);
+  const pid = pids[0] ?? null;
+  if (pid) {
+    return {
+      ok: true,
+      state: "running",
+      title: "Octopal is running",
+      detail: `PID ${pid}`,
+      installDir,
+      pid,
+    };
+  }
+
+  return {
+    ok: true,
+    state: "stopped",
+    title: "Octopal is stopped",
+    detail: "Runtime is not running.",
+    installDir,
+    pid: null,
+  };
+}
+
+async function reconcileWindowsRuntimeStatus(status: RuntimeStatusResult): Promise<RuntimeStatusResult> {
+  const nativeStatus = await windowsNativeRuntimeStatus(status.installDir);
+  if (!nativeStatus) {
+    return status;
+  }
+
+  if (nativeStatus.state === "running") {
+    if (status.state === "running" && status.pid === nativeStatus.pid) {
+      return status;
+    }
+    const detailParts = [
+      nativeStatus.pid ? `PID ${nativeStatus.pid}` : "",
+      status.uptime && status.uptime !== "N/A" ? `uptime ${status.uptime}` : "",
+      status.channel ? `channel ${status.channel}` : "",
+      status.octoState ? `Octo ${status.octoState}` : "",
+    ].filter(Boolean);
+    return {
+      ...status,
+      ok: true,
+      state: "running",
+      title: "Octopal is running",
+      detail: detailParts.join(" · ") || nativeStatus.detail,
+      pid: nativeStatus.pid,
+    };
+  }
+
+  if (status.state === "running") {
+    return {
+      ...status,
+      ok: true,
+      state: "stopped",
+      title: "Octopal is stopped",
+      detail: "Runtime is not running.",
+      pid: null,
+    };
+  }
+
+  return status;
 }
 
 function parseDashboardSnapshot(output: string): unknown {
@@ -666,6 +806,58 @@ export async function startOctopalSafely(installDir: string): Promise<StartResul
   }
 }
 
+async function stopWindowsRuntimeFallback(installDir: string, cliDetail: string): Promise<StopResult | null> {
+  if (process.platform !== "win32") {
+    return null;
+  }
+
+  const pids = new Set(extractProcessIds(cliDetail));
+  for (const pid of await listWindowsOctopalRuntimePids().catch(() => [])) {
+    pids.add(pid);
+  }
+
+  if (pids.size === 0) {
+    return null;
+  }
+
+  const fallbackDetails: string[] = [await forceStopWindowsProcesses([...pids])].filter(Boolean);
+  let statusAfterFallback = await getOctopalStatus(installDir).catch(() => null);
+  if (statusAfterFallback?.state === "running") {
+    const retryPids = new Set<number>();
+    const statusPid = processIdValue(statusAfterFallback.pid);
+    if (statusPid) {
+      retryPids.add(statusPid);
+    }
+    for (const pid of await listWindowsOctopalRuntimePids().catch(() => [])) {
+      retryPids.add(pid);
+    }
+
+    const remainingPids = [...retryPids].filter((pid) => !pids.has(pid));
+    if (remainingPids.length > 0) {
+      fallbackDetails.push(await forceStopWindowsProcesses(remainingPids));
+      statusAfterFallback = await getOctopalStatus(installDir).catch(() => null);
+    }
+  }
+
+  if (!statusAfterFallback || statusAfterFallback.state === "stopped") {
+    return {
+      ok: true,
+      installDir,
+      detail: [...fallbackDetails, cliDetail].filter(Boolean).join("\n"),
+    };
+  }
+
+  throw new Error(
+    [
+      cliDetail,
+      ...fallbackDetails,
+      `Octopal still reports ${statusAfterFallback.state}: ${statusAfterFallback.detail}`,
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+}
+
 export async function stopOctopal(installDir: string): Promise<StopResult> {
   if (!installDir) {
     throw new Error("Install directory is not selected.");
@@ -686,11 +878,19 @@ export async function stopOctopal(installDir: string): Promise<StopResult> {
       env: withPythonDesktopEnv(),
       quiet: true,
     });
+    const cliDetail = sanitizeOutput(stdout || stderr).trim();
+    const statusAfterCli = await getOctopalStatus(installDir).catch(() => null);
+    if (statusAfterCli?.state === "running") {
+      const fallbackResult = await stopWindowsRuntimeFallback(installDir, cliDetail);
+      if (fallbackResult) {
+        return fallbackResult;
+      }
+    }
 
     return {
       ok: true,
       installDir,
-      detail: sanitizeOutput(stdout || stderr).trim(),
+      detail: cliDetail,
     };
   } catch (error) {
     const cliDetail = sanitizeOutput(error instanceof Error ? error.message : String(error)).trim();
@@ -703,27 +903,9 @@ export async function stopOctopal(installDir: string): Promise<StopResult> {
       };
     }
 
-    const pids = extractProcessIds(cliDetail);
-    if (process.platform === "win32" && pids.length > 0) {
-      const fallbackDetail = await forceStopWindowsProcesses(pids);
-      const statusAfterFallback = await getOctopalStatus(installDir).catch(() => null);
-      if (!statusAfterFallback || statusAfterFallback.state === "stopped") {
-        return {
-          ok: true,
-          installDir,
-          detail: [fallbackDetail, cliDetail].filter(Boolean).join("\n"),
-        };
-      }
-
-      throw new Error(
-        [
-          cliDetail,
-          fallbackDetail,
-          `Octopal still reports ${statusAfterFallback.state}: ${statusAfterFallback.detail}`,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      );
+    const fallbackResult = await stopWindowsRuntimeFallback(installDir, cliDetail);
+    if (fallbackResult) {
+      return fallbackResult;
     }
 
     throw error;
@@ -762,7 +944,16 @@ export async function getOctopalStatus(installDir: string): Promise<RuntimeStatu
     env: withPythonDesktopEnv(),
     quiet: true,
   });
-  return statusFromDashboardSnapshot(parseDashboardSnapshot(stdout), installDir);
+
+  try {
+    return await reconcileWindowsRuntimeStatus(statusFromDashboardSnapshot(parseDashboardSnapshot(stdout), installDir));
+  } catch (error) {
+    const nativeStatus = await windowsNativeRuntimeStatus(installDir);
+    if (nativeStatus) {
+      return nativeStatus;
+    }
+    throw error;
+  }
 }
 
 export async function getOctopalStatusSafely(installDir: string): Promise<RuntimeStatusResult> {

@@ -141,7 +141,7 @@ export function App() {
 
   const refreshRuntimeStatus = useCallback(async () => {
     if (!window.octopalDesktop || !installState.installed || !runtimeInstallDir) {
-      return;
+      return null;
     }
 
     const result = await window.octopalDesktop.getOctopalStatus(runtimeInstallDir);
@@ -170,6 +170,7 @@ export function App() {
 
     setStartError("");
     setStartErrorDetail("");
+    return result;
   }, [installState.installed, runtimeInstallDir]);
 
   const startWhatsappLinkFlow = useCallback(async () => {
@@ -585,7 +586,6 @@ export function App() {
         setStartErrorDetail(result.detail);
         return;
       }
-      setStartStatus("started");
       void refreshRuntimeStatus();
     } catch (error) {
       setStartStatus("failed");

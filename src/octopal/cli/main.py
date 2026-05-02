@@ -33,6 +33,7 @@ from octopal.infrastructure.logging import configure_logging
 from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.runtime.metrics import read_metrics_snapshot
 from octopal.runtime.state import (
+    is_octopal_runtime_pid,
     is_pid_running,
     list_octopal_runtime_pids,
     mark_runtime_running,
@@ -852,7 +853,7 @@ def stop() -> None:
 
     discovered = list_octopal_runtime_pids()
     targets: list[int] = []
-    if pid and is_pid_running(pid):
+    if pid and is_octopal_runtime_pid(pid):
         targets.append(pid)
     targets.extend(discovered)
     targets = sorted(set(targets))
@@ -873,7 +874,7 @@ def stop() -> None:
             for target in targets:
                 try:
                     subprocess.run(
-                        ["taskkill", "/F", "/PID", str(target)],
+                        ["taskkill", "/T", "/F", "/PID", str(target)],
                         check=True,
                         capture_output=True,
                     )
@@ -891,12 +892,12 @@ def stop() -> None:
                     failures.append((target, str(exc)))
 
             while time.time() < deadline:
-                alive = [p for p in targets if is_pid_running(p)]
+                alive = [p for p in targets if is_octopal_runtime_pid(p)]
                 if not alive:
                     break
                 time.sleep(0.2)
 
-            alive = [p for p in targets if is_pid_running(p)]
+            alive = [p for p in targets if is_octopal_runtime_pid(p)]
             for target in alive:
                 try:
                     os.kill(target, signal.SIGKILL)
@@ -905,7 +906,7 @@ def stop() -> None:
                 except Exception as exc:
                     failures.append((target, str(exc)))
 
-        still_running = [p for p in targets if is_pid_running(p)]
+        still_running = [p for p in targets if is_octopal_runtime_pid(p)]
         if still_running:
             for target in still_running:
                 cmdline = pid_command_line(target)
@@ -1851,7 +1852,10 @@ def dashboard(
     if not watch:
         snapshot = _build_dashboard_snapshot(settings, last, store=store)
         if json_output:
-            typer.echo(json.dumps(snapshot, ensure_ascii=False, indent=2))
+            import sys
+
+            sys.stdout.write(json.dumps(snapshot, ensure_ascii=False, indent=2))
+            sys.stdout.write("\n")
         else:
             _print_dashboard(snapshot, compact=compact)
         return
@@ -2335,7 +2339,13 @@ def _build_tool_resolution_table(
 def _build_dashboard_snapshot(settings: Settings, last: int, store: SQLiteStore | None = None) -> dict:
     status_data = read_status(settings) or {}
     pid = status_data.get("pid")
-    running = is_pid_running(pid)
+    pid_running = is_octopal_runtime_pid(pid)
+    discovered_pids = list_octopal_runtime_pids()
+    running = pid_running or bool(discovered_pids)
+    if not pid_running and discovered_pids:
+        pid = discovered_pids[0]
+    elif not running:
+        pid = None
     metrics = read_metrics_snapshot(settings.state_dir) or {}
     octo_metrics = metrics.get("octo", {}) if isinstance(metrics, dict) else {}
     telegram_metrics = metrics.get("telegram", {}) if isinstance(metrics, dict) else {}
