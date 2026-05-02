@@ -44,6 +44,7 @@ export function WizardScreen({
   connectorBusy,
   connectorMessage,
   connectorMessageTone,
+  selectedConnector,
   canAuthorizeConnectors,
 }: {
   copy: CopyFn;
@@ -72,6 +73,7 @@ export function WizardScreen({
   connectorBusy: DesktopConnectorName | null;
   connectorMessage: string;
   connectorMessageTone: "success" | "error" | "info";
+  selectedConnector: DesktopConnectorName;
   canAuthorizeConnectors: boolean;
 }) {
   return (
@@ -128,6 +130,7 @@ export function WizardScreen({
             connectorBusy={connectorBusy}
             connectorMessage={connectorMessage}
             connectorMessageTone={connectorMessageTone}
+            selectedConnector={selectedConnector}
             canAuthorizeConnectors={canAuthorizeConnectors}
             onConnectorToggle={onConnectorToggle}
             onConnectorServiceToggle={onConnectorServiceToggle}

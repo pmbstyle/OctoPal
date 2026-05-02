@@ -70,6 +70,7 @@ export function ConnectorsStep({
   connectorBusy,
   connectorMessage,
   connectorMessageTone,
+  selectedConnector,
   canAuthorizeConnectors,
   onConnectorToggle,
   onConnectorServiceToggle,
@@ -83,6 +84,7 @@ export function ConnectorsStep({
   connectorBusy: DesktopConnectorName | null;
   connectorMessage: string;
   connectorMessageTone: "success" | "error" | "info";
+  selectedConnector: DesktopConnectorName;
   canAuthorizeConnectors: boolean;
   onConnectorToggle: (name: DesktopConnectorName) => void;
   onConnectorServiceToggle: (name: DesktopConnectorName, serviceId: string) => void;
@@ -95,22 +97,22 @@ export function ConnectorsStep({
     <StepSection body={copy("connectorsBody")}>
       <div className="choice-grid connectors-grid">
         <ToggleCard
-          active={values.googleConnectorEnabled}
+          active={selectedConnector === "google"}
           icon={<Mail />}
           title={copy("googleConnector")}
-          body={copy("googleConnectorBody")}
+          body={`${copy("googleConnectorBody")}${values.googleConnectorEnabled ? ` · ${copy("available")}` : ""}`}
           onClick={() => onConnectorToggle("google")}
         />
         <ToggleCard
-          active={values.githubConnectorEnabled}
+          active={selectedConnector === "github"}
           icon={<Github />}
           title={copy("githubConnector")}
-          body={copy("githubConnectorBody")}
+          body={`${copy("githubConnectorBody")}${values.githubConnectorEnabled ? ` · ${copy("available")}` : ""}`}
           onClick={() => onConnectorToggle("github")}
         />
       </div>
 
-      {values.googleConnectorEnabled ? (
+      {values.googleConnectorEnabled && selectedConnector === "google" ? (
         <section className="connector-panel reveal-form">
           <div className="connector-panel-head">
             <strong>{copy("googleConnector")}</strong>
@@ -153,7 +155,7 @@ export function ConnectorsStep({
         </section>
       ) : null}
 
-      {values.githubConnectorEnabled ? (
+      {values.githubConnectorEnabled && selectedConnector === "github" ? (
         <section className="connector-panel reveal-form">
           <div className="connector-panel-head">
             <strong>{copy("githubConnector")}</strong>

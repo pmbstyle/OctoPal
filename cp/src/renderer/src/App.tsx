@@ -50,6 +50,7 @@ export function App() {
   const [connectorBusy, setConnectorBusy] = useState<DesktopConnectorName | null>(null);
   const [connectorMessage, setConnectorMessage] = useState("");
   const [connectorMessageTone, setConnectorMessageTone] = useState<"success" | "error" | "info">("info");
+  const [selectedConnector, setSelectedConnector] = useState<DesktopConnectorName>("google");
   const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
   const [loadedConfigChannel, setLoadedConfigChannel] = useState<InstallForm["channel"] | null>(null);
   const [installState, setInstallState] = useState<DesktopInstallState>({
@@ -429,7 +430,12 @@ export function App() {
 
   function toggleConnector(name: DesktopConnectorName) {
     const enabledField = name === "google" ? "googleConnectorEnabled" : "githubConnectorEnabled";
-    const nextEnabled = !form.getValues(enabledField);
+    const currentEnabled = form.getValues(enabledField);
+    const isSelected = selectedConnector === name;
+    const nextEnabled = isSelected ? !currentEnabled : true;
+    setSelectedConnector(name);
+    setConnectorMessage("");
+    setConnectorMessageTone("info");
     form.setValue(enabledField, nextEnabled, { shouldDirty: true, shouldValidate: true });
     if (!nextEnabled) {
       form.clearErrors(
@@ -437,6 +443,12 @@ export function App() {
           ? ["googleConnectorEnabled", "googleConnectorServices", "googleClientId", "googleClientSecret"]
           : ["githubConnectorEnabled", "githubConnectorServices", "githubToken"],
       );
+      if (name === "google" && form.getValues("githubConnectorEnabled")) {
+        setSelectedConnector("github");
+      }
+      if (name === "github" && form.getValues("googleConnectorEnabled")) {
+        setSelectedConnector("google");
+      }
     }
   }
 
@@ -554,6 +566,7 @@ export function App() {
         const config = await window.octopalDesktop.loadOctopalConfig();
         const loadedValues = formValuesFromOctopalConfig(config, installDir);
         form.reset(loadedValues);
+        setSelectedConnector(loadedValues.googleConnectorEnabled || !loadedValues.githubConnectorEnabled ? "google" : "github");
         setLoadedConfigChannel(loadedValues.channel);
         setConfigurationMode("edit");
       } catch (error) {
@@ -564,6 +577,7 @@ export function App() {
     } else {
       setLoadedConfigChannel(null);
       setConfigurationMode("install");
+      setSelectedConnector("google");
       if (!form.getValues("dashboardToken")?.trim()) {
         form.setValue("dashboardToken", generateDashboardToken(), { shouldDirty: true, shouldValidate: true });
       }
@@ -792,6 +806,7 @@ export function App() {
             connectorBusy={connectorBusy}
             connectorMessage={connectorMessage}
             connectorMessageTone={connectorMessageTone}
+            selectedConnector={selectedConnector}
             canAuthorizeConnectors={installState.installed && configurationMode === "edit"}
           />
         ) : null}
