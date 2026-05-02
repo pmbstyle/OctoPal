@@ -503,8 +503,8 @@ export function App() {
               token: currentValues.githubToken,
             },
       );
-      setConnectorMessage(result.message);
-      setConnectorMessageTone(result.ok ? "success" : "error");
+      setConnectorMessage(result.ok ? "" : result.message);
+      setConnectorMessageTone(result.ok ? "info" : "error");
       await refreshConnectorStatus();
     } catch (error) {
       setConnectorMessage(error instanceof Error ? error.message : "Connector authorization failed.");
