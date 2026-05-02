@@ -23,6 +23,30 @@ export const searchProviders = [
   { id: "firecrawl", label: "Firecrawl", keyField: "firecrawlApiKey" },
 ] as const;
 
+export const connectorProviders = [
+  {
+    id: "google",
+    label: "Google",
+    services: [
+      { id: "gmail", label: "Gmail" },
+      { id: "calendar", label: "Calendar" },
+      { id: "drive", label: "Drive" },
+    ],
+  },
+  {
+    id: "github",
+    label: "GitHub",
+    services: [
+      { id: "repos", label: "Repositories" },
+      { id: "issues", label: "Issues" },
+      { id: "pull_requests", label: "Pull requests" },
+    ],
+  },
+] as const;
+
+const googleServiceSchema = z.enum(["gmail", "calendar", "drive"]);
+const githubServiceSchema = z.enum(["repos", "issues", "pull_requests"]);
+
 export const installSchema = z
   .object({
     installDir: z.string().trim().min(1),
@@ -46,6 +70,13 @@ export const installSchema = z
     dashboardEnabled: z.boolean(),
     dashboardPort: z.number().int().min(1).max(65535),
     dashboardToken: z.string().optional(),
+    googleConnectorEnabled: z.boolean(),
+    googleConnectorServices: z.array(googleServiceSchema),
+    googleClientId: z.string().optional(),
+    googleClientSecret: z.string().optional(),
+    githubConnectorEnabled: z.boolean(),
+    githubConnectorServices: z.array(githubServiceSchema),
+    githubToken: z.string().optional(),
   })
   .superRefine((values, context) => {
     const requireField = (path: string, value: string | undefined) => {
@@ -85,6 +116,21 @@ export const installSchema = z
     if (values.searchProvider === "firecrawl") {
       requireField("firecrawlApiKey", values.firecrawlApiKey);
     }
+
+    if (values.googleConnectorEnabled) {
+      if (values.googleConnectorServices.length === 0) {
+        context.addIssue({ code: "custom", path: ["googleConnectorServices"], message: "Required" });
+      }
+      requireField("googleClientId", values.googleClientId);
+      requireField("googleClientSecret", values.googleClientSecret);
+    }
+
+    if (values.githubConnectorEnabled) {
+      if (values.githubConnectorServices.length === 0) {
+        context.addIssue({ code: "custom", path: ["githubConnectorServices"], message: "Required" });
+      }
+      requireField("githubToken", values.githubToken);
+    }
   });
 
 export type InstallForm = z.infer<typeof installSchema>;
@@ -119,6 +165,13 @@ export const defaultInstallValues: InstallForm = {
   dashboardEnabled: true,
   dashboardPort: 8000,
   dashboardToken: "",
+  googleConnectorEnabled: false,
+  googleConnectorServices: ["gmail"],
+  googleClientId: "",
+  googleClientSecret: "",
+  githubConnectorEnabled: false,
+  githubConnectorServices: ["repos"],
+  githubToken: "",
 };
 
 export function buildOctopalConfig(values: InstallForm) {
@@ -190,6 +243,25 @@ export function buildOctopalConfig(values: InstallForm) {
       brave_api_key: values.searchProvider === "brave" ? secretNullable(values.braveApiKey) : null,
       firecrawl_api_key: values.searchProvider === "firecrawl" ? secretNullable(values.firecrawlApiKey) : null,
     },
+    connectors: {
+      instances: {
+        google: {
+          enabled: values.googleConnectorEnabled,
+          enabled_services: values.googleConnectorServices,
+          credentials: {
+            client_id: values.googleClientId || null,
+            client_secret: secretNullable(values.googleClientSecret),
+          },
+        },
+        github: {
+          enabled: values.githubConnectorEnabled,
+          enabled_services: values.githubConnectorServices,
+          auth: {
+            access_token: secretNullable(values.githubToken),
+          },
+        },
+      },
+    },
   };
 }
 
@@ -209,6 +281,15 @@ function listValue(value: unknown): string {
   return Array.isArray(value) ? value.map((item) => String(item)).join(", ") : "";
 }
 
+function stringListValue<T extends string>(value: unknown, allowed: readonly T[], fallback: T[]): T[] {
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+  const allowedSet = new Set<string>(allowed);
+  const selected = value.map((item) => String(item)).filter((item): item is T => allowedSet.has(item));
+  return selected.length > 0 ? selected : fallback;
+}
+
 export function formValuesFromOctopalConfig(config: unknown, installDir: string): InstallForm {
   const root = recordValue(config);
   const telegram = recordValue(root.telegram);
@@ -217,6 +298,12 @@ export function formValuesFromOctopalConfig(config: unknown, installDir: string)
   const workerLlm = recordValue(root.worker_llm_default);
   const gateway = recordValue(root.gateway);
   const search = recordValue(root.search);
+  const connectors = recordValue(root.connectors);
+  const connectorInstances = recordValue(connectors.instances);
+  const googleConnector = recordValue(connectorInstances.google);
+  const googleCredentials = recordValue(googleConnector.credentials);
+  const githubConnector = recordValue(connectorInstances.github);
+  const githubAuth = recordValue(githubConnector.auth);
   const braveApiKey = stringValue(search.brave_api_key);
   const firecrawlApiKey = stringValue(search.firecrawl_api_key);
   const workerProviderId = stringValue(workerLlm.provider_id);
@@ -244,5 +331,12 @@ export function formValuesFromOctopalConfig(config: unknown, installDir: string)
     dashboardEnabled: gateway.webapp_enabled !== false,
     dashboardPort: numberValue(gateway.port, defaultInstallValues.dashboardPort),
     dashboardToken: stringValue(gateway.dashboard_token),
+    googleConnectorEnabled: googleConnector.enabled === true,
+    googleConnectorServices: stringListValue(googleConnector.enabled_services, ["gmail", "calendar", "drive"], ["gmail"]),
+    googleClientId: stringValue(googleCredentials.client_id),
+    googleClientSecret: stringValue(googleCredentials.client_secret),
+    githubConnectorEnabled: githubConnector.enabled === true,
+    githubConnectorServices: stringListValue(githubConnector.enabled_services, ["repos", "issues", "pull_requests"], ["repos"]),
+    githubToken: stringValue(githubAuth.access_token),
   };
 }

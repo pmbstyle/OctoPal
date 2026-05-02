@@ -167,6 +167,12 @@ function mergeConfigForDesktopSave(existingConfig: unknown, incomingConfig: unkn
   preserveSecretIfBlank(merged, existing, ["whatsapp", "callback_token"]);
   preserveSecretIfBlank(merged, existing, ["search", "brave_api_key"]);
   preserveSecretIfBlank(merged, existing, ["search", "firecrawl_api_key"]);
+  preserveSecretIfBlank(merged, existing, ["connectors", "instances", "google", "credentials", "client_secret"], {
+    sameProviderPath: ["connectors", "instances", "google", "credentials", "client_id"],
+  });
+  preserveSecretIfBlank(merged, existing, ["connectors", "instances", "google", "auth", "refresh_token"]);
+  preserveSecretIfBlank(merged, existing, ["connectors", "instances", "google", "auth", "access_token"]);
+  preserveSecretIfBlank(merged, existing, ["connectors", "instances", "github", "auth", "access_token"]);
 
   return merged;
 }
@@ -190,7 +196,26 @@ function sanitizeConfigForRenderer(config: unknown): Record<string, unknown> {
   setNested(sanitized, ["search", "brave_api_key"], maskedNullableValue(["search", "brave_api_key"]));
   setNested(sanitized, ["search", "firecrawl_api_key"], maskedNullableValue(["search", "firecrawl_api_key"]));
   setNested(sanitized, ["observability", "langfuse_secret_key"], maskedNullableValue(["observability", "langfuse_secret_key"]));
-  delete sanitized.connectors;
+  setNested(
+    sanitized,
+    ["connectors", "instances", "google", "credentials", "client_secret"],
+    maskedNullableValue(["connectors", "instances", "google", "credentials", "client_secret"]),
+  );
+  setNested(
+    sanitized,
+    ["connectors", "instances", "google", "auth", "refresh_token"],
+    maskedNullableValue(["connectors", "instances", "google", "auth", "refresh_token"]),
+  );
+  setNested(
+    sanitized,
+    ["connectors", "instances", "google", "auth", "access_token"],
+    maskedNullableValue(["connectors", "instances", "google", "auth", "access_token"]),
+  );
+  setNested(
+    sanitized,
+    ["connectors", "instances", "github", "auth", "access_token"],
+    maskedNullableValue(["connectors", "instances", "github", "auth", "access_token"]),
+  );
   return sanitized;
 }
 
