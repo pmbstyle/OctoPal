@@ -86,6 +86,7 @@ type DetachedStartResult = {
 
 function sanitizeOutput(text: string): string {
   return text
+    .replace(/\bGOCSPX-[A-Za-z0-9_-]{12,}\b/g, "[redacted-key]")
     .replace(/\b\d{7,12}:[A-Za-z0-9_-]{20,}\b/g, "[redacted-token]")
     .replace(/\bsk-or-v1-[A-Za-z0-9_-]{16,}\b/g, "[redacted-key]")
     .replace(/\bsk-[A-Za-z0-9_-]{16,}\b/g, "[redacted-key]")
@@ -98,6 +99,29 @@ function sanitizeOutput(text: string): string {
       /((?:api[_-]?key|bot[_-]?token|callback[_-]?token|telegram[_-]?bot[_-]?token|secret|token)"?\s*:\s*")[^"]*(")/gi,
       "$1[redacted]$2",
     );
+}
+
+function sanitizeCommandInvocation(command: string, args: string[]): string {
+  const sensitiveFlags = new Set([
+    "--api-key",
+    "--bot-token",
+    "--callback-token",
+    "--client-secret",
+    "--secret",
+    "--telegram-token",
+    "--token",
+  ]);
+  const safeArgs = args.map((arg, index) => {
+    if (index > 0 && sensitiveFlags.has(args[index - 1])) {
+      return "[redacted]";
+    }
+    const [flag, value] = arg.split("=", 2);
+    if (value !== undefined && sensitiveFlags.has(flag)) {
+      return `${flag}=[redacted]`;
+    }
+    return arg;
+  });
+  return sanitizeOutput([command, ...safeArgs].join(" "));
 }
 
 export function withPythonDesktopEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
@@ -186,7 +210,7 @@ export function runCommand(
         resolve({ stdout, stderr });
         return;
       }
-      reject(new Error(`${command} ${args.join(" ")} exited with code ${code}: ${sanitizeOutput(stderr || stdout).trim()}`));
+      reject(new Error(`${sanitizeCommandInvocation(command, args)} exited with code ${code}: ${sanitizeOutput(stderr || stdout).trim()}`));
     });
   });
 }

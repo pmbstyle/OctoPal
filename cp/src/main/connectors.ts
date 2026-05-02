@@ -51,6 +51,42 @@ function addOptionalArg(args: string[], name: string, value: string | undefined)
   args.push(name, value);
 }
 
+function addRequiredLegacyArg(args: string[], name: string, value: string | undefined): boolean {
+  if (!value || value === EXISTING_SECRET_VALUE) {
+    return false;
+  }
+  args.push(name, value);
+  return true;
+}
+
+function looksLikeMissingJsonOption(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("No such option: --json");
+}
+
+function buildJsonAuthArgs(payload: ConnectorAuthPayload): string[] {
+  const args = ["run", "octopal", "connector", "auth", payload.name, "--json", "--no-manual"];
+  if (payload.name === "google") {
+    addOptionalArg(args, "--client-id", payload.clientId);
+    addOptionalArg(args, "--client-secret", payload.clientSecret);
+  }
+  if (payload.name === "github") {
+    addOptionalArg(args, "--token", payload.token);
+  }
+  return args;
+}
+
+function buildLegacyAuthArgs(payload: ConnectorAuthPayload): string[] | null {
+  const args = ["run", "octopal", "connector", "auth", payload.name];
+  if (payload.name === "google") {
+    const hasClientId = addRequiredLegacyArg(args, "--client-id", payload.clientId);
+    const hasClientSecret = addRequiredLegacyArg(args, "--client-secret", payload.clientSecret);
+    return hasClientId && hasClientSecret ? args : null;
+  }
+  const hasToken = addRequiredLegacyArg(args, "--token", payload.token);
+  return hasToken ? args : null;
+}
+
 export async function getConnectorStatus(installDir: string): Promise<ConnectorStatusResult> {
   try {
     const { stdout, stderr } = await runCommand(
@@ -74,16 +110,8 @@ export async function getConnectorStatus(installDir: string): Promise<ConnectorS
   }
 }
 
-export async function authorizeConnector(installDir: string, payload: ConnectorAuthPayload): Promise<ConnectorActionResult> {
-  const args = ["run", "octopal", "connector", "auth", payload.name, "--json", "--no-manual"];
-  if (payload.name === "google") {
-    addOptionalArg(args, "--client-id", payload.clientId);
-    addOptionalArg(args, "--client-secret", payload.clientSecret);
-  }
-  if (payload.name === "github") {
-    addOptionalArg(args, "--token", payload.token);
-  }
-
+async function authorizeConnectorJson(installDir: string, payload: ConnectorAuthPayload): Promise<ConnectorActionResult> {
+  const args = buildJsonAuthArgs(payload);
   try {
     const { stdout, stderr } = await runCommand("uv", args, () => undefined, {
       cwd: installDir,
@@ -99,6 +127,52 @@ export async function authorizeConnector(installDir: string, payload: ConnectorA
       detail: stdout || stderr,
     };
   } catch (error) {
+    throw error;
+  }
+}
+
+async function authorizeConnectorLegacy(installDir: string, payload: ConnectorAuthPayload): Promise<ConnectorActionResult> {
+  const args = buildLegacyAuthArgs(payload);
+  if (!args) {
+    return {
+      ok: false,
+      name: payload.name,
+      message: "Installed Octopal does not support desktop JSON auth yet. Re-enter the connector secret or update Octopal.",
+      detail: "",
+    };
+  }
+
+  try {
+    const { stdout, stderr } = await runCommand("uv", args, () => undefined, {
+      cwd: installDir,
+      env: withPythonDesktopEnv(),
+      quiet: true,
+    });
+    const output = (stdout || stderr).trim();
+    return {
+      ok: true,
+      name: payload.name,
+      status: "success",
+      message: output.split(/\r?\n/).find((line) => line.includes("authorized")) || "Connector authorized.",
+      detail: output,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      name: payload.name,
+      message: error instanceof Error ? error.message : "Connector authorization failed.",
+      detail: error instanceof Error ? error.message : "",
+    };
+  }
+}
+
+export async function authorizeConnector(installDir: string, payload: ConnectorAuthPayload): Promise<ConnectorActionResult> {
+  try {
+    return await authorizeConnectorJson(installDir, payload);
+  } catch (error) {
+    if (looksLikeMissingJsonOption(error)) {
+      return authorizeConnectorLegacy(installDir, payload);
+    }
     return {
       ok: false,
       name: payload.name,
