@@ -1,4 +1,4 @@
-import { CalendarDays, Folder, Github, KeyRound, Mail } from "lucide-react";
+import { AlertCircle, CalendarDays, CheckCircle2, Folder, Github, Info, KeyRound, Mail } from "lucide-react";
 import type { FieldErrors, UseFormReturn } from "react-hook-form";
 
 import { Button } from "../Button";
@@ -6,6 +6,7 @@ import { Field, Input } from "../Field";
 import { StepSection } from "../StepSection";
 import { ToggleCard } from "../ToggleCard";
 import type { CopyFn } from "../../lib/appTypes";
+import { cn } from "../../lib/cn";
 import { connectorProviders, isExistingSecret, type InstallForm } from "../../lib/install";
 
 type ConnectorStatus = {
@@ -40,14 +41,23 @@ function ConnectorStatusLine({
   fallback: string;
 }) {
   if (!status) {
-    return <p className="connector-status-line">{fallback}</p>;
+    return (
+      <div className="connector-status-line connector-status-info">
+        <Info />
+        <span>{fallback}</span>
+      </div>
+    );
   }
 
+  const tone = status.status === "ready" ? "ready" : status.status === "needs_auth" || status.status === "needs_reauth" ? "warning" : "info";
+  const Icon = tone === "ready" ? CheckCircle2 : tone === "warning" ? AlertCircle : Info;
+
   return (
-    <p className="connector-status-line">
-      <strong>{status.status ?? "unknown"}</strong>
-      {status.message ? ` · ${status.message}` : ""}
-    </p>
+    <div className={cn("connector-status-line", `connector-status-${tone}`)}>
+      <Icon />
+      <span className="connector-status-badge">{status.status ?? "unknown"}</span>
+      <span>{status.message || fallback}</span>
+    </div>
   );
 }
 
@@ -59,6 +69,7 @@ export function ConnectorsStep({
   connectorStatus,
   connectorBusy,
   connectorMessage,
+  connectorMessageTone,
   canAuthorizeConnectors,
   onConnectorToggle,
   onConnectorServiceToggle,
@@ -71,6 +82,7 @@ export function ConnectorsStep({
   connectorStatus: DesktopConnectorStatusResult | null;
   connectorBusy: DesktopConnectorName | null;
   connectorMessage: string;
+  connectorMessageTone: "success" | "error" | "info";
   canAuthorizeConnectors: boolean;
   onConnectorToggle: (name: DesktopConnectorName) => void;
   onConnectorServiceToggle: (name: DesktopConnectorName, serviceId: string) => void;
@@ -181,7 +193,12 @@ export function ConnectorsStep({
         </section>
       ) : null}
 
-      {connectorMessage ? <p className="connector-action-message">{connectorMessage}</p> : null}
+      {connectorMessage ? (
+        <div className={cn("connector-action-message reveal-form", `connector-action-${connectorMessageTone}`)}>
+          {connectorMessageTone === "success" ? <CheckCircle2 /> : connectorMessageTone === "error" ? <AlertCircle /> : <Info />}
+          <span>{connectorMessage}</span>
+        </div>
+      ) : null}
     </StepSection>
   );
 }

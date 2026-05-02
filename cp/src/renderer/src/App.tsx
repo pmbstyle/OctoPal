@@ -49,6 +49,7 @@ export function App() {
   const [connectorStatus, setConnectorStatus] = useState<DesktopConnectorStatusResult | null>(null);
   const [connectorBusy, setConnectorBusy] = useState<DesktopConnectorName | null>(null);
   const [connectorMessage, setConnectorMessage] = useState("");
+  const [connectorMessageTone, setConnectorMessageTone] = useState<"success" | "error" | "info">("info");
   const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
   const [loadedConfigChannel, setLoadedConfigChannel] = useState<InstallForm["channel"] | null>(null);
   const [installState, setInstallState] = useState<DesktopInstallState>({
@@ -472,6 +473,7 @@ export function App() {
 
     setConnectorBusy(name);
     setConnectorMessage("");
+    setConnectorMessageTone("info");
     try {
       const currentValues = form.getValues();
       const nextState = await window.octopalDesktop.saveOctopalConfig(buildOctopalConfig(currentValues));
@@ -490,9 +492,11 @@ export function App() {
             },
       );
       setConnectorMessage(result.message);
+      setConnectorMessageTone(result.ok ? "success" : "error");
       await refreshConnectorStatus();
     } catch (error) {
       setConnectorMessage(error instanceof Error ? error.message : "Connector authorization failed.");
+      setConnectorMessageTone("error");
     } finally {
       setConnectorBusy(null);
     }
@@ -591,6 +595,7 @@ export function App() {
       setWhatsappLinkStarted(false);
       setConnectorStatus(null);
       setConnectorMessage("");
+      setConnectorMessageTone("info");
       setScreen(shouldLinkWhatsApp ? "whatsapp-link" : "welcome");
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : copy("installFailedBody"));
@@ -786,6 +791,7 @@ export function App() {
             connectorStatus={connectorStatus}
             connectorBusy={connectorBusy}
             connectorMessage={connectorMessage}
+            connectorMessageTone={connectorMessageTone}
             canAuthorizeConnectors={installState.installed && configurationMode === "edit"}
           />
         ) : null}
