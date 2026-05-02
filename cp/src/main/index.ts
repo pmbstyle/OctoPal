@@ -5,6 +5,13 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import {
+  authorizeConnector,
+  disconnectConnector,
+  getConnectorStatus,
+  type ConnectorAuthPayload,
+  type ConnectorName,
+} from "./connectors";
+import {
   getOctopalStatusSafely,
   runInstall,
   startOctopalSafely,
@@ -160,6 +167,12 @@ function mergeConfigForDesktopSave(existingConfig: unknown, incomingConfig: unkn
   preserveSecretIfBlank(merged, existing, ["whatsapp", "callback_token"]);
   preserveSecretIfBlank(merged, existing, ["search", "brave_api_key"]);
   preserveSecretIfBlank(merged, existing, ["search", "firecrawl_api_key"]);
+  preserveSecretIfBlank(merged, existing, ["connectors", "instances", "google", "credentials", "client_secret"], {
+    sameProviderPath: ["connectors", "instances", "google", "credentials", "client_id"],
+  });
+  preserveSecretIfBlank(merged, existing, ["connectors", "instances", "google", "auth", "refresh_token"]);
+  preserveSecretIfBlank(merged, existing, ["connectors", "instances", "google", "auth", "access_token"]);
+  preserveSecretIfBlank(merged, existing, ["connectors", "instances", "github", "auth", "access_token"]);
 
   return merged;
 }
@@ -183,7 +196,26 @@ function sanitizeConfigForRenderer(config: unknown): Record<string, unknown> {
   setNested(sanitized, ["search", "brave_api_key"], maskedNullableValue(["search", "brave_api_key"]));
   setNested(sanitized, ["search", "firecrawl_api_key"], maskedNullableValue(["search", "firecrawl_api_key"]));
   setNested(sanitized, ["observability", "langfuse_secret_key"], maskedNullableValue(["observability", "langfuse_secret_key"]));
-  delete sanitized.connectors;
+  setNested(
+    sanitized,
+    ["connectors", "instances", "google", "credentials", "client_secret"],
+    maskedNullableValue(["connectors", "instances", "google", "credentials", "client_secret"]),
+  );
+  setNested(
+    sanitized,
+    ["connectors", "instances", "google", "auth", "refresh_token"],
+    maskedNullableValue(["connectors", "instances", "google", "auth", "refresh_token"]),
+  );
+  setNested(
+    sanitized,
+    ["connectors", "instances", "google", "auth", "access_token"],
+    maskedNullableValue(["connectors", "instances", "google", "auth", "access_token"]),
+  );
+  setNested(
+    sanitized,
+    ["connectors", "instances", "github", "auth", "access_token"],
+    maskedNullableValue(["connectors", "instances", "github", "auth", "access_token"]),
+  );
   return sanitized;
 }
 
@@ -422,6 +454,15 @@ ipcMain.handle("desktop:install-octopal", async (event, payload: InstallPayload)
 ipcMain.handle("desktop:start-octopal", async (_event, installDir: string) => startOctopalSafely(installDir));
 ipcMain.handle("desktop:stop-octopal", async (_event, installDir: string) => stopOctopalSafely(installDir));
 ipcMain.handle("desktop:get-octopal-status", async (_event, installDir: string) => getOctopalStatusSafely(installDir));
+ipcMain.handle("desktop:get-connector-status", async (_event, installDir: string) => getConnectorStatus(installDir));
+ipcMain.handle("desktop:authorize-connector", async (_event, installDir: string, payload: ConnectorAuthPayload) =>
+  authorizeConnector(installDir, payload),
+);
+ipcMain.handle(
+  "desktop:disconnect-connector",
+  async (_event, installDir: string, name: ConnectorName, forgetCredentials: boolean) =>
+    disconnectConnector(installDir, name, forgetCredentials),
+);
 ipcMain.handle("desktop:start-whatsapp-link", async (_event, installDir: string) => startWhatsAppLink(installDir));
 ipcMain.handle("desktop:get-whatsapp-link-status", async (_event, installDir: string) => getWhatsAppLinkStatus(installDir));
 ipcMain.handle("desktop:stop-whatsapp-link", async (_event, installDir: string) => stopWhatsAppLink(installDir));

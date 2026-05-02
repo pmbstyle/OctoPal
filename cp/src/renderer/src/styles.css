@@ -856,6 +856,166 @@ p {
   accent-color: var(--primary);
 }
 
+.connector-panel {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-strong) 78%, transparent);
+}
+
+.connector-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connector-panel-head strong {
+  font-size: 16px;
+}
+
+.connector-services {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.service-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.service-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.service-checkbox span {
+  display: grid;
+  place-items: center;
+  color: var(--primary);
+}
+
+.service-checkbox svg {
+  width: 16px;
+  height: 16px;
+}
+
+.connector-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.connector-form-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.connector-status-line {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.connector-status-line svg,
+.connector-action-message svg {
+  width: 17px;
+  height: 17px;
+}
+
+.connector-status-badge {
+  min-width: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 16%, transparent);
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.connector-status-ready {
+  border-color: color-mix(in srgb, var(--success) 48%, var(--border));
+  background: color-mix(in srgb, var(--success) 9%, var(--surface-strong));
+}
+
+.connector-status-ready svg,
+.connector-status-ready .connector-status-badge {
+  color: var(--success);
+}
+
+.connector-status-warning {
+  border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+}
+
+.connector-status-warning svg {
+  color: var(--primary);
+}
+
+.connector-status-info svg {
+  color: var(--primary);
+}
+
+.connector-action-message {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-strong);
+  overflow-wrap: anywhere;
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.connector-action-success {
+  border-color: color-mix(in srgb, var(--success) 50%, var(--border));
+  background: color-mix(in srgb, var(--success) 10%, var(--surface-strong));
+}
+
+.connector-action-success svg {
+  color: var(--success);
+}
+
+.connector-action-error {
+  border-color: color-mix(in srgb, var(--danger) 58%, var(--border));
+  background: color-mix(in srgb, var(--danger) 9%, var(--surface-strong));
+}
+
+.connector-action-error svg {
+  color: var(--danger);
+}
+
+.connector-action-info svg {
+  color: var(--primary);
+}
+
 .review-item {
   padding: 18px;
   border: 1px solid var(--border);

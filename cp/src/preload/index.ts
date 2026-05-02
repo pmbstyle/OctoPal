@@ -83,6 +83,29 @@ type DesktopWhatsAppLinkStatus = {
   detail: string;
 };
 
+type DesktopConnectorName = "google" | "github";
+
+type DesktopConnectorStatusResult = {
+  ok: boolean;
+  connectors: Record<string, unknown>;
+  detail: string;
+};
+
+type DesktopConnectorAuthPayload = {
+  name: DesktopConnectorName;
+  clientId?: string;
+  clientSecret?: string;
+  token?: string;
+};
+
+type DesktopConnectorActionResult = {
+  ok: boolean;
+  name: DesktopConnectorName;
+  status?: string;
+  message: string;
+  detail: string;
+};
+
 contextBridge.exposeInMainWorld("octopalDesktop", {
   loadSettings: () => ipcRenderer.invoke("desktop:load-settings") as Promise<DesktopSettings>,
   saveSettings: (settings: DesktopSettings) =>
@@ -107,6 +130,12 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     ipcRenderer.invoke("desktop:stop-octopal", installDir) as Promise<DesktopStopResult | DesktopStopFailure>,
   getOctopalStatus: (installDir: string) =>
     ipcRenderer.invoke("desktop:get-octopal-status", installDir) as Promise<DesktopRuntimeStatus>,
+  getConnectorStatus: (installDir: string) =>
+    ipcRenderer.invoke("desktop:get-connector-status", installDir) as Promise<DesktopConnectorStatusResult>,
+  authorizeConnector: (installDir: string, payload: DesktopConnectorAuthPayload) =>
+    ipcRenderer.invoke("desktop:authorize-connector", installDir, payload) as Promise<DesktopConnectorActionResult>,
+  disconnectConnector: (installDir: string, name: DesktopConnectorName, forgetCredentials = false) =>
+    ipcRenderer.invoke("desktop:disconnect-connector", installDir, name, forgetCredentials) as Promise<DesktopConnectorActionResult>,
   startWhatsAppLink: (installDir: string) =>
     ipcRenderer.invoke("desktop:start-whatsapp-link", installDir) as Promise<DesktopWhatsAppLinkStatus>,
   getWhatsAppLinkStatus: (installDir: string) =>
