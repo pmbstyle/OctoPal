@@ -251,7 +251,7 @@ def _command_executable_name(cmdline: str) -> str:
         token = stripped[1:end] if end > 1 else stripped[1:]
     else:
         token = stripped.split(maxsplit=1)[0]
-    return Path(token).name.lower()
+    return Path(token.replace("\\", "/")).name.lower()
 
 
 def _iter_process_cmdlines() -> list[tuple[int, str]]:
