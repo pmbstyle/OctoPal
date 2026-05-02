@@ -1620,12 +1620,17 @@ def connector_auth(
     if name == "google":
         if not json_output:
             _print_google_auth_setup_help()
-        if client_id is None and json_output:
+        resolved_client_id = client_id
+        resolved_client_secret = client_secret
+        if json_output:
+            resolved_client_id = resolved_client_id or instance.credentials.client_id
+            resolved_client_secret = resolved_client_secret or instance.credentials.client_secret
+        if resolved_client_id is None and json_output:
             fail("Missing Google OAuth client ID.")
-        if client_secret is None and json_output:
+        if resolved_client_secret is None and json_output:
             fail("Missing Google OAuth client secret.")
-        resolved_client_id = client_id or typer.prompt("Your Google OAuth Desktop App client ID")
-        resolved_client_secret = client_secret or typer.prompt("Your Google OAuth Desktop App client secret", hide_input=True)
+        resolved_client_id = resolved_client_id or typer.prompt("Your Google OAuth Desktop App client ID")
+        resolved_client_secret = resolved_client_secret or typer.prompt("Your Google OAuth Desktop App client secret", hide_input=True)
         asyncio.run(
             connector.configure(
                 {
@@ -1637,9 +1642,12 @@ def connector_auth(
     elif name == "github":
         if not json_output:
             _print_github_auth_setup_help()
-        if token is None and json_output:
+        resolved_token = token
+        if json_output:
+            resolved_token = resolved_token or instance.auth.access_token
+        if resolved_token is None and json_output:
             fail("Missing GitHub personal access token.")
-        resolved_token = token or typer.prompt("Your GitHub personal access token", hide_input=True)
+        resolved_token = resolved_token or typer.prompt("Your GitHub personal access token", hide_input=True)
         asyncio.run(connector.configure({"token": resolved_token}))
 
     result = asyncio.run(connector.authorize())

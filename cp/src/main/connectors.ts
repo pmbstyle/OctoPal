@@ -1,5 +1,7 @@
 import { runCommand, withPythonDesktopEnv } from "./installer";
 
+const EXISTING_SECRET_VALUE = "__OCTOPAL_DESKTOP_EXISTING_SECRET__";
+
 export type ConnectorName = "google" | "github";
 
 export type ConnectorStatusResult = {
@@ -42,6 +44,13 @@ function connectorMessage(payload: Record<string, unknown>, fallback: string): s
       : fallback;
 }
 
+function addOptionalArg(args: string[], name: string, value: string | undefined): void {
+  if (!value || value === EXISTING_SECRET_VALUE) {
+    return;
+  }
+  args.push(name, value);
+}
+
 export async function getConnectorStatus(installDir: string): Promise<ConnectorStatusResult> {
   try {
     const { stdout, stderr } = await runCommand(
@@ -68,10 +77,11 @@ export async function getConnectorStatus(installDir: string): Promise<ConnectorS
 export async function authorizeConnector(installDir: string, payload: ConnectorAuthPayload): Promise<ConnectorActionResult> {
   const args = ["run", "octopal", "connector", "auth", payload.name, "--json", "--no-manual"];
   if (payload.name === "google") {
-    args.push("--client-id", payload.clientId ?? "", "--client-secret", payload.clientSecret ?? "");
+    addOptionalArg(args, "--client-id", payload.clientId);
+    addOptionalArg(args, "--client-secret", payload.clientSecret);
   }
   if (payload.name === "github") {
-    args.push("--token", payload.token ?? "");
+    addOptionalArg(args, "--token", payload.token);
   }
 
   try {

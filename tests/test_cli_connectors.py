@@ -196,6 +196,46 @@ def test_connector_auth_json_success_uses_supplied_github_token(tmp_path, monkey
     assert "authorized for repos" in payload["message"]
 
 
+def test_connector_auth_json_can_reuse_saved_google_credentials(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "connectors": {
+                    "instances": {
+                        "google": {
+                            "enabled": True,
+                            "enabled_services": ["gmail"],
+                            "credentials": {
+                                "client_id": "saved-client-id",
+                                "client_secret": "saved-client-secret",
+                            },
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    async def fake_authorize(self):
+        config = self._get_config()
+        assert config.credentials.client_id == "saved-client-id"
+        assert config.credentials.client_secret == "saved-client-secret"
+        return {"status": "success", "message": "Google connector authorized for gmail."}
+
+    monkeypatch.setattr(
+        "octopal.infrastructure.connectors.google.GoogleConnector.authorize",
+        fake_authorize,
+    )
+
+    result = runner.invoke(app, ["connector", "auth", "google", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "success"
+
+
 def test_connector_auth_prints_google_setup_help_when_credentials_missing(
     tmp_path, monkeypatch
 ) -> None:
