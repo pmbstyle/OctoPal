@@ -91,7 +91,10 @@ def test_connector_auth_requires_enabled_connector(tmp_path, monkeypatch) -> Non
     result = runner.invoke(app, ["connector", "auth", "google"])
 
     assert result.exit_code == 1
-    assert "Run octopal configure first" in result.stdout or "Run `octopal configure` first" in result.stdout
+    assert (
+        "Run octopal configure first" in result.stdout
+        or "Run `octopal configure` first" in result.stdout
+    )
 
 
 def test_connector_auth_success_uses_cli_flow(tmp_path, monkeypatch) -> None:
@@ -132,7 +135,70 @@ def test_connector_auth_success_uses_cli_flow(tmp_path, monkeypatch) -> None:
     assert "authorized for gmail" in result.stdout
 
 
-def test_connector_auth_prints_google_setup_help_when_credentials_missing(tmp_path, monkeypatch) -> None:
+def test_connector_auth_json_does_not_prompt_for_google_credentials(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "connectors": {
+                    "instances": {
+                        "google": {
+                            "enabled": True,
+                            "enabled_services": ["gmail"],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(app, ["connector", "auth", "google", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["error"] == "Missing Google OAuth client ID."
+
+
+def test_connector_auth_json_success_uses_supplied_github_token(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "connectors": {
+                    "instances": {
+                        "github": {
+                            "enabled": True,
+                            "enabled_services": ["repos"],
+                        }
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    async def fake_authorize(self):
+        config = self._get_config()
+        assert config.auth.access_token == "ghp_test"
+        return {"status": "success", "message": "GitHub connector authorized for repos."}
+
+    monkeypatch.setattr(
+        "octopal.infrastructure.connectors.github.GitHubConnector.authorize",
+        fake_authorize,
+    )
+
+    result = runner.invoke(app, ["connector", "auth", "github", "--token", "ghp_test", "--json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "success"
+    assert "authorized for repos" in payload["message"]
+
+
+def test_connector_auth_prints_google_setup_help_when_credentials_missing(
+    tmp_path, monkeypatch
+) -> None:
     (tmp_path / "config.json").write_text(
         json.dumps(
             {
@@ -222,7 +288,9 @@ def test_connector_auth_prompts_for_credentials_even_when_saved(tmp_path, monkey
     ]
 
 
-def test_connector_auth_falls_back_to_manual_flow_when_browser_is_unavailable(tmp_path, monkeypatch) -> None:
+def test_connector_auth_falls_back_to_manual_flow_when_browser_is_unavailable(
+    tmp_path, monkeypatch
+) -> None:
     (tmp_path / "config.json").write_text(
         json.dumps(
             {
@@ -243,13 +311,18 @@ def test_connector_auth_falls_back_to_manual_flow_when_browser_is_unavailable(tm
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr("octopal.cli.main.typer.prompt", lambda *args, **kwargs: "http://localhost/?code=abc")
+    monkeypatch.setattr(
+        "octopal.cli.main.typer.prompt", lambda *args, **kwargs: "http://localhost/?code=abc"
+    )
 
     async def fake_authorize(self):
         return {"status": "manual_required", "error": "could not locate runnable browser"}
 
     async def fake_begin_manual_authorize(self):
-        return {"auth_url": "https://accounts.google.com/mock-auth", "redirect_uri": "http://localhost"}
+        return {
+            "auth_url": "https://accounts.google.com/mock-auth",
+            "redirect_uri": "http://localhost",
+        }
 
     async def fake_complete_manual_authorize(self, authorization_response: str):
         assert authorization_response == "http://localhost/?code=abc"

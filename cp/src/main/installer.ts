@@ -100,7 +100,7 @@ function sanitizeOutput(text: string): string {
     );
 }
 
-function withPythonDesktopEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function withPythonDesktopEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   return {
     ...withLocalToolPaths(env),
     COLUMNS: "20000",
@@ -147,7 +147,7 @@ function commandUsesShell(command: string): boolean {
   return process.platform === "win32" && command === "npm";
 }
 
-function runCommand(
+export function runCommand(
   command: string,
   args: string[],
   emit: (event: InstallEvent) => void,

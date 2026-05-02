@@ -1588,31 +1588,44 @@ def connector_auth(
     client_id: str | None = typer.Option(None, "--client-id", help="OAuth client ID to use."),
     client_secret: str | None = typer.Option(None, "--client-secret", help="OAuth client secret to use."),
     token: str | None = typer.Option(None, "--token", help="Access token to use for token-based connectors."),
+    json_output: bool = typer.Option(False, "--json", help="Print machine-readable JSON."),
+    manual_fallback: bool = typer.Option(
+        True,
+        "--manual/--no-manual",
+        help="Prompt for a pasted manual OAuth response if the browser flow is unavailable.",
+    ),
 ) -> None:
     """Authorize a configured connector via CLI."""
+
+    def fail(message: str, *, payload: dict[str, object] | None = None) -> None:
+        if json_output:
+            console.print(json.dumps(payload or {"status": "error", "error": message}, ensure_ascii=False, indent=2))
+        else:
+            console.print(f"[bold red]Authorization failed:[/bold red] {message}")
+        raise typer.Exit(code=1)
+
     settings = load_settings()
     manager = _build_connector_manager(settings)
     connector = manager.get_connector(name)
     if connector is None:
-        console.print(f"[bold red]Unknown connector:[/bold red] {name}")
-        raise typer.Exit(code=1)
+        fail(f"Unknown connector: {name}")
 
     instance = settings.connectors.instances.get(name)
     if instance is None or not instance.enabled:
-        console.print(
-            f"[bold yellow]{name} is not enabled.[/bold yellow] Run [magenta]octopal configure[/magenta] first."
-        )
+        if json_output:
+            fail(f"{name} is not enabled. Run octopal configure first.")
+        console.print(f"[bold yellow]{name} is not enabled.[/bold yellow] Run [magenta]octopal configure[/magenta] first.")
         raise typer.Exit(code=1)
 
     if name == "google":
-        _print_google_auth_setup_help()
-        resolved_client_id = client_id or typer.prompt(
-            "Your Google OAuth Desktop App client ID"
-        )
-        resolved_client_secret = client_secret or typer.prompt(
-            "Your Google OAuth Desktop App client secret",
-            hide_input=True,
-        )
+        if not json_output:
+            _print_google_auth_setup_help()
+        if client_id is None and json_output:
+            fail("Missing Google OAuth client ID.")
+        if client_secret is None and json_output:
+            fail("Missing Google OAuth client secret.")
+        resolved_client_id = client_id or typer.prompt("Your Google OAuth Desktop App client ID")
+        resolved_client_secret = client_secret or typer.prompt("Your Google OAuth Desktop App client secret", hide_input=True)
         asyncio.run(
             connector.configure(
                 {
@@ -1622,24 +1635,28 @@ def connector_auth(
             )
         )
     elif name == "github":
-        _print_github_auth_setup_help()
-        resolved_token = token or typer.prompt(
-            "Your GitHub personal access token",
-            hide_input=True,
-        )
+        if not json_output:
+            _print_github_auth_setup_help()
+        if token is None and json_output:
+            fail("Missing GitHub personal access token.")
+        resolved_token = token or typer.prompt("Your GitHub personal access token", hide_input=True)
         asyncio.run(connector.configure({"token": resolved_token}))
 
     result = asyncio.run(connector.authorize())
     if result.get("status") == "manual_required" and name == "google":
+        if json_output or not manual_fallback:
+            fail(str(result.get("error") or result.get("message") or "Manual Google authorization is required."), payload=result)
         start = asyncio.run(connector.begin_manual_authorize())
         _print_google_headless_auth_help(start["auth_url"])
         authorization_response = typer.prompt("Authorization response URL")
         result = asyncio.run(connector.complete_manual_authorize(authorization_response))
 
     if result.get("status") != "success":
-        console.print(f"[bold red]Authorization failed:[/bold red] {result.get('error', 'unknown error')}")
-        raise typer.Exit(code=1)
+        fail(str(result.get("error", "unknown error")), payload=result)
 
+    if json_output:
+        console.print(json.dumps(result, ensure_ascii=False, indent=2))
+        return
     console.print(f"[bold green][V] {result['message']}[/bold green]")
     console.print("Run [magenta]octopal connector status[/magenta] to confirm readiness.")
 

@@ -77,6 +77,29 @@ type DesktopWhatsAppLinkStatus = {
   detail: string;
 };
 
+type DesktopConnectorName = "google" | "github";
+
+type DesktopConnectorStatusResult = {
+  ok: boolean;
+  connectors: Record<string, unknown>;
+  detail: string;
+};
+
+type DesktopConnectorAuthPayload = {
+  name: DesktopConnectorName;
+  clientId?: string;
+  clientSecret?: string;
+  token?: string;
+};
+
+type DesktopConnectorActionResult = {
+  ok: boolean;
+  name: DesktopConnectorName;
+  status?: string;
+  message: string;
+  detail: string;
+};
+
 type OctopalDesktopApi = {
   loadSettings: () => Promise<{
     language: "en" | "fr" | "es" | "zh";
@@ -105,6 +128,13 @@ type OctopalDesktopApi = {
   startOctopal: (installDir: string) => Promise<DesktopStartResult | DesktopStartFailure>;
   stopOctopal: (installDir: string) => Promise<DesktopStopResult | DesktopStopFailure>;
   getOctopalStatus: (installDir: string) => Promise<DesktopRuntimeStatus>;
+  getConnectorStatus: (installDir: string) => Promise<DesktopConnectorStatusResult>;
+  authorizeConnector: (installDir: string, payload: DesktopConnectorAuthPayload) => Promise<DesktopConnectorActionResult>;
+  disconnectConnector: (
+    installDir: string,
+    name: DesktopConnectorName,
+    forgetCredentials?: boolean,
+  ) => Promise<DesktopConnectorActionResult>;
   startWhatsAppLink: (installDir: string) => Promise<DesktopWhatsAppLinkStatus>;
   getWhatsAppLinkStatus: (installDir: string) => Promise<DesktopWhatsAppLinkStatus>;
   stopWhatsAppLink: (installDir: string) => Promise<DesktopWhatsAppLinkStatus>;
