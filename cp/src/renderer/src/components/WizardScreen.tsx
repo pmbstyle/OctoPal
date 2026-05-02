@@ -9,6 +9,7 @@ import { ChannelStep } from "./steps/ChannelStep";
 import { LlmStep } from "./steps/LlmStep";
 import { WorkerLlmStep } from "./steps/WorkerLlmStep";
 import { SearchStep } from "./steps/SearchStep";
+import { ConnectorsStep } from "./steps/ConnectorsStep";
 import { DashboardStep } from "./steps/DashboardStep";
 import { ReviewStep } from "./steps/ReviewStep";
 import type { CopyFn, StepId, Theme } from "../lib/appTypes";
@@ -31,11 +32,18 @@ export function WizardScreen({
   onChooseInstallDir,
   onProviderChange,
   onSearchProviderToggle,
+  onConnectorToggle,
+  onConnectorServiceToggle,
+  onAuthorizeConnector,
   onBack,
   onNext,
   onPrepareInstall,
   reviewBody,
   reviewActionLabel,
+  connectorStatus,
+  connectorBusy,
+  connectorMessage,
+  canAuthorizeConnectors,
 }: {
   copy: CopyFn;
   language: Language;
@@ -51,11 +59,18 @@ export function WizardScreen({
   onChooseInstallDir: () => void;
   onProviderChange: (providerId: string, target: "octo" | "worker") => void;
   onSearchProviderToggle: (providerId: "brave" | "firecrawl") => void;
+  onConnectorToggle: (name: DesktopConnectorName) => void;
+  onConnectorServiceToggle: (name: DesktopConnectorName, serviceId: string) => void;
+  onAuthorizeConnector: (name: DesktopConnectorName) => void;
   onBack: () => void;
   onNext: () => void;
   onPrepareInstall: () => void;
   reviewBody: string;
   reviewActionLabel: string;
+  connectorStatus: DesktopConnectorStatusResult | null;
+  connectorBusy: DesktopConnectorName | null;
+  connectorMessage: string;
+  canAuthorizeConnectors: boolean;
 }) {
   return (
     <motion.section
@@ -101,6 +116,21 @@ export function WizardScreen({
         {step === "search" ? (
           <SearchStep copy={copy} values={values} form={form} errors={errors} onSearchProviderToggle={onSearchProviderToggle} />
         ) : null}
+        {step === "connectors" ? (
+          <ConnectorsStep
+            copy={copy}
+            values={values}
+            form={form}
+            errors={errors}
+            connectorStatus={connectorStatus}
+            connectorBusy={connectorBusy}
+            connectorMessage={connectorMessage}
+            canAuthorizeConnectors={canAuthorizeConnectors}
+            onConnectorToggle={onConnectorToggle}
+            onConnectorServiceToggle={onConnectorServiceToggle}
+            onAuthorizeConnector={onAuthorizeConnector}
+          />
+        ) : null}
         {step === "dashboard" ? <DashboardStep copy={copy} values={values} form={form} errors={errors} /> : null}
         {step === "review" ? <ReviewStep body={reviewBody} copy={copy} values={values} /> : null}
       </section>
@@ -112,7 +142,10 @@ export function WizardScreen({
         </Button>
         {step !== "review" ? (
           <Button type="button" onClick={onNext}>
-            {step === "search" && !values.searchProvider ? copy("skip") : copy("next")}
+            {(step === "search" && !values.searchProvider) ||
+            (step === "connectors" && !values.googleConnectorEnabled && !values.githubConnectorEnabled)
+              ? copy("skip")
+              : copy("next")}
             <ArrowRight data-icon="inline-end" />
           </Button>
         ) : (

@@ -4,6 +4,11 @@ import { ReviewItem } from "../ReviewItem";
 import { StepSection } from "../StepSection";
 
 export function ReviewStep({ body, copy, values }: { body: string; copy: CopyFn; values: InstallForm }) {
+  const enabledConnectors = [
+    values.googleConnectorEnabled ? copy("googleConnector") : "",
+    values.githubConnectorEnabled ? copy("githubConnector") : "",
+  ].filter(Boolean);
+
   return (
     <StepSection body={body}>
       <div className="review-grid">
@@ -19,6 +24,10 @@ export function ReviewStep({ body, copy, values }: { body: string; copy: CopyFn;
               ? copy("noSearch")
               : searchProviders.find((item) => item.id === values.searchProvider)?.label ?? values.searchProvider
           }
+        />
+        <ReviewItem
+          label={copy("stepConnectors")}
+          value={enabledConnectors.length > 0 ? enabledConnectors.join(", ") : copy("connectorsSkipped")}
         />
         <ReviewItem
           label={copy("stepDashboard")}

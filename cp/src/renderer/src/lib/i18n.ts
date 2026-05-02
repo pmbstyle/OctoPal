@@ -17,6 +17,7 @@ export const messages = {
     speechLlm: "Choose the brain Octopal will use",
     speechWorkerLlm: "Pick the model your workers will use",
     speechSearch: "Add search tools if you want Octopal to browse better",
+    speechConnectors: "Connect the services Octopal can work with",
     speechDashboard: "Secure the local dashboard",
     speechReview: "Everything is ready to review",
     configure: "Configure Octopal",
@@ -30,6 +31,7 @@ export const messages = {
     stepChannel: "Channel",
     stepLlm: "LLM",
     stepTools: "Tools",
+    stepConnectors: "Connectors",
     stepDashboard: "Dashboard",
     stepReview: "Review",
     stepWorkerLlm: "Worker LLM",
@@ -79,6 +81,20 @@ export const messages = {
     firecrawlKey: "Firecrawl API key",
     noSearch: "Search skipped",
     chooseProvider: "Choose provider",
+    connectorsTitle: "Connect services",
+    connectorsBody: "Enable the accounts Octopal can use for mail, files, calendar, repositories, issues, and pull requests.",
+    googleConnector: "Google",
+    googleConnectorBody: "Gmail, Calendar, and Drive",
+    githubConnector: "GitHub",
+    githubConnectorBody: "Repositories, issues, and pull requests",
+    connectorServices: "Services",
+    googleClientId: "Google client ID",
+    googleClientSecret: "Google client secret",
+    githubToken: "GitHub token",
+    authorizeConnector: "Authorize",
+    authorizingConnector: "Authorizing",
+    connectorStatusUnavailable: "Status is available after installation.",
+    connectorsSkipped: "Connectors skipped",
     logoPlaceholder: "Logo",
     dashboard: "Enable web dashboard",
     dashboardBody: "Keep the dashboard available locally, protected by a token you can change later.",
@@ -515,5 +531,5 @@ export const messages = {
 } satisfies Record<Language, Record<string, string>>;
 
 export function t(language: Language, key: keyof (typeof messages)["en"]): string {
-  return messages[language][key] ?? messages.en[key];
+  return (messages[language] as Record<string, string>)[key] ?? messages.en[key];
 }

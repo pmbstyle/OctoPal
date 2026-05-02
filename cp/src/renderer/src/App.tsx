@@ -46,6 +46,9 @@ export function App() {
   const [whatsappLinkBusy, setWhatsappLinkBusy] = useState(false);
   const [whatsappLinkError, setWhatsappLinkError] = useState("");
   const [whatsappLinkStarted, setWhatsappLinkStarted] = useState(false);
+  const [connectorStatus, setConnectorStatus] = useState<DesktopConnectorStatusResult | null>(null);
+  const [connectorBusy, setConnectorBusy] = useState<DesktopConnectorName | null>(null);
+  const [connectorMessage, setConnectorMessage] = useState("");
   const [configurationMode, setConfigurationMode] = useState<"install" | "edit">("install");
   const [loadedConfigChannel, setLoadedConfigChannel] = useState<InstallForm["channel"] | null>(null);
   const [installState, setInstallState] = useState<DesktopInstallState>({
@@ -228,6 +231,16 @@ export function App() {
     }
   }, [runtimeInstallDir]);
 
+  const refreshConnectorStatus = useCallback(async () => {
+    if (!window.octopalDesktop || !runtimeInstallDir || !installState.installed) {
+      setConnectorStatus(null);
+      return;
+    }
+
+    const result = await window.octopalDesktop.getConnectorStatus(runtimeInstallDir);
+    setConnectorStatus(result);
+  }, [installState.installed, runtimeInstallDir]);
+
   useEffect(() => {
     void loadSettings().then(async (settings) => {
       setLanguage(settings.language);
@@ -288,6 +301,14 @@ export function App() {
 
     return () => window.clearInterval(interval);
   }, [installState.installed, refreshRuntimeStatus, screen, settingsLoaded]);
+
+  useEffect(() => {
+    if (!settingsLoaded || screen !== "wizard" || step !== "connectors") {
+      return;
+    }
+
+    void refreshConnectorStatus();
+  }, [refreshConnectorStatus, screen, settingsLoaded, step]);
 
   useEffect(() => {
     if (!settingsLoaded || !installState.installed || screen !== "done" || startStatus !== "idle") {
@@ -405,6 +426,78 @@ export function App() {
     }
   }
 
+  function toggleConnector(name: DesktopConnectorName) {
+    const enabledField = name === "google" ? "googleConnectorEnabled" : "githubConnectorEnabled";
+    const nextEnabled = !form.getValues(enabledField);
+    form.setValue(enabledField, nextEnabled, { shouldDirty: true, shouldValidate: true });
+    if (!nextEnabled) {
+      form.clearErrors(
+        name === "google"
+          ? ["googleConnectorEnabled", "googleConnectorServices", "googleClientId", "googleClientSecret"]
+          : ["githubConnectorEnabled", "githubConnectorServices", "githubToken"],
+      );
+    }
+  }
+
+  function toggleConnectorService(name: DesktopConnectorName, serviceId: string) {
+    if (name === "google") {
+      const current = form.getValues("googleConnectorServices");
+      const next = current.includes(serviceId as (typeof current)[number])
+        ? current.filter((item) => item !== serviceId)
+        : [...current, serviceId as (typeof current)[number]];
+      form.setValue("googleConnectorServices", next, { shouldDirty: true, shouldValidate: true });
+      return;
+    }
+
+    const current = form.getValues("githubConnectorServices");
+    const next = current.includes(serviceId as (typeof current)[number])
+      ? current.filter((item) => item !== serviceId)
+      : [...current, serviceId as (typeof current)[number]];
+    form.setValue("githubConnectorServices", next, { shouldDirty: true, shouldValidate: true });
+  }
+
+  async function authorizeConnector(name: DesktopConnectorName) {
+    if (!window.octopalDesktop || !runtimeInstallDir || !installState.installed) {
+      return;
+    }
+
+    const validationFields: Array<keyof InstallForm> =
+      name === "google"
+        ? ["googleConnectorEnabled", "googleConnectorServices", "googleClientId", "googleClientSecret"]
+        : ["githubConnectorEnabled", "githubConnectorServices", "githubToken"];
+    const ok = await form.trigger(validationFields);
+    if (!ok) {
+      return;
+    }
+
+    setConnectorBusy(name);
+    setConnectorMessage("");
+    try {
+      const currentValues = form.getValues();
+      const nextState = await window.octopalDesktop.saveOctopalConfig(buildOctopalConfig(currentValues));
+      setInstallState(nextState);
+      const result = await window.octopalDesktop.authorizeConnector(
+        runtimeInstallDir,
+        name === "google"
+          ? {
+              name,
+              clientId: currentValues.googleClientId,
+              clientSecret: currentValues.googleClientSecret,
+            }
+          : {
+              name,
+              token: currentValues.githubToken,
+            },
+      );
+      setConnectorMessage(result.message);
+      await refreshConnectorStatus();
+    } catch (error) {
+      setConnectorMessage(error instanceof Error ? error.message : "Connector authorization failed.");
+    } finally {
+      setConnectorBusy(null);
+    }
+  }
+
   async function chooseInstallDir() {
     try {
       const selected = window.octopalDesktop ? await window.octopalDesktop.chooseInstallDir() : "C:\\Octopal";
@@ -496,6 +589,8 @@ export function App() {
       setWhatsappLinkStatus(null);
       setWhatsappLinkError("");
       setWhatsappLinkStarted(false);
+      setConnectorStatus(null);
+      setConnectorMessage("");
       setScreen(shouldLinkWhatsApp ? "whatsapp-link" : "welcome");
     } catch (error) {
       setInstallError(error instanceof Error ? error.message : copy("installFailedBody"));
@@ -680,11 +775,18 @@ export function App() {
             onChooseInstallDir={() => void chooseInstallDir()}
             onProviderChange={updateProvider}
             onSearchProviderToggle={toggleSearchProvider}
+            onConnectorToggle={toggleConnector}
+            onConnectorServiceToggle={toggleConnectorService}
+            onAuthorizeConnector={(name) => void authorizeConnector(name)}
             onBack={previousStep}
             onNext={() => void nextStep()}
             onPrepareInstall={() => void submitReview()}
             reviewBody={configurationMode === "edit" ? copy("reviewBodyEdit") : copy("reviewBody")}
             reviewActionLabel={configurationMode === "edit" ? copy("saveConfiguration") : copy("startInstall")}
+            connectorStatus={connectorStatus}
+            connectorBusy={connectorBusy}
+            connectorMessage={connectorMessage}
+            canAuthorizeConnectors={installState.installed && configurationMode === "edit"}
           />
         ) : null}
 

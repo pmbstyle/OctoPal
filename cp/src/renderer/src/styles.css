@@ -856,6 +856,87 @@ p {
   accent-color: var(--primary);
 }
 
+.connector-panel {
+  display: grid;
+  gap: 18px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface-strong) 78%, transparent);
+}
+
+.connector-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connector-panel-head strong {
+  font-size: 16px;
+}
+
+.connector-services {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.service-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--muted-strong);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.service-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--primary);
+}
+
+.service-checkbox span {
+  display: grid;
+  place-items: center;
+  color: var(--primary);
+}
+
+.service-checkbox svg {
+  width: 16px;
+  height: 16px;
+}
+
+.connector-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.connector-form-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.connector-status-line,
+.connector-action-message {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.connector-status-line strong {
+  color: var(--muted-strong);
+}
+
 .review-item {
   padding: 18px;
   border: 1px solid var(--border);

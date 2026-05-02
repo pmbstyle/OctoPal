@@ -8,6 +8,7 @@ export const stepLabels: Record<StepId, keyof typeof messages.en> = {
   "octo-llm": "stepLlm",
   "worker-llm": "stepWorkerLlm",
   search: "stepTools",
+  connectors: "stepConnectors",
   dashboard: "stepDashboard",
   review: "stepReview",
 };
@@ -18,14 +19,15 @@ export const stepSpeech: Record<StepId, keyof typeof messages.en> = {
   "octo-llm": "speechLlm",
   "worker-llm": "speechWorkerLlm",
   search: "speechSearch",
+  connectors: "speechConnectors",
   dashboard: "speechDashboard",
   review: "speechReview",
 };
 
 export function getWizardSteps(useSameWorkerModel: boolean): StepId[] {
   return useSameWorkerModel
-    ? ["location", "channel", "octo-llm", "search", "dashboard", "review"]
-    : ["location", "channel", "octo-llm", "worker-llm", "search", "dashboard", "review"];
+    ? ["location", "channel", "octo-llm", "search", "connectors", "dashboard", "review"]
+    : ["location", "channel", "octo-llm", "worker-llm", "search", "connectors", "dashboard", "review"];
 }
 
 export function getValidationFields(step: StepId, values: InstallForm): Array<keyof InstallForm> {
@@ -54,6 +56,17 @@ export function getValidationFields(step: StepId, values: InstallForm): Array<ke
     if (values.searchProvider === "firecrawl") {
       return ["searchProvider", "firecrawlApiKey"];
     }
+  }
+
+  if (step === "connectors") {
+    const fields: Array<keyof InstallForm> = [];
+    if (values.googleConnectorEnabled) {
+      fields.push("googleConnectorEnabled", "googleConnectorServices", "googleClientId", "googleClientSecret");
+    }
+    if (values.githubConnectorEnabled) {
+      fields.push("githubConnectorEnabled", "githubConnectorServices", "githubToken");
+    }
+    return fields;
   }
 
   if (step === "dashboard") {
