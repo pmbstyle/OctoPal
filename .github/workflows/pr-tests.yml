@@ -30,3 +30,26 @@ jobs:
 
       - name: Run test suite
         run: uv run pytest
+
+  cp-desktop:
+    name: CP Desktop build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: cp/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: cp
+        run: npm ci
+
+      - name: Build desktop app
+        working-directory: cp
+        run: npm run build
