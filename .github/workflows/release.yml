@@ -97,18 +97,82 @@ jobs:
       - name: Run test suite
         run: uv run pytest
 
-  publish:
-    name: Publish GitHub release
-    runs-on: ubuntu-latest
-    needs:
-      - validate
-      - test
+  desktop:
+    name: Build desktop app (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    needs: validate
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            command: npm run dist:win
+            artifact: octopal-desktop-windows
+            path: cp/dist/*.exe
+          - name: macOS
+            os: macos-13
+            command: npm run dist:mac
+            artifact: octopal-desktop-macos
+            path: cp/dist/*.dmg
+          - name: Linux
+            os: ubuntu-latest
+            command: npm run dist:linux
+            artifact: octopal-desktop-linux
+            path: cp/dist/*.AppImage
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
         with:
           ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: cp/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: cp
+        run: npm ci
+
+      - name: Set desktop release version
+        working-directory: cp
+        run: npm pkg set version="${{ needs.validate.outputs.version }}"
+
+      - name: Build desktop installer
+        working-directory: cp
+        run: ${{ matrix.command }}
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.path }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs:
+      - validate
+      - test
+      - desktop
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: octopal-desktop-*
+          merge-multiple: true
+          path: release-assets
 
       - name: Create GitHub release
         env:
@@ -117,12 +181,22 @@ jobs:
           VERSION: ${{ needs.validate.outputs.version }}
         shell: bash
         run: |
+          shopt -s nullglob
+          ASSETS=(release-assets/*)
+
+          if [[ "${#ASSETS[@]}" -eq 0 ]]; then
+            echo "No desktop release assets were downloaded"
+            exit 1
+          fi
+
           if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "Release ${TAG} already exists; skipping."
+            echo "Release ${TAG} already exists; uploading desktop assets."
+            gh release upload "${TAG}" "${ASSETS[@]}" --clobber
             exit 0
           fi
 
           gh release create "${TAG}" \
+            "${ASSETS[@]}" \
             --verify-tag \
             --title "Octopal ${VERSION}" \
             --generate-notes
