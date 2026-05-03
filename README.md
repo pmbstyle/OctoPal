@@ -29,7 +29,10 @@ By default, workers use the Docker launcher and get their own disposable runtime
 - 🧭 [Why I Built Octopal](#-why-i-built-octopal)
 - 🔒 [Security model](#-security-model)
 - 🪛 [What it can do](#-what-it-can-do) 
-- 🚀 [Quick start](#-quick-start) 
+- 🚀 [Quick start](#-quick-start)
+  - 💻 [Install on a Desktop (beta)](#-install-on-a-desktop-beta)
+  - ☁️ [Install on a Server](#%EF%B8%8F-install-on-a-server)
+  - ⚒️ [Manual installation](#%EF%B8%8F-manual-setup)
 - ✨ [Key features](#-key-features)
 
 
@@ -137,7 +140,20 @@ Octo:
 
 ## 🚀 Quick Start
 
-### Install with one line
+### 💻 Install on a Desktop (beta)
+
+👉 **[Download the latest release](https://github.com/pmbstyle/Octopal/releases/latest)**
+
+<!-- STABLE_DOWNLOADS -->
+| Platform | Download |
+|----------|----------|
+| **Windows** | [Octopal-Desktop-2026.5.3-win-x64.exe](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.03/Octopal-Desktop-2026.5.3-win-x64.exe) |
+| **macOS** | [Octopal-Desktop-2026.5.3-mac-x64.dmg](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.03/Octopal-Desktop-2026.5.3-mac-x64.dmg) |
+| **Linux** | [Octopal-Desktop-2026.5.3-linux-x86_64.AppImage](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.03/Octopal-Desktop-2026.5.3-linux-x86_64.AppImage) |
+<!-- STABLE_DOWNLOADS_END -->
+
+
+### ☁️ Install on a Server
 
 macOS/Linux:
 
@@ -153,7 +169,7 @@ irm https://octopal.ca/octopal.ps1 | iex
 
 Complete configuration in CLI. You can always change the configuration using `uv run octopal configure` command.
 
-### Optional: WhatsApp setup
+**Optional: WhatsApp setup**
 
 After you configure your WhatsApp number in the config link Octopal as a new device
 
@@ -161,7 +177,7 @@ After you configure your WhatsApp number in the config link Octopal as a new dev
 uv run octopal whatsapp link
 ```
 
-### Open the web dashboard
+**Open the web dashboard**
 
 After bootstrap, start Octopal and then open the dashboard in your browser:
 
@@ -184,7 +200,7 @@ Then enable the dashboard bundle in `config.json` by setting `"gateway": { "weba
 
 <img alt="Octopal dashboard" src="https://github.com/user-attachments/assets/2ef52921-a563-41d3-a4c8-8f01faf8e93b" />
 
-## ⚒️ Manual setup
+### ⚒️ Manual setup
 
 If you do not want the bootstrap script, use the manual path below.
 
@@ -214,13 +230,13 @@ uv run octopal configure
 
 `configure` creates or updates `config.json` and bootstraps workspace files if missing.
 
-### Configuration model
+**Configuration model**
 
 `config.json` is the configuration file.
 
 - `uv run octopal configure` writes the structured config there.
 
-### Start
+**Start**
 
 ```bash
 # background mode
@@ -230,7 +246,7 @@ uv run octopal start
 uv run octopal start --foreground
 ```
 
-## Core Commands
+**Core Commands**
 
 ```bash
 uv run octopal start
@@ -240,7 +256,7 @@ uv run octopal status
 uv run octopal update
 ```
 
-## Docker Worker Launcher
+**Docker Worker Launcher**
 
 Docker workers are the default and recommended runtime. You can build the worker image up front:
 
