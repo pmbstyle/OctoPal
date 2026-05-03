@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type OpenDialogOptions } from "electron";
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -280,13 +281,32 @@ async function saveInstalledConfig(config: unknown): Promise<InstallState> {
   return getInstallState();
 }
 
+function resolveBrandIcon(): string | undefined {
+  const primaryIcon = process.platform === "darwin" ? "octo.png" : "octo.ico";
+  const filenames = [primaryIcon, primaryIcon === "octo.ico" ? "octo.png" : "octo.ico"];
+  const roots = [process.cwd(), app.getAppPath(), process.resourcesPath];
+
+  for (const root of roots) {
+    for (const filename of filenames) {
+      const candidate = join(root, "assets", filename);
+      if (existsSync(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return undefined;
+}
+
 function createWindow(): void {
+  const icon = resolveBrandIcon();
   const mainWindow = new BrowserWindow({
     width: 1180,
     height: 820,
     minWidth: 920,
     minHeight: 680,
     title: "Octopal Desktop",
+    ...(icon ? { icon } : {}),
     backgroundColor: "#00000000",
     frame: false,
     transparent: true,

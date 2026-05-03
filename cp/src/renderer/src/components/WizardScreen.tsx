@@ -38,8 +38,13 @@ export function WizardScreen({
   onBack,
   onNext,
   onPrepareInstall,
+  onRefreshPrerequisites,
   reviewBody,
   reviewActionLabel,
+  preflightChecks,
+  preflightStatus,
+  preflightError,
+  preflightHasBlockingIssue,
   connectorStatus,
   connectorBusy,
   connectorMessage,
@@ -67,8 +72,13 @@ export function WizardScreen({
   onBack: () => void;
   onNext: () => void;
   onPrepareInstall: () => void;
+  onRefreshPrerequisites: () => void;
   reviewBody: string;
   reviewActionLabel: string;
+  preflightChecks: DesktopPrerequisiteCheck[];
+  preflightStatus: "idle" | "checking" | "ready" | "failed";
+  preflightError: string;
+  preflightHasBlockingIssue: boolean;
   connectorStatus: DesktopConnectorStatusResult | null;
   connectorBusy: DesktopConnectorName | null;
   connectorMessage: string;
@@ -79,7 +89,7 @@ export function WizardScreen({
   return (
     <motion.section
       key={step}
-      className="setup-screen"
+      className={`setup-screen setup-screen-${step}`}
       initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, y: -16 }}
@@ -138,7 +148,17 @@ export function WizardScreen({
           />
         ) : null}
         {step === "dashboard" ? <DashboardStep copy={copy} values={values} form={form} errors={errors} /> : null}
-        {step === "review" ? <ReviewStep body={reviewBody} copy={copy} values={values} /> : null}
+        {step === "review" ? (
+          <ReviewStep
+            body={reviewBody}
+            copy={copy}
+            values={values}
+            preflightChecks={preflightChecks}
+            preflightStatus={preflightStatus}
+            preflightError={preflightError}
+            onRefreshPrerequisites={onRefreshPrerequisites}
+          />
+        ) : null}
       </section>
 
       <footer className="setup-footer">
@@ -155,7 +175,7 @@ export function WizardScreen({
             <ArrowRight data-icon="inline-end" />
           </Button>
         ) : (
-          <Button type="button" onClick={onPrepareInstall}>
+          <Button type="button" onClick={onPrepareInstall} disabled={preflightStatus === "checking" || preflightHasBlockingIssue}>
             <Check data-icon="inline-start" />
             {reviewActionLabel}
           </Button>

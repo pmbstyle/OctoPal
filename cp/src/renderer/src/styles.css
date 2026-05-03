@@ -294,11 +294,6 @@ button {
   line-height: 1.45;
 }
 
-.welcome-requirements {
-  width: min(760px, calc(100vw - 48px));
-  margin: 0 0 18px;
-}
-
 .requirements-head strong,
 .requirements-head small {
   display: block;
@@ -663,8 +658,7 @@ p {
   color: var(--danger);
 }
 
-.requirements-card,
-.config-preview {
+.requirements-card {
   margin-top: 24px;
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -752,6 +746,17 @@ p {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 12px;
+}
+
+.review-error {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 62%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface-strong));
+  color: var(--foreground);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .status-dot {
@@ -1017,9 +1022,9 @@ p {
 }
 
 .review-item {
-  padding: 18px;
+  padding: 14px 16px;
   border: 1px solid var(--border);
-  border-radius: 16px;
+  border-radius: 12px;
   background: var(--surface-strong);
 }
 
@@ -1030,19 +1035,13 @@ p {
 
 .review-item small {
   color: var(--muted);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  font-size: 11px;
 }
 
 .review-item strong {
   overflow-wrap: anywhere;
-}
-
-.config-preview {
-  max-height: 260px;
-  padding: 18px;
-  overflow: auto;
-  color: var(--muted-strong);
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .wizard-footer {
@@ -1200,6 +1199,142 @@ p {
 
 .setup-footer .button {
   min-width: 160px;
+}
+
+.setup-screen-connectors {
+  padding-top: 14px;
+  padding-bottom: 16px;
+}
+
+.setup-screen-connectors .setup-header {
+  min-height: 86px;
+}
+
+.setup-screen-connectors .setup-mascot-wrap {
+  width: min(620px, calc(100% - 360px));
+}
+
+.setup-screen-connectors .setup-octo {
+  width: 72px;
+}
+
+.setup-screen-connectors .step-bubble {
+  max-width: 390px;
+  min-height: 60px;
+  padding: 13px 22px;
+  font-size: 18px;
+}
+
+.setup-screen-connectors .setup-content {
+  padding-top: 8px;
+  padding-bottom: 6px;
+  overflow: hidden;
+  justify-content: center;
+}
+
+.setup-screen-connectors .clean-step-section {
+  margin: 0 auto;
+  padding-bottom: 0;
+}
+
+.setup-screen-connectors .clean-heading {
+  margin-bottom: 18px;
+}
+
+.setup-screen-connectors .clean-heading p {
+  max-width: 760px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.setup-screen-connectors .connectors-grid {
+  gap: 12px;
+}
+
+.setup-screen-connectors .toggle-card {
+  min-height: 88px;
+  padding: 14px 16px;
+}
+
+.setup-screen-connectors .toggle-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+}
+
+.setup-screen-connectors .toggle-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.setup-screen-connectors .toggle-card small {
+  margin-top: 5px;
+  line-height: 1.3;
+}
+
+.setup-screen-connectors .connector-panel {
+  gap: 12px;
+  max-width: 760px;
+  margin: 14px auto 0;
+  padding: 14px 18px;
+  border-radius: 16px;
+}
+
+.setup-screen-connectors .connector-panel-head strong {
+  font-size: 15px;
+}
+
+.setup-screen-connectors .connector-panel-head .button {
+  height: 42px;
+}
+
+.setup-screen-connectors .connector-services {
+  gap: 8px;
+}
+
+.setup-screen-connectors .service-checkbox {
+  min-height: 32px;
+  padding: 0 10px;
+  gap: 7px;
+  border-radius: 10px;
+  font-size: 12px;
+}
+
+.setup-screen-connectors .service-checkbox input {
+  width: 14px;
+  height: 14px;
+}
+
+.setup-screen-connectors .service-checkbox svg {
+  width: 14px;
+  height: 14px;
+}
+
+.setup-screen-connectors .connector-form {
+  gap: 12px;
+}
+
+.setup-screen-connectors .field {
+  gap: 6px;
+}
+
+.setup-screen-connectors .field-label,
+.setup-screen-connectors .field-hint {
+  font-size: 11px;
+}
+
+.setup-screen-connectors .connector-panel .input {
+  height: 42px;
+}
+
+.setup-screen-connectors .connector-status-line {
+  min-height: 42px;
+  padding: 8px 12px;
+  line-height: 1.35;
+}
+
+.setup-screen-connectors .setup-footer {
+  padding-top: 10px;
 }
 
 .channel-grid {
@@ -1387,7 +1522,7 @@ p {
   margin: 0 auto;
 }
 
-.config-preview {
+.review-grid + .requirements-card {
   max-width: 900px;
   margin-right: auto;
   margin-left: auto;
