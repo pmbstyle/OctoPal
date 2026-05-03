@@ -1,20 +1,11 @@
-import { AlertTriangle, ArrowRight, CheckCircle2, ChevronDown, Globe2, Moon, Play, RefreshCw, Settings, Sun } from "lucide-react";
+import { ArrowRight, Globe2, Moon, Play, Settings, Sun } from "lucide-react";
 import { motion } from "framer-motion";
-import { useState } from "react";
 
 import octoImage from "../../../../assets/octo.png";
 import { languages, type Language } from "../lib/i18n";
 import type { CopyFn, Theme } from "../lib/appTypes";
 import { Button } from "./Button";
 import { LabeledSelect } from "./LabeledSelect";
-
-function preflightHint(copy: CopyFn, check: DesktopPrerequisiteCheck) {
-  if (check.ok) {
-    return copy("available");
-  }
-
-  return check.required ? copy("required") : copy("recommended");
-}
 
 export function WelcomeScreen({
   copy,
@@ -24,12 +15,7 @@ export function WelcomeScreen({
   onThemeChange,
   onStart,
   onStartOctopal,
-  onRefreshPrerequisites,
   installed,
-  canConfigure,
-  preflightChecks,
-  preflightStatus,
-  preflightError,
 }: {
   copy: CopyFn;
   language: Language;
@@ -38,32 +24,8 @@ export function WelcomeScreen({
   onThemeChange: (theme: Theme) => void;
   onStart: () => void;
   onStartOctopal: () => void;
-  onRefreshPrerequisites: () => void;
   installed: boolean;
-  canConfigure: boolean;
-  preflightChecks: DesktopPrerequisiteCheck[];
-  preflightStatus: "idle" | "checking" | "ready" | "failed";
-  preflightError: string;
 }) {
-  const [requirementsExpanded, setRequirementsExpanded] = useState(false);
-  const hasBlockingIssue = preflightChecks.some((check) => check.required && !check.ok);
-  const showPreflight = preflightStatus !== "idle" || preflightChecks.length > 0 || preflightError;
-  const availableCount = preflightChecks.filter((check) => check.ok).length;
-  const missingRequiredCount = preflightChecks.filter((check) => check.required && !check.ok).length;
-  const recommendedCount = preflightChecks.filter((check) => !check.required && !check.ok).length;
-  const preflightSummary =
-    preflightStatus === "checking"
-      ? copy("checking")
-      : preflightError
-        ? copy("preflightFailed")
-        : [
-            availableCount ? `${availableCount} ${copy("available")}` : "",
-            missingRequiredCount ? `${missingRequiredCount} ${copy("missing")}` : "",
-            recommendedCount ? `${recommendedCount} ${copy("recommended")}` : "",
-          ]
-            .filter(Boolean)
-            .join(" · ") || copy("preflightReady");
-
   return (
     <motion.section
       key="welcome"
@@ -95,60 +57,6 @@ export function WelcomeScreen({
           ]}
         />
       </div>
-      {showPreflight ? (
-        <section
-          className={requirementsExpanded ? "requirements-card requirements-card-expanded welcome-requirements" : "requirements-card welcome-requirements"}
-          aria-live="polite"
-        >
-          <div className="requirements-head">
-            <div>
-              <strong>{copy("requirements")}</strong>
-              <small>
-                {requirementsExpanded
-                  ? preflightStatus === "checking"
-                    ? copy("checking")
-                    : hasBlockingIssue
-                      ? copy("installBlocked")
-                      : copy("preflightReady")
-                  : preflightSummary}
-              </small>
-            </div>
-            <div className="requirements-actions">
-              <Button
-                type="button"
-                variant="ghost"
-                className="requirements-toggle"
-                aria-expanded={requirementsExpanded}
-                onClick={() => setRequirementsExpanded((current) => !current)}
-              >
-                <ChevronDown data-icon="inline-start" />
-                {requirementsExpanded ? copy("hideDetails") : copy("showDetails")}
-              </Button>
-              <Button type="button" variant="ghost" onClick={onRefreshPrerequisites} disabled={preflightStatus === "checking"}>
-                <RefreshCw data-icon="inline-start" />
-                {copy("refresh")}
-              </Button>
-            </div>
-          </div>
-          {requirementsExpanded && preflightError ? (
-            <div className="welcome-error" role="alert">{preflightError}</div>
-          ) : null}
-          {requirementsExpanded && preflightChecks.length > 0 ? (
-            <motion.div className="requirements-grid" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
-              {preflightChecks.map((check) => (
-                <div className={check.ok ? "requirement requirement-ok" : "requirement requirement-missing"} key={check.id}>
-                  <div className="requirement-title">
-                    {check.ok ? <CheckCircle2 /> : <AlertTriangle />}
-                    <strong>{check.label}</strong>
-                  </div>
-                  <small>{preflightHint(copy, check)}</small>
-                  <p title={check.detail}>{check.detail}</p>
-                </div>
-              ))}
-            </motion.div>
-          ) : null}
-        </section>
-      ) : null}
       <div className={installed ? "welcome-actions" : undefined}>
         {installed ? (
           <Button
@@ -164,7 +72,6 @@ export function WelcomeScreen({
           className={installed ? "welcome-button welcome-action-button" : "welcome-button"}
           variant={installed ? "secondary" : "primary"}
           onClick={onStart}
-          disabled={!installed && !canConfigure}
         >
           {installed ? <Settings data-icon="inline-start" /> : null}
           {installed ? copy("modifyConfig") : copy("configure")}

@@ -72,10 +72,7 @@ export function App() {
   const step = steps[Math.min(stepIndex, steps.length - 1)] ?? "location";
   const copy = useMemo(() => (key: keyof typeof messages.en) => t(language, key), [language]);
   const runtimeInstallDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
-  const preflightHasBlockingIssue = useMemo(
-    () => preflightChecks.some((check) => check.required && !check.ok),
-    [preflightChecks],
-  );
+  const preflightHasBlockingIssue = useMemo(() => preflightChecks.some((check) => check.required && !check.ok), [preflightChecks]);
   const runtimeView = useMemo(() => {
     if (startStatus === "starting") {
       return {
@@ -258,14 +255,6 @@ export function App() {
   }, [form]);
 
   useEffect(() => {
-    if (!settingsLoaded) {
-      return;
-    }
-
-    void refreshPrerequisites();
-  }, [refreshPrerequisites, settingsLoaded]);
-
-  useEffect(() => {
     document.documentElement.dataset.theme = getPreferredTheme(theme);
   }, [theme]);
 
@@ -311,6 +300,14 @@ export function App() {
 
     void refreshConnectorStatus();
   }, [refreshConnectorStatus, screen, settingsLoaded, step]);
+
+  useEffect(() => {
+    if (!settingsLoaded || screen !== "wizard" || step !== "review") {
+      return;
+    }
+
+    void refreshPrerequisites();
+  }, [refreshPrerequisites, screen, settingsLoaded, step]);
 
   useEffect(() => {
     if (!settingsLoaded || !installState.installed || screen !== "done" || startStatus !== "idle") {
@@ -768,12 +765,7 @@ export function App() {
             onThemeChange={setTheme}
             onStart={() => void openConfiguration()}
             onStartOctopal={() => void startInstalledOctopal()}
-            onRefreshPrerequisites={() => void refreshPrerequisites()}
             installed={installState.installed}
-            canConfigure={!preflightHasBlockingIssue}
-            preflightChecks={preflightChecks}
-            preflightStatus={preflightStatus}
-            preflightError={preflightError}
           />
         ) : null}
 
@@ -800,8 +792,13 @@ export function App() {
             onBack={previousStep}
             onNext={() => void nextStep()}
             onPrepareInstall={() => void submitReview()}
+            onRefreshPrerequisites={() => void refreshPrerequisites()}
             reviewBody={configurationMode === "edit" ? copy("reviewBodyEdit") : copy("reviewBody")}
             reviewActionLabel={configurationMode === "edit" ? copy("saveConfiguration") : copy("startInstall")}
+            preflightChecks={preflightChecks}
+            preflightStatus={preflightStatus}
+            preflightError={preflightError}
+            preflightHasBlockingIssue={preflightHasBlockingIssue}
             connectorStatus={connectorStatus}
             connectorBusy={connectorBusy}
             connectorMessage={connectorMessage}
