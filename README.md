@@ -152,6 +152,8 @@ Octo:
 | **Linux** | [Octopal-Desktop-2026.5.3-linux-x86_64.AppImage](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.03/Octopal-Desktop-2026.5.3-linux-x86_64.AppImage) |
 <!-- STABLE_DOWNLOADS_END -->
 
+<img alt="Octopal Desktop" src="https://github.com/user-attachments/assets/a995f7ab-28a6-45ee-b63a-2a7c45dedd3b" />
+
 
 ### ☁️ Install on a Server
 
