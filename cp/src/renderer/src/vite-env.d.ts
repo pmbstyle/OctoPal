@@ -140,6 +140,59 @@ type DesktopConnectorActionResult = {
   detail: string;
 };
 
+type DesktopDashboardWorkerRun = {
+  id?: string;
+  template_name?: string;
+  template_id?: string;
+  status?: string;
+  task?: string;
+  updated_at?: string;
+  summary?: string;
+  error?: string;
+  result_preview?: string;
+};
+
+type DesktopDashboardSnapshot = {
+  ok: boolean;
+  detail: string;
+  generatedAt?: string;
+  baseUrl?: string;
+  load?: {
+    activeWorkers: number;
+    queueDepth: number;
+    octoQueue: number;
+  };
+  octo?: {
+    state: string;
+    headline: string;
+    detail: string;
+    latestAction: string;
+  };
+  workers?: {
+    recent: DesktopDashboardWorkerRun[];
+  };
+  system?: {
+    services: Array<{ id: string; name: string; status: string; reason: string }>;
+    logs: Array<{ timestamp?: string; level?: string; service?: string; event?: string }>;
+  };
+};
+
+type DesktopWorkerTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  system_prompt: string;
+  available_tools: string[];
+  required_permissions: string[];
+  model?: string | null;
+  max_thinking_steps: number;
+  default_timeout_seconds: number;
+  can_spawn_children: boolean;
+  allowed_child_templates: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
 type OctopalDesktopApi = {
   loadSettings: () => Promise<{
     language: "en" | "fr" | "es" | "zh";
@@ -170,6 +223,14 @@ type OctopalDesktopApi = {
   getOctopalStatus: (installDir: string) => Promise<DesktopRuntimeStatus>;
   checkOctopalUpdate: (installDir: string) => Promise<DesktopUpdateStatus>;
   updateOctopal: (installDir: string) => Promise<DesktopUpdateResult>;
+  getDashboardSnapshot: (installDir: string) => Promise<DesktopDashboardSnapshot>;
+  getWorkerTemplates: (installDir: string) => Promise<DesktopWorkerTemplate[]>;
+  saveWorkerTemplate: (
+    installDir: string,
+    template: DesktopWorkerTemplate,
+    mode: "create" | "update",
+  ) => Promise<DesktopWorkerTemplate>;
+  deleteWorkerTemplate: (installDir: string, templateId: string) => Promise<void>;
   getAppUpdateStatus: () => Promise<DesktopAppUpdateStatus>;
   checkAppUpdate: () => Promise<DesktopAppUpdateStatus>;
   downloadAppUpdate: () => Promise<DesktopAppUpdateStatus>;

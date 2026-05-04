@@ -56,6 +56,59 @@ type PrerequisiteCheck = {
   detail: string;
 };
 
+type DashboardWorkerRun = {
+  id?: string;
+  template_name?: string;
+  template_id?: string;
+  status?: string;
+  task?: string;
+  updated_at?: string;
+  summary?: string;
+  error?: string;
+  result_preview?: string;
+};
+
+type DesktopDashboardSnapshot = {
+  ok: boolean;
+  detail: string;
+  generatedAt?: string;
+  baseUrl?: string;
+  load?: {
+    activeWorkers: number;
+    queueDepth: number;
+    octoQueue: number;
+  };
+  octo?: {
+    state: string;
+    headline: string;
+    detail: string;
+    latestAction: string;
+  };
+  workers?: {
+    recent: DashboardWorkerRun[];
+  };
+  system?: {
+    services: Array<{ id: string; name: string; status: string; reason: string }>;
+    logs: Array<{ timestamp?: string; level?: string; service?: string; event?: string }>;
+  };
+};
+
+type DesktopWorkerTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  system_prompt: string;
+  available_tools: string[];
+  required_permissions: string[];
+  model?: string | null;
+  max_thinking_steps: number;
+  default_timeout_seconds: number;
+  can_spawn_children: boolean;
+  allowed_child_templates: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
 const defaultSettings: DesktopSettings = {
   language: "en",
   theme: "system",
@@ -278,6 +331,168 @@ async function loadInstalledConfig(): Promise<unknown> {
   return sanitizeConfigForRenderer(JSON.parse(await readFile(state.configPath, "utf8")));
 }
 
+function stringValue(value: unknown, fallback = ""): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function numberValue(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function listValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function formatEventTitle(event: unknown): string {
+  const raw = stringValue(event, "No recent activity");
+  const normalized = raw.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+async function loadRawConfigForInstall(installDir: string): Promise<Record<string, unknown>> {
+  const configPath = join(installDir, "config.json");
+  return cloneJsonRecord(JSON.parse(await readFile(configPath, "utf8")));
+}
+
+function dashboardBaseUrl(config: Record<string, unknown>): string {
+  const gateway = recordValue(config.gateway);
+  const host = stringValue(gateway.host, "127.0.0.1");
+  const reachableHost = host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host;
+  const port = numberValue(gateway.port, 8798);
+  return `http://${reachableHost}:${port}`;
+}
+
+async function fetchDashboardJson<T>(installDir: string, path: string, init?: RequestInit): Promise<T> {
+  const config = await loadRawConfigForInstall(installDir);
+  const gateway = recordValue(config.gateway);
+  const token = stringValue(gateway.dashboard_token);
+  const headers: HeadersInit = {
+    "content-type": "application/json",
+    ...(token ? { "x-octopal-token": token } : {}),
+    ...(init?.headers ?? {}),
+  };
+  const url = `${dashboardBaseUrl(config)}${path}`;
+  const response = await fetch(url, { ...init, headers });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(detail || `Dashboard request failed: ${response.status}`);
+  }
+  return (await response.json()) as T;
+}
+
+function queryPath(path: string): string {
+  const query = new URLSearchParams({
+    window_minutes: "60",
+    service: "all",
+    environment: "all",
+  });
+  return `${path}?${query.toString()}`;
+}
+
+async function getDesktopDashboardSnapshot(installDir: string): Promise<DesktopDashboardSnapshot> {
+  try {
+    const [overview, workers, octo, system] = await Promise.all([
+      fetchDashboardJson<Record<string, unknown>>(installDir, queryPath("/api/dashboard/v2/overview")),
+      fetchDashboardJson<Record<string, unknown>>(installDir, `${queryPath("/api/dashboard/v2/workers")}&last=16`),
+      fetchDashboardJson<Record<string, unknown>>(installDir, queryPath("/api/dashboard/v2/octo")),
+      fetchDashboardJson<Record<string, unknown>>(installDir, queryPath("/api/dashboard/v2/system")),
+    ]);
+
+    const overviewHealth = recordValue(overview.health);
+    const kpis = recordValue(overview.kpis);
+    const workersNode = recordValue(workers.workers);
+    const octoNode = recordValue(octo.octo);
+    const octoHealth = recordValue(octo.health);
+    const systemLogs = listValue(system.logs) as Array<Record<string, unknown>>;
+    const recentOctoLog =
+      systemLogs.find((entry) => stringValue(entry.service).toLowerCase().includes("octo")) ?? systemLogs[0];
+    const services = listValue(system.services).map((entry, index) => {
+      const service = recordValue(entry);
+      return {
+        id: stringValue(service.id, stringValue(service.name, `service-${index}`)),
+        name: stringValue(service.name, stringValue(service.id, `Service ${index + 1}`)),
+        status: stringValue(service.status, "unknown"),
+        reason: stringValue(service.reason),
+      };
+    });
+    const config = await loadRawConfigForInstall(installDir);
+
+    return {
+      ok: true,
+      detail: stringValue(overviewHealth.summary, "Dashboard data loaded."),
+      generatedAt: stringValue(overview.generated_at),
+      baseUrl: dashboardBaseUrl(config),
+      load: {
+        activeWorkers: numberValue(workersNode.running),
+        queueDepth: numberValue(recordValue(kpis.queue_depth).value),
+        octoQueue: numberValue(octoNode.followup_queues) + numberValue(octoNode.internal_queues),
+      },
+      octo: {
+        state: stringValue(octoNode.state, "idle"),
+        headline: recentOctoLog ? formatEventTitle(recentOctoLog.event) : stringValue(octoHealth.summary, "Octo is idle"),
+        detail: recentOctoLog
+          ? `${stringValue(recentOctoLog.service, "runtime")} · ${stringValue(recentOctoLog.level, "info")}`
+          : listValue(octoHealth.reasons).map((item) => String(item)).join(" · "),
+        latestAction: recentOctoLog ? formatEventTitle(recentOctoLog.event) : "No recent activity",
+      },
+      workers: {
+        recent: listValue(workersNode.recent).map((entry) => recordValue(entry) as DashboardWorkerRun),
+      },
+      system: {
+        services,
+        logs: systemLogs.slice(0, 12).map((entry) => ({
+          timestamp: stringValue(entry.timestamp),
+          level: stringValue(entry.level, "info"),
+          service: stringValue(entry.service, "runtime"),
+          event: stringValue(entry.event),
+        })),
+      },
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      detail: error instanceof Error ? error.message : "Dashboard data is unavailable.",
+    };
+  }
+}
+
+async function getDesktopWorkerTemplates(installDir: string): Promise<DesktopWorkerTemplate[]> {
+  const payload = await fetchDashboardJson<{ templates?: DesktopWorkerTemplate[] }>(
+    installDir,
+    "/api/dashboard/worker-templates",
+  );
+  return payload.templates ?? [];
+}
+
+async function saveDesktopWorkerTemplate(
+  installDir: string,
+  template: DesktopWorkerTemplate,
+  mode: "create" | "update",
+): Promise<DesktopWorkerTemplate> {
+  const path =
+    mode === "create"
+      ? "/api/dashboard/worker-templates"
+      : `/api/dashboard/worker-templates/${encodeURIComponent(template.id)}`;
+  const payload = await fetchDashboardJson<{ template?: DesktopWorkerTemplate }>(installDir, path, {
+    method: mode === "create" ? "POST" : "PUT",
+    body: JSON.stringify(template),
+  });
+  return payload.template ?? template;
+}
+
+async function deleteDesktopWorkerTemplate(installDir: string, templateId: string): Promise<void> {
+  await fetchDashboardJson<{ status: string }>(
+    installDir,
+    `/api/dashboard/worker-templates/${encodeURIComponent(templateId)}`,
+    { method: "DELETE" },
+  );
+}
+
 async function saveInstalledConfig(config: unknown): Promise<InstallState> {
   const state = await getInstallState();
   if (!state.installed) {
@@ -485,6 +700,20 @@ ipcMain.handle("desktop:stop-octopal", async (_event, installDir: string) => sto
 ipcMain.handle("desktop:get-octopal-status", async (_event, installDir: string) => getOctopalStatusSafely(installDir));
 ipcMain.handle("desktop:check-octopal-update", async (_event, installDir: string) => checkOctopalUpdateSafely(installDir));
 ipcMain.handle("desktop:update-octopal", async (_event, installDir: string) => updateOctopalSafely(installDir));
+ipcMain.handle("desktop:get-dashboard-snapshot", async (_event, installDir: string) =>
+  getDesktopDashboardSnapshot(installDir),
+);
+ipcMain.handle("desktop:get-worker-templates", async (_event, installDir: string) =>
+  getDesktopWorkerTemplates(installDir),
+);
+ipcMain.handle(
+  "desktop:save-worker-template",
+  async (_event, installDir: string, template: DesktopWorkerTemplate, mode: "create" | "update") =>
+    saveDesktopWorkerTemplate(installDir, template, mode),
+);
+ipcMain.handle("desktop:delete-worker-template", async (_event, installDir: string, templateId: string) =>
+  deleteDesktopWorkerTemplate(installDir, templateId),
+);
 ipcMain.handle("desktop:get-app-update-status", () => getDesktopAppUpdateStatus());
 ipcMain.handle("desktop:check-app-update", () => checkDesktopAppUpdate());
 ipcMain.handle("desktop:download-app-update", () => downloadDesktopAppUpdate());
