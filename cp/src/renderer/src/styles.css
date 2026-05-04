@@ -1888,6 +1888,12 @@ p {
   object-fit: contain;
 }
 
+.dashboard-octo-stack {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+}
+
 .dashboard-octo-small {
   width: 68px;
   height: 68px;
@@ -2606,6 +2612,10 @@ p {
   .dashboard-octo-small {
     width: 68px;
     height: 68px;
+  }
+
+  .dashboard-octo-stack {
+    gap: 4px;
   }
 
   .dashboard-actions {

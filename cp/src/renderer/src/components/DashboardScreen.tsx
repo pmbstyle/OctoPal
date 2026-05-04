@@ -344,7 +344,10 @@ export function DashboardScreen({
     return (
       <section className="dashboard-control">
         <div className="dashboard-assistant-head">
-          <img className="octo dashboard-octo" src={octoImage} alt="Octopal mascot" />
+          <div className="dashboard-octo-stack">
+            <img className="octo dashboard-octo" src={octoImage} alt="Octopal mascot" />
+            <span className={statusClass(octoState)}>{octoState}</span>
+          </div>
           <div className="dashboard-bubble">
             <h1 title={octoHeadlineRaw}>{octoHeadline}</h1>
             <p title={octoDetailRaw}>{octoDetail}</p>
@@ -352,17 +355,13 @@ export function DashboardScreen({
               <strong>{copy("latestAction")}:</strong> {latestAction}
             </p>
           </div>
-          <div className="dashboard-actions">
-            <span className={statusClass(octoState)}>{octoState}</span>
-            <Button type="button" variant="ghost" onClick={() => setView("system")}>
-              {copy("openLogs")}
-            </Button>
-            {updateAvailable || desktopUpdateAvailable ? (
-              <Button type="button" variant="secondary" onClick={() => setView("system")}>
+          {updateAvailable || desktopUpdateAvailable ? (
+            <div className="dashboard-actions">
+              <Button type="button" variant="ghost" onClick={() => setView("system")}>
                 {copy("updateReady")}
               </Button>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
         </div>
 
         <div className="dashboard-panel">
