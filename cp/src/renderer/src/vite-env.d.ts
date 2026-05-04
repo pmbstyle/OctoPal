@@ -58,6 +58,46 @@ type DesktopRuntimeStatus = {
   launcher?: string;
 };
 
+type DesktopUpdateStatus = {
+  ok: boolean;
+  status: string;
+  localVersion?: string;
+  latestVersion?: string | null;
+  releaseUrl?: string | null;
+  repo?: string;
+  updateAvailable: boolean;
+  canUpdate: boolean;
+  gitBlocker?: string | null;
+  updateCommand?: string;
+  restartCommand?: string;
+  detail: string;
+};
+
+type DesktopUpdateResult = {
+  ok: boolean;
+  installDir: string;
+  detail: string;
+  before?: DesktopUpdateStatus;
+  after?: DesktopUpdateStatus;
+  restarted?: boolean;
+  error?: string;
+};
+
+type DesktopAppUpdateStatus = {
+  ok: boolean;
+  status: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "installing" | "error";
+  currentVersion: string;
+  latestVersion?: string;
+  releaseName?: string;
+  releaseDate?: string;
+  detail: string;
+  canDownload: boolean;
+  canInstall: boolean;
+  percent?: number;
+  isPackaged: boolean;
+  error?: string;
+};
+
 type DesktopPrerequisiteCheck = {
   id: string;
   label: string;
@@ -128,6 +168,12 @@ type OctopalDesktopApi = {
   startOctopal: (installDir: string) => Promise<DesktopStartResult | DesktopStartFailure>;
   stopOctopal: (installDir: string) => Promise<DesktopStopResult | DesktopStopFailure>;
   getOctopalStatus: (installDir: string) => Promise<DesktopRuntimeStatus>;
+  checkOctopalUpdate: (installDir: string) => Promise<DesktopUpdateStatus>;
+  updateOctopal: (installDir: string) => Promise<DesktopUpdateResult>;
+  getAppUpdateStatus: () => Promise<DesktopAppUpdateStatus>;
+  checkAppUpdate: () => Promise<DesktopAppUpdateStatus>;
+  downloadAppUpdate: () => Promise<DesktopAppUpdateStatus>;
+  installAppUpdate: () => Promise<DesktopAppUpdateStatus>;
   getConnectorStatus: (installDir: string) => Promise<DesktopConnectorStatusResult>;
   authorizeConnector: (installDir: string, payload: DesktopConnectorAuthPayload) => Promise<DesktopConnectorActionResult>;
   disconnectConnector: (
@@ -139,6 +185,7 @@ type OctopalDesktopApi = {
   getWhatsAppLinkStatus: (installDir: string) => Promise<DesktopWhatsAppLinkStatus>;
   stopWhatsAppLink: (installDir: string) => Promise<DesktopWhatsAppLinkStatus>;
   onInstallEvent: (callback: (event: DesktopInstallEvent) => void) => () => void;
+  onAppUpdateStatus: (callback: (status: DesktopAppUpdateStatus) => void) => () => void;
 };
 
 interface Window {

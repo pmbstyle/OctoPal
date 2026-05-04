@@ -11,6 +11,8 @@ export function StatusScreen({
   action,
   errorTitle,
   errorDetail,
+  noticeTitle,
+  noticeDetail,
 }: {
   title: string;
   body: string;
@@ -19,6 +21,8 @@ export function StatusScreen({
   action?: ReactNode;
   errorTitle?: string;
   errorDetail?: string;
+  noticeTitle?: string;
+  noticeDetail?: string;
 }) {
   return (
     <motion.section
@@ -31,6 +35,12 @@ export function StatusScreen({
       <img className={busy ? "octo status-octo pulse" : "octo status-octo"} src={octoImage} alt={octoAlt} />
       <h1>{title}</h1>
       {body ? <p>{body}</p> : null}
+      {noticeTitle || noticeDetail ? (
+        <div className="status-notice">
+          {noticeTitle ? <strong>{noticeTitle}</strong> : null}
+          {noticeDetail ? <span>{noticeDetail}</span> : null}
+        </div>
+      ) : null}
       {errorTitle || errorDetail ? (
         <div className="status-error" role="alert">
           {errorTitle ? <strong>{errorTitle}</strong> : null}

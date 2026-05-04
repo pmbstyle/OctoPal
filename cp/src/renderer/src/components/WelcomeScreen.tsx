@@ -1,4 +1,4 @@
-import { ArrowRight, Globe2, Moon, Play, Settings, Sun } from "lucide-react";
+import { ArrowRight, Download, Globe2, Moon, Play, Settings, Sun } from "lucide-react";
 import { motion } from "framer-motion";
 
 import octoImage from "../../../../assets/octo.png";
@@ -15,7 +15,19 @@ export function WelcomeScreen({
   onThemeChange,
   onStart,
   onStartOctopal,
+  onUpdateOctopal,
+  onUpdateDesktopApp,
   installed,
+  desktopUpdateAvailable,
+  desktopUpdateReady,
+  desktopUpdateBusy,
+  desktopUpdateSummary,
+  desktopUpdateDetail,
+  updateAvailable,
+  updateBlocked,
+  updateBusy,
+  updateSummary,
+  updateDetail,
 }: {
   copy: CopyFn;
   language: Language;
@@ -24,7 +36,19 @@ export function WelcomeScreen({
   onThemeChange: (theme: Theme) => void;
   onStart: () => void;
   onStartOctopal: () => void;
+  onUpdateOctopal: () => void;
+  onUpdateDesktopApp: () => void;
   installed: boolean;
+  desktopUpdateAvailable?: boolean;
+  desktopUpdateReady?: boolean;
+  desktopUpdateBusy?: boolean;
+  desktopUpdateSummary?: string;
+  desktopUpdateDetail?: string;
+  updateAvailable?: boolean;
+  updateBlocked?: boolean;
+  updateBusy?: boolean;
+  updateSummary?: string;
+  updateDetail?: string;
 }) {
   return (
     <motion.section
@@ -78,6 +102,46 @@ export function WelcomeScreen({
           {!installed ? <ArrowRight data-icon="inline-end" /> : null}
         </Button>
       </div>
+      {desktopUpdateAvailable ? (
+        <div className="update-card">
+          <div>
+            <strong>{desktopUpdateReady ? copy("desktopUpdateReady") : copy("desktopUpdateAvailable")}</strong>
+            <span>{desktopUpdateSummary || desktopUpdateDetail}</span>
+          </div>
+          <Button
+            type="button"
+            variant="primary"
+            className="update-card-button"
+            disabled={desktopUpdateBusy}
+            onClick={onUpdateDesktopApp}
+          >
+            <Download data-icon="inline-start" />
+            {desktopUpdateReady
+              ? copy("installDesktopUpdate")
+              : desktopUpdateBusy
+                ? copy("downloadingDesktopUpdate")
+                : copy("updateDesktopApp")}
+          </Button>
+        </div>
+      ) : null}
+      {installed && updateAvailable ? (
+        <div className="update-card">
+          <div>
+            <strong>{copy("updateAvailable")}</strong>
+            <span>{updateSummary || updateDetail}</span>
+          </div>
+          <Button
+            type="button"
+            variant="primary"
+            className="update-card-button"
+            disabled={updateBusy || updateBlocked}
+            onClick={onUpdateOctopal}
+          >
+            <Download data-icon="inline-start" />
+            {updateBusy ? copy("updatingOctopal") : copy("updateOctopal")}
+          </Button>
+        </div>
+      ) : null}
     </motion.section>
   );
 }

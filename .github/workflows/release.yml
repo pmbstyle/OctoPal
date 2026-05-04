@@ -109,17 +109,26 @@ jobs:
             os: windows-latest
             command: npm run dist:win
             artifact: octopal-desktop-windows
-            path: cp/dist/*.exe
+            path: |
+              cp/dist/*.exe
+              cp/dist/*.exe.blockmap
+              cp/dist/latest.yml
           - name: macOS
             os: macos-15-intel
             command: npm run dist:mac
             artifact: octopal-desktop-macos
-            path: cp/dist/*.dmg
+            path: |
+              cp/dist/*.dmg
+              cp/dist/*.dmg.blockmap
+              cp/dist/latest-mac.yml
           - name: Linux
             os: ubuntu-latest
             command: npm run dist:linux
             artifact: octopal-desktop-linux
-            path: cp/dist/*.AppImage
+            path: |
+              cp/dist/*.AppImage
+              cp/dist/*.AppImage.blockmap
+              cp/dist/latest-linux.yml
 
     steps:
       - name: Check out repository
@@ -140,7 +149,12 @@ jobs:
 
       - name: Set desktop release version
         working-directory: cp
-        run: npm pkg set version="${{ needs.validate.outputs.version }}"
+        env:
+          OCTOPAL_VERSION: ${{ needs.validate.outputs.version }}
+        shell: bash
+        run: |
+          DESKTOP_VERSION="$(node -e "console.log(process.env.OCTOPAL_VERSION.split('.').map((part) => String(Number(part))).join('.'))")"
+          npm pkg set "version=${DESKTOP_VERSION}"
 
       - name: Build desktop installer
         working-directory: cp

@@ -6,6 +6,13 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import {
+  checkDesktopAppUpdate,
+  downloadDesktopAppUpdate,
+  getDesktopAppUpdateStatus,
+  installDesktopAppUpdate,
+  scheduleDesktopAppUpdateCheck,
+} from "./appUpdater";
+import {
   authorizeConnector,
   disconnectConnector,
   getConnectorStatus,
@@ -13,10 +20,12 @@ import {
   type ConnectorName,
 } from "./connectors";
 import {
+  checkOctopalUpdateSafely,
   getOctopalStatusSafely,
   runInstall,
   startOctopalSafely,
   stopOctopalSafely,
+  updateOctopalSafely,
   type InstallEvent,
   type InstallPayload,
 } from "./installer";
@@ -474,6 +483,12 @@ ipcMain.handle("desktop:install-octopal", async (event, payload: InstallPayload)
 ipcMain.handle("desktop:start-octopal", async (_event, installDir: string) => startOctopalSafely(installDir));
 ipcMain.handle("desktop:stop-octopal", async (_event, installDir: string) => stopOctopalSafely(installDir));
 ipcMain.handle("desktop:get-octopal-status", async (_event, installDir: string) => getOctopalStatusSafely(installDir));
+ipcMain.handle("desktop:check-octopal-update", async (_event, installDir: string) => checkOctopalUpdateSafely(installDir));
+ipcMain.handle("desktop:update-octopal", async (_event, installDir: string) => updateOctopalSafely(installDir));
+ipcMain.handle("desktop:get-app-update-status", () => getDesktopAppUpdateStatus());
+ipcMain.handle("desktop:check-app-update", () => checkDesktopAppUpdate());
+ipcMain.handle("desktop:download-app-update", () => downloadDesktopAppUpdate());
+ipcMain.handle("desktop:install-app-update", () => installDesktopAppUpdate());
 ipcMain.handle("desktop:get-connector-status", async (_event, installDir: string) => getConnectorStatus(installDir));
 ipcMain.handle("desktop:authorize-connector", async (_event, installDir: string, payload: ConnectorAuthPayload) =>
   authorizeConnector(installDir, payload),
@@ -490,6 +505,7 @@ ipcMain.handle("desktop:stop-whatsapp-link", async (_event, installDir: string) 
 void app.whenReady().then(async () => {
   nativeTheme.themeSource = (await readSettings()).theme;
   createWindow();
+  scheduleDesktopAppUpdateCheck();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {

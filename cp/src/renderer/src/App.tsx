@@ -1,6 +1,6 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import { AnimatePresence } from "framer-motion";
-import { Play, Square } from "lucide-react";
+import { Download, Play, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 
@@ -39,6 +39,13 @@ export function App() {
   const [startError, setStartError] = useState("");
   const [startErrorDetail, setStartErrorDetail] = useState("");
   const [runtimeStatus, setRuntimeStatus] = useState<DesktopRuntimeStatus | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<DesktopUpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
+  const [updateMessage, setUpdateMessage] = useState("");
+  const [updateError, setUpdateError] = useState("");
+  const [desktopUpdateStatus, setDesktopUpdateStatus] = useState<DesktopAppUpdateStatus | null>(null);
+  const [desktopUpdateBusy, setDesktopUpdateBusy] = useState(false);
+  const [desktopUpdateError, setDesktopUpdateError] = useState("");
   const [preflightChecks, setPreflightChecks] = useState<DesktopPrerequisiteCheck[]>([]);
   const [preflightStatus, setPreflightStatus] = useState<"idle" | "checking" | "ready" | "failed">("idle");
   const [preflightError, setPreflightError] = useState("");
@@ -73,6 +80,23 @@ export function App() {
   const copy = useMemo(() => (key: keyof typeof messages.en) => t(language, key), [language]);
   const runtimeInstallDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
   const preflightHasBlockingIssue = useMemo(() => preflightChecks.some((check) => check.required && !check.ok), [preflightChecks]);
+  const updateAvailable = Boolean(updateStatus?.updateAvailable);
+  const updateBlocked = updateAvailable && updateStatus?.canUpdate === false;
+  const updateSummary = updateStatus
+    ? `v${updateStatus.localVersion ?? "unknown"} -> v${updateStatus.latestVersion ?? "latest"}`
+    : "";
+  const desktopUpdateAvailable =
+    desktopUpdateStatus?.status === "available" ||
+    desktopUpdateStatus?.status === "downloading" ||
+    desktopUpdateStatus?.status === "downloaded";
+  const desktopUpdateReady = desktopUpdateStatus?.status === "downloaded";
+  const desktopUpdateSummary = desktopUpdateStatus
+    ? `v${desktopUpdateStatus.currentVersion} -> v${desktopUpdateStatus.latestVersion ?? "latest"}${
+        desktopUpdateStatus.status === "downloading" && typeof desktopUpdateStatus.percent === "number"
+          ? ` (${Math.round(desktopUpdateStatus.percent)}%)`
+          : ""
+      }`
+    : "";
   const runtimeView = useMemo(() => {
     if (startStatus === "starting") {
       return {
@@ -172,6 +196,17 @@ export function App() {
 
     setStartError("");
     setStartErrorDetail("");
+    return result;
+  }, [installState.installed, runtimeInstallDir]);
+
+  const refreshUpdateStatus = useCallback(async () => {
+    if (!window.octopalDesktop || !installState.installed || !runtimeInstallDir) {
+      setUpdateStatus(null);
+      return null;
+    }
+
+    const result = await window.octopalDesktop.checkOctopalUpdate(runtimeInstallDir);
+    setUpdateStatus(result);
     return result;
   }, [installState.installed, runtimeInstallDir]);
 
@@ -281,17 +316,59 @@ export function App() {
   }, [language, settingsLoaded, theme, values.installDir]);
 
   useEffect(() => {
+    if (!settingsLoaded || !window.octopalDesktop) {
+      return;
+    }
+
+    const updateFromMain = (next: DesktopAppUpdateStatus) => {
+      setDesktopUpdateStatus(next);
+      setDesktopUpdateError(next.ok ? "" : next.error || next.detail);
+      setDesktopUpdateBusy(next.status === "checking" || next.status === "downloading" || next.status === "installing");
+    };
+    const unsubscribe = window.octopalDesktop.onAppUpdateStatus(updateFromMain);
+    void window.octopalDesktop.getAppUpdateStatus().then(updateFromMain);
+    void window.octopalDesktop.checkAppUpdate().then(updateFromMain).catch((error) => {
+      setDesktopUpdateError(error instanceof Error ? error.message : copy("desktopUpdateFailed"));
+    });
+    const interval = window.setInterval(() => {
+      void window.octopalDesktop?.checkAppUpdate().then(updateFromMain).catch((error) => {
+        setDesktopUpdateError(error instanceof Error ? error.message : copy("desktopUpdateFailed"));
+      });
+    }, 60 * 60 * 1000);
+
+    return () => {
+      unsubscribe();
+      window.clearInterval(interval);
+    };
+  }, [copy, settingsLoaded]);
+
+  useEffect(() => {
     if (!settingsLoaded || !installState.installed || screen !== "done") {
       return;
     }
 
     void refreshRuntimeStatus();
+    void refreshUpdateStatus();
     const interval = window.setInterval(() => {
       void refreshRuntimeStatus();
     }, 5000);
+    const updateInterval = window.setInterval(() => {
+      void refreshUpdateStatus();
+    }, 15 * 60 * 1000);
 
-    return () => window.clearInterval(interval);
-  }, [installState.installed, refreshRuntimeStatus, screen, settingsLoaded]);
+    return () => {
+      window.clearInterval(interval);
+      window.clearInterval(updateInterval);
+    };
+  }, [installState.installed, refreshRuntimeStatus, refreshUpdateStatus, screen, settingsLoaded]);
+
+  useEffect(() => {
+    if (!settingsLoaded || !installState.installed || screen !== "welcome") {
+      return;
+    }
+
+    void refreshUpdateStatus();
+  }, [installState.installed, refreshUpdateStatus, screen, settingsLoaded]);
 
   useEffect(() => {
     if (!settingsLoaded || screen !== "wizard" || step !== "connectors") {
@@ -739,6 +816,60 @@ export function App() {
     }
   }
 
+  async function updateInstalledOctopal() {
+    const installDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
+    if (!window.octopalDesktop || !installDir || updateBusy) {
+      return;
+    }
+
+    setUpdateBusy(true);
+    setUpdateMessage("");
+    setUpdateError("");
+    try {
+      const result = await window.octopalDesktop.updateOctopal(installDir);
+      if (!result.ok) {
+        setUpdateError(result.detail || result.error || copy("updateFailed"));
+        if (result.before) {
+          setUpdateStatus(result.before);
+        }
+        return;
+      }
+      setUpdateMessage(result.restarted ? copy("updateRestarted") : copy("updateInstalled"));
+      if (result.after) {
+        setUpdateStatus(result.after);
+      } else {
+        void refreshUpdateStatus();
+      }
+      void refreshRuntimeStatus();
+    } catch (error) {
+      setUpdateError(error instanceof Error ? error.message : copy("updateFailed"));
+    } finally {
+      setUpdateBusy(false);
+    }
+  }
+
+  async function updateDesktopApp() {
+    if (!window.octopalDesktop || desktopUpdateBusy) {
+      return;
+    }
+
+    setDesktopUpdateBusy(true);
+    setDesktopUpdateError("");
+    try {
+      const result = desktopUpdateStatus?.canInstall
+        ? await window.octopalDesktop.installAppUpdate()
+        : await window.octopalDesktop.downloadAppUpdate();
+      setDesktopUpdateStatus(result);
+      if (!result.ok) {
+        setDesktopUpdateError(result.error || result.detail || copy("desktopUpdateFailed"));
+      }
+    } catch (error) {
+      setDesktopUpdateError(error instanceof Error ? error.message : copy("desktopUpdateFailed"));
+    } finally {
+      setDesktopUpdateBusy(false);
+    }
+  }
+
   const doneTitle = startStatus === "idle" && !runtimeStatus ? copy("completeTitle") : runtimeView.title;
   const doneBody = runtimeView.state === "error" || (startStatus === "idle" && !runtimeStatus) ? "" : runtimeView.detail;
   const doneCanStop =
@@ -765,7 +896,19 @@ export function App() {
             onThemeChange={setTheme}
             onStart={() => void openConfiguration()}
             onStartOctopal={() => void startInstalledOctopal()}
+            onUpdateOctopal={() => void updateInstalledOctopal()}
+            onUpdateDesktopApp={() => void updateDesktopApp()}
             installed={installState.installed}
+            desktopUpdateAvailable={desktopUpdateAvailable}
+            desktopUpdateReady={desktopUpdateReady}
+            desktopUpdateBusy={desktopUpdateBusy}
+            desktopUpdateSummary={desktopUpdateSummary}
+            desktopUpdateDetail={desktopUpdateError || desktopUpdateStatus?.detail || ""}
+            updateAvailable={updateAvailable}
+            updateBlocked={updateBlocked}
+            updateBusy={updateBusy}
+            updateSummary={updateSummary}
+            updateDetail={updateStatus?.gitBlocker || updateError || updateMessage || updateStatus?.detail || ""}
           />
         ) : null}
 
@@ -824,33 +967,89 @@ export function App() {
             title={doneTitle}
             body={doneBody}
             octoAlt="Octopal mascot"
-            errorTitle={runtimeView.state === "error" ? runtimeView.title : ""}
-            errorDetail={runtimeView.state === "error" ? runtimeView.detail : ""}
             action={
-              doneCanStop ? (
-                <Button
-                  type="button"
-                  variant="danger"
-                  className="status-action-button"
-                  disabled={doneBusy}
-                  onClick={() => void stopInstalledOctopal()}
-                >
-                  <Square data-icon="inline-start" />
-                  {runtimeView.state === "stopping" ? copy("stoppingOctopal") : copy("stopOctopal")}
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  variant="success"
-                  className="status-action-button"
-                  disabled={doneBusy}
-                  onClick={() => void startInstalledOctopal()}
-                >
-                  <Play data-icon="inline-start" />
-                  {runtimeView.state === "starting" ? copy("startingOctopal") : copy("startOctopal")}
-                </Button>
-              )
+              <>
+                {desktopUpdateAvailable ? (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    className="status-action-button"
+                    disabled={desktopUpdateBusy}
+                    onClick={() => void updateDesktopApp()}
+                  >
+                    <Download data-icon="inline-start" />
+                    {desktopUpdateReady
+                      ? copy("installDesktopUpdate")
+                      : desktopUpdateBusy
+                        ? copy("downloadingDesktopUpdate")
+                        : copy("updateDesktopApp")}
+                  </Button>
+                ) : null}
+                {updateAvailable ? (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    className="status-action-button"
+                    disabled={updateBusy || updateBlocked}
+                    onClick={() => void updateInstalledOctopal()}
+                  >
+                    <Download data-icon="inline-start" />
+                    {updateBusy ? copy("updatingOctopal") : copy("updateOctopal")}
+                  </Button>
+                ) : null}
+                {doneCanStop ? (
+                  <Button
+                    type="button"
+                    variant="danger"
+                    className="status-action-button"
+                    disabled={doneBusy || updateBusy || desktopUpdateBusy}
+                    onClick={() => void stopInstalledOctopal()}
+                  >
+                    <Square data-icon="inline-start" />
+                    {runtimeView.state === "stopping" ? copy("stoppingOctopal") : copy("stopOctopal")}
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="success"
+                    className="status-action-button"
+                    disabled={doneBusy || updateBusy || desktopUpdateBusy}
+                    onClick={() => void startInstalledOctopal()}
+                  >
+                    <Play data-icon="inline-start" />
+                    {runtimeView.state === "starting" ? copy("startingOctopal") : copy("startOctopal")}
+                  </Button>
+                )}
+              </>
             }
+            noticeTitle={
+              desktopUpdateAvailable
+                ? desktopUpdateReady
+                  ? copy("desktopUpdateReady")
+                  : copy("desktopUpdateAvailable")
+                : updateAvailable
+                  ? copy("updateAvailable")
+                  : updateMessage
+                    ? copy("updateComplete")
+                    : ""
+            }
+            noticeDetail={
+              desktopUpdateAvailable
+                ? desktopUpdateSummary
+                : updateAvailable
+                  ? `${updateSummary}${updateBlocked && updateStatus?.gitBlocker ? ` - ${updateStatus.gitBlocker}` : ""}`
+                  : updateMessage
+            }
+            errorTitle={
+              runtimeView.state === "error"
+                ? runtimeView.title
+                : desktopUpdateError
+                  ? copy("desktopUpdateFailed")
+                  : updateError
+                    ? copy("updateFailed")
+                    : ""
+            }
+            errorDetail={runtimeView.state === "error" ? runtimeView.detail : desktopUpdateError || updateError}
           />
         ) : null}
 
