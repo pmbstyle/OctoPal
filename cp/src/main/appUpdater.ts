@@ -1,5 +1,8 @@
 import { app, BrowserWindow } from "electron";
-import { autoUpdater, type ProgressInfo, type UpdateInfo } from "electron-updater";
+import electronUpdater from "electron-updater";
+import type { ProgressInfo, UpdateInfo } from "electron-updater";
+
+const { autoUpdater } = electronUpdater;
 
 export type DesktopAppUpdateStatus = {
   ok: boolean;
