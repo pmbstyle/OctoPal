@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 
-from octopal.gateway.dashboard import _clear_control_queue_requests, _select_retry_target
+from octopal.gateway.dashboard import (
+    _clear_control_queue_requests,
+    _execute_dashboard_action,
+    _select_retry_target,
+)
 from octopal.infrastructure.store.models import WorkerRecord
+from octopal.infrastructure.store.sqlite import SQLiteStore
+from octopal.runtime.self_control import SELF_UPDATE_ACTION, SELF_UPDATE_REQUESTED_BY
 
 
 def _worker(worker_id: str, status: str) -> WorkerRecord:
@@ -50,3 +57,45 @@ def test_clear_control_queue_requests_acks_only_pending(tmp_path) -> None:
     last = json.loads(lines[-1])
     assert last["request_id"] == "r2"
     assert last["status"] == "cleared"
+
+
+def test_dashboard_request_self_update_appends_control_request(tmp_path, monkeypatch) -> None:
+    class Settings:
+        state_dir = tmp_path / "data"
+        workspace_dir = tmp_path / "workspace"
+
+    monkeypatch.setattr(
+        "octopal.gateway.dashboard._dashboard_update_status",
+        lambda: {
+            "status": "ok",
+            "local_version": "2026.05.03",
+            "latest_version": "2026.05.04",
+            "update_available": True,
+            "can_update": True,
+        },
+    )
+
+    settings = Settings()
+    store = SQLiteStore(settings)
+    result = asyncio.run(
+        _execute_dashboard_action(
+            app=object(),
+            settings=settings,
+            store=store,
+            action="request_self_update",
+            worker_id=None,
+            reason="apply latest release",
+            requested_by="dashboard",
+        )
+    )
+
+    assert result["status"] == "ok"
+    assert result["request"]["action"] == SELF_UPDATE_ACTION
+    assert result["request"]["requested_by"] == SELF_UPDATE_REQUESTED_BY
+
+    req_file = settings.state_dir / "control_requests.jsonl"
+    lines = [line for line in req_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(lines) == 1
+    request = json.loads(lines[0])
+    assert request["metadata"]["source"] == "dashboard"
+    assert request["metadata"]["update"]["latest_version"] == "2026.05.04"

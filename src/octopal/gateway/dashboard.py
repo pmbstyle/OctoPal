@@ -40,6 +40,12 @@ from octopal.infrastructure.store.models import AuditEvent, WorkerRecord, Worker
 from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.runtime.metrics import read_metrics_snapshot
 from octopal.runtime.octo_status import build_octo_status
+from octopal.runtime.self_control import (
+    SELF_UPDATE_ACTION,
+    SELF_UPDATE_REQUESTED_BY,
+    append_control_request,
+    check_update_status,
+)
 from octopal.runtime.state import is_pid_running, read_status
 from octopal.runtime.workers.launcher_factory import (
     WorkerLauncherStatus,
@@ -366,9 +372,9 @@ def register_dashboard_routes(app: FastAPI) -> None:
         requested_by = str(payload.get("requested_by", "dashboard")).strip() or "dashboard"
         worker_id = str(payload.get("worker_id", "")).strip() or None
 
-        if action not in {"restart_worker", "retry_failed", "clear_control_queue"}:
+        if action not in {"restart_worker", "retry_failed", "clear_control_queue", "request_self_update"}:
             raise HTTPException(status_code=400, detail="Unsupported action")
-        if action in {"restart_worker", "clear_control_queue"} and not confirm:
+        if action in {"restart_worker", "clear_control_queue", "request_self_update"} and not confirm:
             raise HTTPException(status_code=400, detail="Confirmation required")
 
         result = await _execute_dashboard_action(
@@ -1018,6 +1024,45 @@ async def _execute_dashboard_action(
                         "stopped": stop_info.get("stopped", False),
                         "message": str(launch.get("message", "Restart failed")),
                     }
+    elif action == "request_self_update":
+        update_status = _dashboard_update_status()
+        if not bool(update_status.get("update_available")):
+            result = {
+                "status": "error",
+                "action": action,
+                "at": now.isoformat(),
+                "update": update_status,
+                "message": "No newer release is available.",
+            }
+        elif not bool(update_status.get("can_update")):
+            result = {
+                "status": "error",
+                "action": action,
+                "at": now.isoformat(),
+                "update": update_status,
+                "message": "Update is blocked by the current checkout state.",
+            }
+        else:
+            request = append_control_request(
+                settings.state_dir,
+                action=SELF_UPDATE_ACTION,
+                reason=reason or "Apply latest Octopal release from dashboard.",
+                requested_by=SELF_UPDATE_REQUESTED_BY,
+                delay_seconds=3,
+                metadata={
+                    "source": "dashboard",
+                    "requested_by": requested_by,
+                    "update": update_status,
+                },
+            )
+            result = {
+                "status": "ok",
+                "action": action,
+                "at": now.isoformat(),
+                "request": request,
+                "update": update_status,
+                "message": "Self-update requested. Octopal will update and restart shortly.",
+            }
 
     _append_dashboard_audit(
         store=store,
@@ -1028,6 +1073,13 @@ async def _execute_dashboard_action(
         reason=reason,
     )
     return result
+
+
+def _dashboard_update_status() -> dict[str, Any]:
+    try:
+        return check_update_status()
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
 
 
 def _append_dashboard_audit(
@@ -1229,6 +1281,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
         + by_status.get("awaiting_instruction", 0)
     )
     mcp_servers = connectivity_metrics.get("mcp_servers", {})
+    update_status = _dashboard_update_status()
 
     services_all = _build_service_health(
         active_channel=active_channel,
@@ -1310,6 +1363,7 @@ def _build_snapshot(settings: Settings, store: SQLiteStore, last: int, filters: 
                 "reason": launcher_status.reason,
             },
             "scheduler": dict(scheduler_metrics) if isinstance(scheduler_metrics, dict) else {},
+            "update": update_status,
         },
         "octo": {
             "state": octo_state,

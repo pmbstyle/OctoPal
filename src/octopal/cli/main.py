@@ -131,7 +131,7 @@ def _project_root() -> Path:
 
 def _guess_update_command() -> str:
     if (_project_root() / ".git").exists():
-        return "git pull && uv sync"
+        return "uv run octopal update"
     return "install the latest GitHub release"
 
 
@@ -289,6 +289,36 @@ def _run_capture(command: list[str], *, cwd: Path, timeout: float = 10.0) -> sub
     )
 
 
+def _git_tracking_upstream(project_root: Path) -> str | None:
+    result = _run_capture(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        cwd=project_root,
+        timeout=5.0,
+    )
+    if result.returncode != 0:
+        return None
+    upstream = result.stdout.strip()
+    return upstream or None
+
+
+def _latest_release_tag_from_git(project_root: Path) -> str | None:
+    tags = _run_capture(["git", "tag", "--list", "v[0-9]*"], cwd=project_root, timeout=10.0)
+    if tags.returncode != 0:
+        return None
+
+    candidates: list[tuple[tuple[int, ...], str]] = []
+    for line in tags.stdout.splitlines():
+        tag = line.strip()
+        version_key = _version_key(tag)
+        if version_key is not None:
+            candidates.append((version_key, tag))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0])
+    return candidates[-1][1]
+
+
 def _list_meaningful_worktree_changes(project_root: Path) -> list[str] | None:
     diff = _run_capture(["git", "diff", "--name-only"], cwd=project_root)
     if diff.returncode != 0:
@@ -358,18 +388,36 @@ def _perform_git_update(project_root: Path) -> tuple[bool, str]:
     if shutil.which("uv") is None:
         return False, "`uv` is not installed or not on PATH."
 
-    pull = _run_capture(["git", "pull", "--ff-only"], cwd=project_root, timeout=60.0)
-    if pull.returncode != 0:
-        detail = pull.stderr.strip() or pull.stdout.strip() or "git pull failed"
-        return False, f"`git pull --ff-only` failed: {detail}"
+    upstream = _git_tracking_upstream(project_root)
+    update_summary = ""
+    if upstream:
+        pull = _run_capture(["git", "pull", "--ff-only"], cwd=project_root, timeout=60.0)
+        if pull.returncode != 0:
+            detail = pull.stderr.strip() or pull.stdout.strip() or "git pull failed"
+            return False, f"`git pull --ff-only` failed: {detail}"
+        update_summary = pull.stdout.strip() or "Already up to date."
+    else:
+        fetch = _run_capture(["git", "fetch", "--tags", "--force", "origin"], cwd=project_root, timeout=60.0)
+        if fetch.returncode != 0:
+            detail = fetch.stderr.strip() or fetch.stdout.strip() or "git fetch tags failed"
+            return False, f"`git fetch --tags --force origin` failed: {detail}"
+
+        latest_tag = _latest_release_tag_from_git(project_root)
+        if latest_tag is None:
+            return False, "Could not find a release tag like vYYYY.MM.DD."
+
+        checkout = _run_capture(["git", "checkout", "--detach", latest_tag], cwd=project_root, timeout=60.0)
+        if checkout.returncode != 0:
+            detail = checkout.stderr.strip() or checkout.stdout.strip() or "git checkout failed"
+            return False, f"`git checkout --detach {latest_tag}` failed: {detail}"
+        update_summary = f"Checked out release tag {latest_tag}."
 
     sync = _run_capture(["uv", "sync"], cwd=project_root, timeout=120.0)
     if sync.returncode != 0:
         detail = sync.stderr.strip() or sync.stdout.strip() or "uv sync failed"
         return False, f"`uv sync` failed: {detail}"
 
-    pull_summary = pull.stdout.strip() or "Already up to date."
-    return True, pull_summary
+    return True, update_summary
 
 
 def _build_gateway_app(*args: Any, **kwargs: Any) -> Any:

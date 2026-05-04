@@ -4,7 +4,7 @@ import subprocess
 
 from typer.testing import CliRunner
 
-from octopal.cli.main import _git_checkout_ready_for_update, app
+from octopal.cli.main import _git_checkout_ready_for_update, _perform_git_update, app
 
 runner = CliRunner()
 
@@ -51,6 +51,61 @@ def test_update_warns_when_runtime_is_active(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
     assert "Octopal is running right now." in result.stdout
     assert "uv run octopal restart" in result.stdout
+
+
+def test_perform_git_update_pulls_tracking_checkout(monkeypatch, tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_capture(command: list[str], *, cwd, timeout=10.0):
+        calls.append(command)
+        if command == ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]:
+            return subprocess.CompletedProcess(command, 0, stdout="origin/main\n", stderr="")
+        if command == ["git", "pull", "--ff-only"]:
+            return subprocess.CompletedProcess(command, 0, stdout="Updating abc..def\n", stderr="")
+        if command == ["uv", "sync"]:
+            return subprocess.CompletedProcess(command, 0, stdout="synced", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("octopal.cli.main.shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr("octopal.cli.main._run_capture", fake_run_capture)
+
+    ok, detail = _perform_git_update(tmp_path)
+
+    assert ok is True
+    assert detail == "Updating abc..def"
+    assert ["git", "fetch", "--tags", "--force", "origin"] not in calls
+
+
+def test_perform_git_update_checks_out_latest_release_tag_without_upstream(monkeypatch, tmp_path) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_capture(command: list[str], *, cwd, timeout=10.0):
+        calls.append(command)
+        if command == ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]:
+            return subprocess.CompletedProcess(command, 128, stdout="", stderr="no upstream")
+        if command == ["git", "fetch", "--tags", "--force", "origin"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command == ["git", "tag", "--list", "v[0-9]*"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout="v2026.04.14\nv2026.05.03\nv2026.05.03.1\nnot-a-release\n",
+                stderr="",
+            )
+        if command == ["git", "checkout", "--detach", "v2026.05.03.1"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command == ["uv", "sync"]:
+            return subprocess.CompletedProcess(command, 0, stdout="synced", stderr="")
+        raise AssertionError(f"unexpected command: {command}")
+
+    monkeypatch.setattr("octopal.cli.main.shutil.which", lambda name: "/usr/bin/uv" if name == "uv" else None)
+    monkeypatch.setattr("octopal.cli.main._run_capture", fake_run_capture)
+
+    ok, detail = _perform_git_update(tmp_path)
+
+    assert ok is True
+    assert detail == "Checked out release tag v2026.05.03.1."
+    assert ["git", "pull", "--ff-only"] not in calls
 
 
 def test_git_checkout_ready_allows_mode_only_changes(monkeypatch, tmp_path) -> None:

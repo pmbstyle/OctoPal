@@ -4,6 +4,7 @@ import { useOutletContext } from "react-router-dom";
 import {
   fetchDashboardConfig,
   fetchSystem,
+  requestSelfUpdate,
   updateDashboardConfig,
   type DashboardConfigResponse,
   type DashboardEditableConfig,
@@ -28,6 +29,16 @@ type ServiceItem = { id?: string; name?: string; status?: string; reason?: strin
 type LogItem = { timestamp?: string; level?: string; event?: string; service?: string };
 type Connectivity = {
   mcp_servers?: Record<string, { status?: string; tool_count?: number; name?: string; reason?: string; transport?: string; reconnect_attempts?: number; error?: string | null }>;
+};
+type UpdateStatus = {
+  status?: string;
+  local_version?: string;
+  latest_version?: string | null;
+  release_url?: string | null;
+  update_available?: boolean;
+  can_update?: boolean;
+  git_blocker?: string | null;
+  repo?: string;
 };
 type SchedulerMetrics = {
   running?: boolean;
@@ -575,6 +586,7 @@ export function SystemPage() {
   const [loading, setLoading] = useState(true);
   const [configLoading, setConfigLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [requestingUpdate, setRequestingUpdate] = useState(false);
   const [error, setError] = useState("");
   const [configError, setConfigError] = useState("");
   const [notice, setNotice] = useState("");
@@ -689,12 +701,16 @@ export function SystemPage() {
     active_channel?: string;
     worker_launcher?: { configured?: string; effective?: string; available?: boolean; reason?: string };
     scheduler?: SchedulerMetrics;
+    update?: UpdateStatus;
   };
   const services = ((data?.services ?? []) as ServiceItem[]).slice(0, 10);
   const logs = ((data?.logs ?? []) as LogItem[]).slice(0, 10);
   const connectivity = (data?.connectivity ?? {}) as Connectivity;
   const mcpServers = connectivity.mcp_servers ?? {};
   const scheduler = (system.scheduler ?? {}) as SchedulerMetrics;
+  const updateStatus = (system.update ?? {}) as UpdateStatus;
+  const updateAvailable = Boolean(updateStatus.update_available);
+  const updateBlocked = updateAvailable && !Boolean(updateStatus.can_update);
   const schedulerAvailable = Object.keys(scheduler).length > 0;
   const schedulerBadgeStatus = !schedulerAvailable
     ? "ok"
@@ -749,6 +765,20 @@ export function SystemPage() {
     setConfigError("");
   }
 
+  async function startSelfUpdate(): Promise<void> {
+    setRequestingUpdate(true);
+    setNotice("");
+    setConfigError("");
+    try {
+      const result = await requestSelfUpdate(filters.token || undefined);
+      setNotice(result.message || "Self-update requested.");
+    } catch (err: unknown) {
+      setConfigError(err instanceof Error ? err.message : "Failed to request update");
+    } finally {
+      setRequestingUpdate(false);
+    }
+  }
+
   return (
     <section className="grid gap-5">
       <section className={panel}>
@@ -761,6 +791,32 @@ export function SystemPage() {
           <div className={`rounded-full border px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.16em] ${statusTone(system.running ? "running" : "critical")}`}>{system.running ? "running" : "down"}</div>
         </div>
       </section>
+
+      {updateAvailable ? (
+        <section className="rounded-[26px] border border-amber-300/30 bg-amber-500/10 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <p className="text-[11px] uppercase tracking-[0.18em] text-amber-100/70">Update available</p>
+              <h3 className="mt-2 text-xl font-semibold text-white">
+                Octopal v{updateStatus.latest_version ?? "latest"} is ready
+              </h3>
+              <p className="mt-2 text-sm text-amber-50/75">
+                Current v{updateStatus.local_version ?? "unknown"} | {updateStatus.repo ?? "release repo"}
+                {updateBlocked && updateStatus.git_blocker ? ` | ${updateStatus.git_blocker}` : ""}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => void startSelfUpdate()}
+              disabled={requestingUpdate || updateBlocked}
+              className="rounded-2xl bg-amber-200 text-slate-950 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {requestingUpdate ? "Requesting..." : "Update & restart"}
+            </Button>
+          </div>
+        </section>
+      ) : null}
 
       <div className="grid gap-5 xl:grid-cols-3">
         <article className={panel}>
