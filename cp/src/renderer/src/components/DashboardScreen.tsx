@@ -120,6 +120,11 @@ function formatTime(value?: string | number): string {
   return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
+function limitDisplayText(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3).trim()}...` : normalized;
+}
+
 function linePoints(points: LoadPoint[], key: keyof Omit<LoadPoint, "at">): string {
   const values = points.length > 0 ? points.map((point) => point[key]) : [0];
   const max = Math.max(1, ...values);
@@ -261,7 +266,12 @@ export function DashboardScreen({
 
   const recentWorkers = snapshot?.workers?.recent ?? [];
   const octoState = snapshot?.octo?.state || runtimeView.state || "idle";
-  const latestAction = snapshot?.octo?.latestAction || copy("octoLatestFallback");
+  const octoHeadlineRaw = snapshot?.octo?.headline || runtimeView.title;
+  const octoDetailRaw = snapshot?.octo?.detail || runtimeView.detail || copy("octopalStarted");
+  const latestActionRaw = snapshot?.octo?.latestAction || copy("octoLatestFallback");
+  const octoHeadline = limitDisplayText(octoHeadlineRaw, 74);
+  const octoDetail = limitDisplayText(octoDetailRaw, 120);
+  const latestAction = limitDisplayText(latestActionRaw, 130);
   const services = snapshot?.system?.services ?? [];
   const logs = snapshot?.system?.logs ?? [];
   const editingTemplate = editingTemplateId
@@ -336,9 +346,9 @@ export function DashboardScreen({
         <div className="dashboard-assistant-head">
           <img className="octo dashboard-octo" src={octoImage} alt="Octopal mascot" />
           <div className="dashboard-bubble">
-            <h1>{snapshot?.octo?.headline || runtimeView.title}</h1>
-            <p>{snapshot?.octo?.detail || runtimeView.detail || copy("octopalStarted")}</p>
-            <p className="dashboard-latest">
+            <h1 title={octoHeadlineRaw}>{octoHeadline}</h1>
+            <p title={octoDetailRaw}>{octoDetail}</p>
+            <p className="dashboard-latest" title={latestActionRaw}>
               <strong>{copy("latestAction")}:</strong> {latestAction}
             </p>
           </div>

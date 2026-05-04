@@ -349,10 +349,25 @@ function listValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
-function formatEventTitle(event: unknown): string {
-  const raw = stringValue(event, "No recent activity");
+function compactOctoEvent(event: unknown): string {
+  const raw = stringValue(event);
+  if (!raw) {
+    return "No recent activity";
+  }
+
   const normalized = raw.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
-  return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  const lowered = normalized.toLowerCase();
+  if (lowered.includes("agentworker context") || lowered.includes("cwd=/workspace/workers")) {
+    return "Worker context updated";
+  }
+
+  const redacted = normalized
+    .replace(/\b[a-f0-9]{8,}(?:[\s_-]+[a-f0-9]{4,}){2,}\b/gi, "worker")
+    .replace(/\bcwd=\S+/gi, "cwd=worker workspace")
+    .replace(/\s+/g, " ")
+    .trim();
+  const title = redacted.charAt(0).toUpperCase() + redacted.slice(1);
+  return title.length > 80 ? `${title.slice(0, 77).trim()}...` : title;
 }
 
 async function loadRawConfigForInstall(installDir: string): Promise<Record<string, unknown>> {
@@ -581,6 +596,7 @@ async function getDesktopDashboardSnapshot(installDir: string): Promise<DesktopD
     const systemLogs = listValue(system.logs) as Array<Record<string, unknown>>;
     const recentOctoLog =
       systemLogs.find((entry) => stringValue(entry.service).toLowerCase().includes("octo")) ?? systemLogs[0];
+    const recentOctoEvent = recentOctoLog ? compactOctoEvent(recentOctoLog.event) : "";
     const services = listValue(system.services).map((entry, index) => {
       const service = recordValue(entry);
       return {
@@ -604,11 +620,11 @@ async function getDesktopDashboardSnapshot(installDir: string): Promise<DesktopD
       },
       octo: {
         state: stringValue(octoNode.state, "idle"),
-        headline: recentOctoLog ? formatEventTitle(recentOctoLog.event) : stringValue(octoHealth.summary, "Octo is idle"),
+        headline: recentOctoEvent || stringValue(octoHealth.summary, "Octo is idle"),
         detail: recentOctoLog
           ? `${stringValue(recentOctoLog.service, "runtime")} · ${stringValue(recentOctoLog.level, "info")}`
           : listValue(octoHealth.reasons).map((item) => String(item)).join(" · "),
-        latestAction: recentOctoLog ? formatEventTitle(recentOctoLog.event) : "No recent activity",
+        latestAction: recentOctoEvent || "No recent activity",
       },
       workers: {
         recent: listValue(workersNode.recent).map((entry) => recordValue(entry) as DashboardWorkerRun),
