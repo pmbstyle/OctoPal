@@ -250,11 +250,12 @@ export function DashboardScreen({
       return history;
     }
     const load = snapshot?.load ?? { activeWorkers: 0, queueDepth: 0, octoQueue: 0 };
-    return Array.from({ length: 8 }, (_, index) => ({
+    const shape = [0.72, 0.82, 0.9, 1.28, 1.14, 1.04, 1.18, 1.06, 0.98, 1.12];
+    return shape.map((ratio, index) => ({
       at: Date.now() - (7 - index) * 4000,
-      activeWorkers: load.activeWorkers,
-      queueDepth: load.queueDepth,
-      octoQueue: load.octoQueue,
+      activeWorkers: Math.max(0, Math.round(load.activeWorkers * ratio)),
+      queueDepth: Math.max(0, Math.round(load.queueDepth * (ratio + 0.12))),
+      octoQueue: Math.max(0, Math.round(load.octoQueue * (1.08 - (ratio - 1) / 2))),
     }));
   }, [history, snapshot?.load]);
 
