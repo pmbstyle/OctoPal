@@ -466,10 +466,6 @@ export function DashboardScreen({
               )}
             </div>
           </div>
-          <div className="dashboard-panel worker-run-help">
-            <h2>{copy("workerEditorHintTitle")}</h2>
-            <p>{copy("workerEditorHintBody")}</p>
-          </div>
         </div>
       </section>
     );
