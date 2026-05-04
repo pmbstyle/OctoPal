@@ -6,6 +6,7 @@ import { useForm } from "react-hook-form";
 
 import { AppShell } from "./components/AppShell";
 import { Button } from "./components/Button";
+import { DashboardScreen } from "./components/DashboardScreen";
 import { InstallProgressScreen } from "./components/InstallProgressScreen";
 import { StatusScreen } from "./components/StatusScreen";
 import { WelcomeScreen } from "./components/WelcomeScreen";
@@ -816,6 +817,44 @@ export function App() {
     }
   }
 
+  async function restartInstalledOctopal() {
+    const installDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
+    if (!window.octopalDesktop || !installDir) {
+      return;
+    }
+
+    setScreen("done");
+    setStartStatus("stopping");
+    setStartError("");
+    setStartErrorDetail("");
+    try {
+      const stopped = await window.octopalDesktop.stopOctopal(installDir);
+      if (!stopped.ok) {
+        setStartStatus("failed");
+        setStartError(stopped.error || copy("stopFailed"));
+        setStartErrorDetail(stopped.detail);
+        return;
+      }
+
+      setStartStatus("starting");
+      const started = await window.octopalDesktop.startOctopal(installDir);
+      if (!started.ok) {
+        setStartStatus("failed");
+        setStartError(started.error || copy("startFailed"));
+        setStartErrorDetail(started.detail);
+        return;
+      }
+
+      setStartStatus("started");
+      void refreshRuntimeStatus();
+      void refreshUpdateStatus();
+    } catch (error) {
+      setStartStatus("failed");
+      setStartError(copy("startFailed"));
+      setStartErrorDetail(error instanceof Error ? error.message : copy("startFailed"));
+    }
+  }
+
   async function updateInstalledOctopal() {
     const installDir = savedInstallResult?.installDir || installState.installDir || values.installDir;
     if (!window.octopalDesktop || !installDir || updateBusy) {
@@ -961,7 +1000,27 @@ export function App() {
           />
         ) : null}
 
-        {screen === "done" ? (
+        {screen === "done" && runtimeView.state === "running" ? (
+          <DashboardScreen
+            key="dashboard"
+            copy={copy}
+            installDir={runtimeInstallDir}
+            runtimeView={runtimeView}
+            updateAvailable={updateAvailable}
+            updateBlocked={updateBlocked}
+            updateBusy={updateBusy}
+            desktopUpdateAvailable={desktopUpdateAvailable}
+            desktopUpdateReady={desktopUpdateReady}
+            desktopUpdateBusy={desktopUpdateBusy}
+            onStart={() => void startInstalledOctopal()}
+            onStop={() => void stopInstalledOctopal()}
+            onRestart={() => void restartInstalledOctopal()}
+            onUpdateOctopal={() => void updateInstalledOctopal()}
+            onUpdateDesktopApp={() => void updateDesktopApp()}
+          />
+        ) : null}
+
+        {screen === "done" && runtimeView.state !== "running" ? (
           <StatusScreen
             key="done"
             title={doneTitle}

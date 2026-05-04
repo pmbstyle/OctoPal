@@ -146,6 +146,57 @@ type DesktopConnectorActionResult = {
   detail: string;
 };
 
+type DesktopDashboardSnapshot = {
+  ok: boolean;
+  detail: string;
+  generatedAt?: string;
+  baseUrl?: string;
+  load?: {
+    activeWorkers: number;
+    queueDepth: number;
+    octoQueue: number;
+  };
+  octo?: {
+    state: string;
+    headline: string;
+    detail: string;
+    latestAction: string;
+  };
+  workers?: {
+    recent: Array<{
+      id?: string;
+      template_name?: string;
+      template_id?: string;
+      status?: string;
+      task?: string;
+      updated_at?: string;
+      summary?: string;
+      error?: string;
+      result_preview?: string;
+    }>;
+  };
+  system?: {
+    services: Array<{ id: string; name: string; status: string; reason: string }>;
+    logs: Array<{ timestamp?: string; level?: string; service?: string; event?: string }>;
+  };
+};
+
+type DesktopWorkerTemplate = {
+  id: string;
+  name: string;
+  description: string;
+  system_prompt: string;
+  available_tools: string[];
+  required_permissions: string[];
+  model?: string | null;
+  max_thinking_steps: number;
+  default_timeout_seconds: number;
+  can_spawn_children: boolean;
+  allowed_child_templates: string[];
+  created_at?: string;
+  updated_at?: string;
+};
+
 contextBridge.exposeInMainWorld("octopalDesktop", {
   loadSettings: () => ipcRenderer.invoke("desktop:load-settings") as Promise<DesktopSettings>,
   saveSettings: (settings: DesktopSettings) =>
@@ -174,6 +225,14 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     ipcRenderer.invoke("desktop:check-octopal-update", installDir) as Promise<DesktopUpdateStatus>,
   updateOctopal: (installDir: string) =>
     ipcRenderer.invoke("desktop:update-octopal", installDir) as Promise<DesktopUpdateResult>,
+  getDashboardSnapshot: (installDir: string) =>
+    ipcRenderer.invoke("desktop:get-dashboard-snapshot", installDir) as Promise<DesktopDashboardSnapshot>,
+  getWorkerTemplates: (installDir: string) =>
+    ipcRenderer.invoke("desktop:get-worker-templates", installDir) as Promise<DesktopWorkerTemplate[]>,
+  saveWorkerTemplate: (installDir: string, template: DesktopWorkerTemplate, mode: "create" | "update") =>
+    ipcRenderer.invoke("desktop:save-worker-template", installDir, template, mode) as Promise<DesktopWorkerTemplate>,
+  deleteWorkerTemplate: (installDir: string, templateId: string) =>
+    ipcRenderer.invoke("desktop:delete-worker-template", installDir, templateId) as Promise<void>,
   getAppUpdateStatus: () =>
     ipcRenderer.invoke("desktop:get-app-update-status") as Promise<DesktopAppUpdateStatus>,
   checkAppUpdate: () => ipcRenderer.invoke("desktop:check-app-update") as Promise<DesktopAppUpdateStatus>,
