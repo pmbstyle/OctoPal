@@ -282,6 +282,42 @@ button {
   min-width: min(260px, 100%);
 }
 
+.update-card {
+  display: flex;
+  width: min(560px, calc(100vw - 48px));
+  margin-top: 16px;
+  padding: 14px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid color-mix(in srgb, var(--primary) 48%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--primary) 9%, var(--surface-strong));
+  text-align: left;
+}
+
+.update-card strong,
+.update-card span {
+  display: block;
+}
+
+.update-card strong {
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.update-card span {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.update-card-button {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
 .welcome-error {
   width: min(560px, calc(100vw - 48px));
   margin-top: 16px;
@@ -1548,8 +1584,37 @@ p {
 
 .status-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 12px;
   margin-top: 30px;
+}
+
+.status-notice {
+  width: min(760px, 100%);
+  margin-top: 22px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--primary) 48%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface-strong));
+  text-align: left;
+}
+
+.status-notice strong,
+.status-notice span {
+  display: block;
+}
+
+.status-notice strong {
+  color: var(--foreground);
+  font-size: 14px;
+}
+
+.status-notice span {
+  margin-top: 6px;
+  color: var(--muted-strong);
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .status-error {
@@ -1867,6 +1932,15 @@ p {
 
   .input-action-row {
     grid-template-columns: 1fr;
+  }
+
+  .update-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .update-card-button {
+    width: 100%;
   }
 
   .wizard-footer {

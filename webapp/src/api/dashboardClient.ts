@@ -229,6 +229,20 @@ export async function updateDashboardConfig(
   return mutateJson<DashboardConfigSaveResponse>("/api/dashboard/config", "PUT", token, payload);
 }
 
+export async function requestSelfUpdate(token?: string): Promise<{ status: string; message?: string }> {
+  return mutateJson<{ status: string; message?: string }>(
+    "/api/dashboard/actions",
+    "POST",
+    token,
+    {
+      action: "request_self_update",
+      confirm: true,
+      reason: "Apply latest Octopal release from dashboard.",
+      requested_by: "dashboard",
+    },
+  );
+}
+
 export async function fetchWorkerTemplates(token?: string): Promise<WorkerTemplate[]> {
   const payload = await fetchJson<{ count: number; templates: WorkerTemplate[] }>("/api/dashboard/worker-templates", token);
   return payload.templates ?? [];

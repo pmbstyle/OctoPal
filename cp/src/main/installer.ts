@@ -66,6 +66,31 @@ export type RuntimeStatusResult = {
   launcher?: string;
 };
 
+export type UpdateStatusResult = {
+  ok: boolean;
+  status: string;
+  localVersion?: string;
+  latestVersion?: string | null;
+  releaseUrl?: string | null;
+  repo?: string;
+  updateAvailable: boolean;
+  canUpdate: boolean;
+  gitBlocker?: string | null;
+  updateCommand?: string;
+  restartCommand?: string;
+  detail: string;
+};
+
+export type UpdateResult = {
+  ok: boolean;
+  installDir: string;
+  detail: string;
+  before?: UpdateStatusResult;
+  after?: UpdateStatusResult;
+  restarted?: boolean;
+  error?: string;
+};
+
 type CommandResult = {
   stdout: string;
   stderr: string;
@@ -577,6 +602,10 @@ function parseDashboardSnapshot(output: string): unknown {
   return JSON.parse(trimmed.slice(start, end + 1));
 }
 
+function parseJsonOutput(output: string): unknown {
+  return parseDashboardSnapshot(output);
+}
+
 async function commandExists(command: string, emit: (event: InstallEvent) => void): Promise<boolean> {
   try {
     await runCommand(command, ["--version"], emit, { quiet: true });
@@ -592,6 +621,24 @@ async function resolveUv(emit: (event: InstallEvent) => void): Promise<string | 
   }
 
   return getUvCandidates().find((candidate) => existsSync(candidate)) ?? null;
+}
+
+async function resolveInstalledUv(): Promise<string> {
+  const uvCommand = await resolveUv(() => undefined);
+  if (!uvCommand) {
+    throw new Error("uv is not available. Install uv or run the installer again.");
+  }
+  return uvCommand;
+}
+
+function assertOctopalCheckout(installDir: string): void {
+  if (!installDir) {
+    throw new Error("Install directory is not selected.");
+  }
+
+  if (!existsSync(join(installDir, "pyproject.toml"))) {
+    throw new Error("Install folder does not look like an Octopal checkout.");
+  }
 }
 
 async function ensureUv(emit: (event: InstallEvent) => void): Promise<string> {
@@ -949,19 +996,137 @@ export async function stopOctopalSafely(installDir: string): Promise<StopResult 
   }
 }
 
+function normalizeUpdateStatus(payload: unknown, fallbackDetail = ""): UpdateStatusResult {
+  const record = asRecord(payload);
+  const status = typeof record.status === "string" ? record.status : "unknown";
+  const updateAvailable = record.update_available === true;
+  const canUpdate = record.can_update === true;
+  const gitBlocker = typeof record.git_blocker === "string" && record.git_blocker.trim() ? record.git_blocker : null;
+  const message = typeof record.message === "string" ? record.message : "";
+  const detail = message || gitBlocker || fallbackDetail || (updateAvailable ? "Update available." : "No update available.");
+
+  return {
+    ok: status !== "error",
+    status,
+    localVersion: typeof record.local_version === "string" ? record.local_version : undefined,
+    latestVersion: typeof record.latest_version === "string" ? record.latest_version : null,
+    releaseUrl: typeof record.release_url === "string" ? record.release_url : null,
+    repo: typeof record.repo === "string" ? record.repo : undefined,
+    updateAvailable,
+    canUpdate,
+    gitBlocker,
+    updateCommand: typeof record.update_command === "string" ? record.update_command : undefined,
+    restartCommand: typeof record.restart_command === "string" ? record.restart_command : undefined,
+    detail,
+  };
+}
+
+export async function checkOctopalUpdate(installDir: string): Promise<UpdateStatusResult> {
+  assertOctopalCheckout(installDir);
+  const uvCommand = await resolveInstalledUv();
+  const snippet = [
+    "import json",
+    "from octopal.runtime.self_control import check_update_status",
+    "print(json.dumps(check_update_status()))",
+  ].join("; ");
+  const { stdout } = await runCommand(uvCommand, ["run", "python", "-c", snippet], () => undefined, {
+    cwd: installDir,
+    env: withPythonDesktopEnv(),
+    quiet: true,
+  });
+
+  return normalizeUpdateStatus(parseJsonOutput(stdout));
+}
+
+export async function checkOctopalUpdateSafely(installDir: string): Promise<UpdateStatusResult> {
+  try {
+    return await checkOctopalUpdate(installDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not check for updates.";
+    return {
+      ok: false,
+      status: "error",
+      updateAvailable: false,
+      canUpdate: false,
+      detail: sanitizeOutput(message),
+    };
+  }
+}
+
+export async function updateOctopal(installDir: string): Promise<UpdateResult> {
+  assertOctopalCheckout(installDir);
+  const uvCommand = await resolveInstalledUv();
+  const before = await checkOctopalUpdate(installDir);
+  if (!before.updateAvailable) {
+    return {
+      ok: false,
+      installDir,
+      before,
+      detail: "No newer release is available.",
+      error: "No update available.",
+    };
+  }
+  if (!before.canUpdate) {
+    return {
+      ok: false,
+      installDir,
+      before,
+      detail: before.detail || "Update is blocked by the current checkout state.",
+      error: "Update blocked.",
+    };
+  }
+
+  const statusBefore = await getOctopalStatus(installDir).catch(() => null);
+  const wasRunning = statusBefore?.state === "running";
+  const update = await runCommand(uvCommand, ["run", "octopal", "update"], () => undefined, {
+    cwd: installDir,
+    env: withPythonDesktopEnv(),
+    quiet: true,
+  });
+  let restartDetail = "";
+  if (wasRunning) {
+    const restart = await runCommand(uvCommand, ["run", "octopal", "restart"], () => undefined, {
+      cwd: installDir,
+      env: withPythonDesktopEnv(),
+      quiet: true,
+    });
+    restartDetail = sanitizeOutput(restart.stdout || restart.stderr).trim();
+  }
+
+  const after = await checkOctopalUpdateSafely(installDir);
+  const detail = [
+    sanitizeOutput(update.stdout || update.stderr).trim(),
+    wasRunning ? restartDetail || "Octopal restart requested after update." : "Octopal was stopped; start it when ready.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return {
+    ok: true,
+    installDir,
+    before,
+    after,
+    restarted: wasRunning,
+    detail,
+  };
+}
+
+export async function updateOctopalSafely(installDir: string): Promise<UpdateResult> {
+  try {
+    return await updateOctopal(installDir);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Could not update Octopal.";
+    return {
+      ok: false,
+      installDir,
+      detail: sanitizeOutput(message),
+      error: "Could not update Octopal.",
+    };
+  }
+}
+
 export async function getOctopalStatus(installDir: string): Promise<RuntimeStatusResult> {
-  if (!installDir) {
-    throw new Error("Install directory is not selected.");
-  }
-
-  if (!existsSync(join(installDir, "pyproject.toml"))) {
-    throw new Error("Install folder does not look like an Octopal checkout.");
-  }
-
-  const uvCommand = await resolveUv(() => undefined);
-  if (!uvCommand) {
-    throw new Error("uv is not available. Install uv or run the installer again.");
-  }
+  assertOctopalCheckout(installDir);
+  const uvCommand = await resolveInstalledUv();
 
   const { stdout } = await runCommand(uvCommand, ["run", "octopal", "dashboard", "--once", "--json"], () => undefined, {
     cwd: installDir,

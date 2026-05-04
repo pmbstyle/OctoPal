@@ -64,6 +64,46 @@ type DesktopRuntimeStatus = {
   launcher?: string;
 };
 
+type DesktopUpdateStatus = {
+  ok: boolean;
+  status: string;
+  localVersion?: string;
+  latestVersion?: string | null;
+  releaseUrl?: string | null;
+  repo?: string;
+  updateAvailable: boolean;
+  canUpdate: boolean;
+  gitBlocker?: string | null;
+  updateCommand?: string;
+  restartCommand?: string;
+  detail: string;
+};
+
+type DesktopUpdateResult = {
+  ok: boolean;
+  installDir: string;
+  detail: string;
+  before?: DesktopUpdateStatus;
+  after?: DesktopUpdateStatus;
+  restarted?: boolean;
+  error?: string;
+};
+
+type DesktopAppUpdateStatus = {
+  ok: boolean;
+  status: "idle" | "checking" | "available" | "not-available" | "downloading" | "downloaded" | "installing" | "error";
+  currentVersion: string;
+  latestVersion?: string;
+  releaseName?: string;
+  releaseDate?: string;
+  detail: string;
+  canDownload: boolean;
+  canInstall: boolean;
+  percent?: number;
+  isPackaged: boolean;
+  error?: string;
+};
+
 type DesktopPrerequisiteCheck = {
   id: string;
   label: string;
@@ -130,6 +170,15 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     ipcRenderer.invoke("desktop:stop-octopal", installDir) as Promise<DesktopStopResult | DesktopStopFailure>,
   getOctopalStatus: (installDir: string) =>
     ipcRenderer.invoke("desktop:get-octopal-status", installDir) as Promise<DesktopRuntimeStatus>,
+  checkOctopalUpdate: (installDir: string) =>
+    ipcRenderer.invoke("desktop:check-octopal-update", installDir) as Promise<DesktopUpdateStatus>,
+  updateOctopal: (installDir: string) =>
+    ipcRenderer.invoke("desktop:update-octopal", installDir) as Promise<DesktopUpdateResult>,
+  getAppUpdateStatus: () =>
+    ipcRenderer.invoke("desktop:get-app-update-status") as Promise<DesktopAppUpdateStatus>,
+  checkAppUpdate: () => ipcRenderer.invoke("desktop:check-app-update") as Promise<DesktopAppUpdateStatus>,
+  downloadAppUpdate: () => ipcRenderer.invoke("desktop:download-app-update") as Promise<DesktopAppUpdateStatus>,
+  installAppUpdate: () => ipcRenderer.invoke("desktop:install-app-update") as Promise<DesktopAppUpdateStatus>,
   getConnectorStatus: (installDir: string) =>
     ipcRenderer.invoke("desktop:get-connector-status", installDir) as Promise<DesktopConnectorStatusResult>,
   authorizeConnector: (installDir: string, payload: DesktopConnectorAuthPayload) =>
@@ -146,5 +195,10 @@ contextBridge.exposeInMainWorld("octopalDesktop", {
     const handler = (_event: Electron.IpcRendererEvent, installEvent: DesktopInstallEvent) => callback(installEvent);
     ipcRenderer.on("desktop:install-event", handler);
     return () => ipcRenderer.removeListener("desktop:install-event", handler);
+  },
+  onAppUpdateStatus: (callback: (status: DesktopAppUpdateStatus) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, updateStatus: DesktopAppUpdateStatus) => callback(updateStatus);
+    ipcRenderer.on("desktop:app-update-status", handler);
+    return () => ipcRenderer.removeListener("desktop:app-update-status", handler);
   },
 });
