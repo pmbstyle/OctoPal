@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, readdir, stat, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { delimiter, dirname, join } from "node:path";
+import { delimiter, dirname, isAbsolute, join } from "node:path";
 
 const REPO_URL = "https://github.com/pmbstyle/Octopal.git";
 const LATEST_RELEASE_API_URL = "https://api.github.com/repos/pmbstyle/Octopal/releases/latest";
@@ -772,6 +772,64 @@ async function writeInstallFiles(payload: InstallPayload, releaseTag: string, em
   return { configPath, planPath };
 }
 
+function resolveWorkspaceDir(installDir: string, config: unknown): string {
+  const root = asRecord(config);
+  const storage = asRecord(root.storage);
+  const configured = typeof storage.workspace_dir === "string" && storage.workspace_dir.trim()
+    ? storage.workspace_dir.trim()
+    : "workspace";
+  return isAbsolute(configured) ? configured : join(installDir, configured);
+}
+
+async function copyMissingTree(sourceRoot: string, targetRoot: string): Promise<{ copied: number; skipped: number }> {
+  await mkdir(targetRoot, { recursive: true });
+  let copied = 0;
+  let skipped = 0;
+
+  const entries = await readdir(sourceRoot, { withFileTypes: true });
+  for (const entry of entries) {
+    const source = join(sourceRoot, entry.name);
+    const target = join(targetRoot, entry.name);
+    if (entry.isDirectory()) {
+      const child = await copyMissingTree(source, target);
+      copied += child.copied;
+      skipped += child.skipped;
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    if (existsSync(target)) {
+      skipped += 1;
+      continue;
+    }
+    await mkdir(dirname(target), { recursive: true });
+    await copyFile(source, target);
+    copied += 1;
+  }
+
+  return { copied, skipped };
+}
+
+export async function ensureWorkspaceBootstrap(
+  installDir: string,
+  config: unknown,
+  emit?: (event: InstallEvent) => void,
+): Promise<{ copied: number; skipped: number; workspaceDir: string }> {
+  const workspaceDir = resolveWorkspaceDir(installDir, config);
+  const templateRoot = join(installDir, "workspace_templates");
+  await mkdir(workspaceDir, { recursive: true });
+
+  if (!existsSync(templateRoot)) {
+    emitWarning(emit ?? (() => undefined), "Workspace templates were not found", templateRoot);
+    return { copied: 0, skipped: 0, workspaceDir };
+  }
+
+  emitStep(emit ?? (() => undefined), "Bootstrapping workspace", workspaceDir);
+  const result = await copyMissingTree(templateRoot, workspaceDir);
+  return { ...result, workspaceDir };
+}
+
 async function installProject(installDir: string, uvCommand: string, emit: (event: InstallEvent) => void) {
   emitStep(emit, "Installing Python dependencies");
   await runCommand(uvCommand, ["sync"], emit, { cwd: installDir, env: withLocalToolPaths() });
@@ -817,6 +875,7 @@ export async function runInstall(payload: InstallPayload, emit: (event: InstallE
   const releaseTag = await getLatestReleaseTag(emit);
   await cloneOrCheckoutRelease(payload.installDir, releaseTag, emit);
   const files = await writeInstallFiles(payload, releaseTag, emit);
+  await ensureWorkspaceBootstrap(payload.installDir, payload.octopalConfig, emit);
   const uvCommand = await ensureUv(emit);
   await installProject(payload.installDir, uvCommand, emit);
   await installOptionalBridge(payload.installDir, emit);
@@ -844,6 +903,9 @@ export async function startOctopal(installDir: string): Promise<StartResult> {
   if (!uvCommand) {
     throw new Error("uv is not available. Install uv or run the installer again.");
   }
+
+  const config = JSON.parse(await readFile(join(installDir, "config.json"), "utf8"));
+  await ensureWorkspaceBootstrap(installDir, config);
 
   const result = await runDetachedStart(uvCommand, ["run", "octopal", "start"], {
     cwd: installDir,

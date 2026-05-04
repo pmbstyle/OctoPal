@@ -1,8 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, type OpenDialogOptions } from "electron";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -21,6 +21,7 @@ import {
 } from "./connectors";
 import {
   checkOctopalUpdateSafely,
+  ensureWorkspaceBootstrap,
   getOctopalStatusSafely,
   runInstall,
   startOctopalSafely,
@@ -385,6 +386,175 @@ async function fetchDashboardJson<T>(installDir: string, path: string, init?: Re
   return (await response.json()) as T;
 }
 
+function isDashboardConnectionError(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /fetch failed|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT/i.test(message);
+}
+
+function resolveConfiguredWorkspaceDir(installDir: string, config: Record<string, unknown>): string {
+  const storage = recordValue(config.storage);
+  const configured = stringValue(storage.workspace_dir, "workspace");
+  return isAbsolute(configured) ? configured : join(installDir, configured);
+}
+
+function validateWorkerTemplateId(templateId: string): string {
+  const id = templateId.trim();
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(id)) {
+    throw new Error("Worker template id must use lowercase letters, numbers, '_' or '-' and start with a letter or digit.");
+  }
+  return id;
+}
+
+function normalizeStringList(items: unknown): string[] {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of items) {
+    const value = String(item ?? "").trim();
+    if (!value || seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
+}
+
+function normalizeDesktopWorkerTemplate(
+  template: DesktopWorkerTemplate,
+  options: { expectedId?: string; updatedAt?: string } = {},
+): DesktopWorkerTemplate {
+  const id = validateWorkerTemplateId(template.id);
+  if (options.expectedId && id !== options.expectedId) {
+    throw new Error("Template id in path and payload must match.");
+  }
+  const name = stringValue(template.name);
+  const description = stringValue(template.description);
+  const systemPrompt = stringValue(template.system_prompt);
+  if (!name) {
+    throw new Error("Worker template name is required.");
+  }
+  if (!description) {
+    throw new Error("Worker template description is required.");
+  }
+  if (!systemPrompt) {
+    throw new Error("Worker template system_prompt is required.");
+  }
+  const maxThinkingSteps = numberValue(template.max_thinking_steps, 10);
+  const defaultTimeoutSeconds = numberValue(template.default_timeout_seconds, 300);
+  if (maxThinkingSteps <= 0) {
+    throw new Error("max_thinking_steps must be greater than 0.");
+  }
+  if (defaultTimeoutSeconds <= 0) {
+    throw new Error("default_timeout_seconds must be greater than 0.");
+  }
+
+  return {
+    id,
+    name,
+    description,
+    system_prompt: systemPrompt,
+    available_tools: normalizeStringList(template.available_tools),
+    required_permissions: normalizeStringList(template.required_permissions),
+    model: stringValue(template.model) || null,
+    max_thinking_steps: Math.trunc(maxThinkingSteps),
+    default_timeout_seconds: Math.trunc(defaultTimeoutSeconds),
+    can_spawn_children: Boolean(template.can_spawn_children),
+    allowed_child_templates: normalizeStringList(template.allowed_child_templates),
+    created_at: stringValue(template.created_at, options.updatedAt ?? ""),
+    updated_at: stringValue(template.updated_at, options.updatedAt ?? ""),
+  };
+}
+
+async function workerTemplateRoot(installDir: string): Promise<string> {
+  const config = await loadRawConfigForInstall(installDir);
+  await ensureWorkspaceBootstrap(installDir, config);
+  const root = join(resolveConfiguredWorkspaceDir(installDir, config), "workers");
+  await mkdir(root, { recursive: true });
+  return root;
+}
+
+function workerTemplateFile(workersRoot: string, templateId: string): string {
+  const id = validateWorkerTemplateId(templateId);
+  const root = resolve(workersRoot);
+  const file = resolve(root, id, "worker.json");
+  const rel = relative(root, file);
+  if (rel.startsWith("..") || rel === "" || rel.includes(`..${sep}`)) {
+    throw new Error("Invalid worker template path.");
+  }
+  return file;
+}
+
+async function readLocalWorkerTemplate(workerFile: string): Promise<DesktopWorkerTemplate | null> {
+  try {
+    const raw = cloneJsonRecord(JSON.parse(await readFile(workerFile, "utf8")));
+    const stats = await stat(workerFile);
+    const updatedAt = stats.mtime.toISOString();
+    return normalizeDesktopWorkerTemplate(raw as DesktopWorkerTemplate, { updatedAt });
+  } catch {
+    return null;
+  }
+}
+
+async function listLocalWorkerTemplates(installDir: string): Promise<DesktopWorkerTemplate[]> {
+  const workersRoot = await workerTemplateRoot(installDir);
+  const entries = await readdir(workersRoot, { withFileTypes: true });
+  const templates: DesktopWorkerTemplate[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const template = await readLocalWorkerTemplate(join(workersRoot, entry.name, "worker.json"));
+    if (template) {
+      templates.push(template);
+    }
+  }
+  return templates.sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
+async function saveLocalWorkerTemplate(
+  installDir: string,
+  template: DesktopWorkerTemplate,
+  mode: "create" | "update",
+): Promise<DesktopWorkerTemplate> {
+  const workersRoot = await workerTemplateRoot(installDir);
+  const normalized = normalizeDesktopWorkerTemplate(template);
+  const file = workerTemplateFile(workersRoot, normalized.id);
+  if (mode === "create" && existsSync(file)) {
+    throw new Error(`Worker template '${normalized.id}' already exists.`);
+  }
+  if (mode === "update" && !existsSync(file)) {
+    throw new Error(`Worker template '${normalized.id}' not found.`);
+  }
+  await mkdir(dirname(file), { recursive: true });
+  const payload = {
+    id: normalized.id,
+    name: normalized.name,
+    description: normalized.description,
+    system_prompt: normalized.system_prompt,
+    available_tools: normalized.available_tools,
+    required_permissions: normalized.required_permissions,
+    model: normalized.model,
+    max_thinking_steps: normalized.max_thinking_steps,
+    default_timeout_seconds: normalized.default_timeout_seconds,
+    can_spawn_children: normalized.can_spawn_children,
+    allowed_child_templates: normalized.allowed_child_templates,
+  };
+  await writeFile(file, JSON.stringify(payload, null, 2), "utf8");
+  return (await readLocalWorkerTemplate(file)) ?? normalized;
+}
+
+async function deleteLocalWorkerTemplate(installDir: string, templateId: string): Promise<void> {
+  const workersRoot = await workerTemplateRoot(installDir);
+  const file = workerTemplateFile(workersRoot, templateId);
+  await rm(dirname(file), { recursive: true, force: true });
+}
+
 function queryPath(path: string): string {
   const query = new URLSearchParams({
     window_minutes: "60",
@@ -462,11 +632,15 @@ async function getDesktopDashboardSnapshot(installDir: string): Promise<DesktopD
 }
 
 async function getDesktopWorkerTemplates(installDir: string): Promise<DesktopWorkerTemplate[]> {
-  const payload = await fetchDashboardJson<{ templates?: DesktopWorkerTemplate[] }>(
-    installDir,
-    "/api/dashboard/worker-templates",
-  );
-  return payload.templates ?? [];
+  try {
+    const payload = await fetchDashboardJson<{ templates?: DesktopWorkerTemplate[] }>(
+      installDir,
+      "/api/dashboard/worker-templates",
+    );
+    return payload.templates ?? [];
+  } catch {
+    return listLocalWorkerTemplates(installDir);
+  }
 }
 
 async function saveDesktopWorkerTemplate(
@@ -478,19 +652,33 @@ async function saveDesktopWorkerTemplate(
     mode === "create"
       ? "/api/dashboard/worker-templates"
       : `/api/dashboard/worker-templates/${encodeURIComponent(template.id)}`;
-  const payload = await fetchDashboardJson<{ template?: DesktopWorkerTemplate }>(installDir, path, {
-    method: mode === "create" ? "POST" : "PUT",
-    body: JSON.stringify(template),
-  });
-  return payload.template ?? template;
+  try {
+    const payload = await fetchDashboardJson<{ template?: DesktopWorkerTemplate }>(installDir, path, {
+      method: mode === "create" ? "POST" : "PUT",
+      body: JSON.stringify(template),
+    });
+    return payload.template ?? template;
+  } catch (error) {
+    if (!isDashboardConnectionError(error)) {
+      throw error;
+    }
+    return saveLocalWorkerTemplate(installDir, template, mode);
+  }
 }
 
 async function deleteDesktopWorkerTemplate(installDir: string, templateId: string): Promise<void> {
-  await fetchDashboardJson<{ status: string }>(
-    installDir,
-    `/api/dashboard/worker-templates/${encodeURIComponent(templateId)}`,
-    { method: "DELETE" },
-  );
+  try {
+    await fetchDashboardJson<{ status: string }>(
+      installDir,
+      `/api/dashboard/worker-templates/${encodeURIComponent(templateId)}`,
+      { method: "DELETE" },
+    );
+  } catch (error) {
+    if (!isDashboardConnectionError(error)) {
+      throw error;
+    }
+    await deleteLocalWorkerTemplate(installDir, templateId);
+  }
 }
 
 async function saveInstalledConfig(config: unknown): Promise<InstallState> {
@@ -502,6 +690,7 @@ async function saveInstalledConfig(config: unknown): Promise<InstallState> {
   const existing = JSON.parse(await readFile(state.configPath, "utf8"));
   const merged = mergeConfigForDesktopSave(existing, config);
   await writeFile(state.configPath, JSON.stringify(merged, null, 2), "utf8");
+  await ensureWorkspaceBootstrap(state.installDir, merged);
   return getInstallState();
 }
 

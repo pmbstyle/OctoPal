@@ -1829,12 +1829,13 @@ p {
 }
 
 .dashboard-tabs {
-  position: absolute;
-  top: 18px;
+  position: fixed;
+  top: 8px;
   right: 28px;
-  z-index: 2;
+  z-index: 30;
   display: flex;
   gap: 10px;
+  -webkit-app-region: no-drag;
 }
 
 .dashboard-tab {
@@ -2171,7 +2172,16 @@ p {
 
 .worker-run-help,
 .system-card {
-  padding: 20px;
+  padding: 22px 20px;
+}
+
+.system-card {
+  display: grid;
+  gap: 12px;
+}
+
+.system-card .system-actions {
+  margin-top: 2px;
 }
 
 .system-grid {
