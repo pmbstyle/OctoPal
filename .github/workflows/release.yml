@@ -107,7 +107,7 @@ jobs:
         include:
           - name: Windows
             os: windows-latest
-            command: npm run dist:win
+            command: npm run dist:win -- --publish never
             artifact: octopal-desktop-windows
             path: |
               cp/dist/*.exe
@@ -115,7 +115,7 @@ jobs:
               cp/dist/latest.yml
           - name: macOS
             os: macos-15-intel
-            command: npm run dist:mac
+            command: npm run dist:mac -- --publish never
             artifact: octopal-desktop-macos
             path: |
               cp/dist/*.dmg
@@ -123,7 +123,7 @@ jobs:
               cp/dist/latest-mac.yml
           - name: Linux
             os: ubuntu-latest
-            command: npm run dist:linux
+            command: npm run dist:linux -- --publish never
             artifact: octopal-desktop-linux
             path: |
               cp/dist/*.AppImage
