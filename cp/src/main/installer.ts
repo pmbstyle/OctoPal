@@ -1083,6 +1083,40 @@ function normalizeUpdateStatus(payload: unknown, fallbackDetail = ""): UpdateSta
   };
 }
 
+function releaseTagFromUpdateStatus(status: UpdateStatusResult): string {
+  const latestVersion = status.latestVersion?.trim();
+  if (!latestVersion) {
+    throw new Error("Could not determine the latest Octopal release version.");
+  }
+  return latestVersion.toLowerCase().startsWith("v") ? latestVersion : `v${latestVersion}`;
+}
+
+async function performDesktopReleaseUpdate(
+  installDir: string,
+  uvCommand: string,
+  before: UpdateStatusResult,
+): Promise<string> {
+  const releaseTag = releaseTagFromUpdateStatus(before);
+
+  await runCommand("git", ["fetch", "--tags", "--force", "origin"], () => undefined, {
+    cwd: installDir,
+    env: withPythonDesktopEnv(),
+    quiet: true,
+  });
+  await runCommand("git", ["-c", "advice.detachedHead=false", "checkout", "--detach", releaseTag], () => undefined, {
+    cwd: installDir,
+    env: withPythonDesktopEnv(),
+    quiet: true,
+  });
+  await runCommand(uvCommand, ["sync"], () => undefined, {
+    cwd: installDir,
+    env: withPythonDesktopEnv(),
+    quiet: true,
+  });
+
+  return `Checked out release tag ${releaseTag}.`;
+}
+
 export async function checkOctopalUpdate(installDir: string): Promise<UpdateStatusResult> {
   assertOctopalCheckout(installDir);
   const uvCommand = await resolveInstalledUv();
@@ -1140,11 +1174,7 @@ export async function updateOctopal(installDir: string): Promise<UpdateResult> {
 
   const statusBefore = await getOctopalStatus(installDir).catch(() => null);
   const wasRunning = statusBefore?.state === "running";
-  const update = await runCommand(uvCommand, ["run", "octopal", "update"], () => undefined, {
-    cwd: installDir,
-    env: withPythonDesktopEnv(),
-    quiet: true,
-  });
+  const updateDetail = await performDesktopReleaseUpdate(installDir, uvCommand, before);
   let restartDetail = "";
   if (wasRunning) {
     const restart = await runCommand(uvCommand, ["run", "octopal", "restart"], () => undefined, {
@@ -1156,8 +1186,20 @@ export async function updateOctopal(installDir: string): Promise<UpdateResult> {
   }
 
   const after = await checkOctopalUpdateSafely(installDir);
+  if (after.ok && after.updateAvailable) {
+    return {
+      ok: false,
+      installDir,
+      before,
+      after,
+      restarted: wasRunning,
+      detail: "Update failed. Try to restart Octopal Desktop or update manually.",
+      error: "Update failed.",
+    };
+  }
+
   const detail = [
-    sanitizeOutput(update.stdout || update.stderr).trim(),
+    updateDetail,
     wasRunning ? restartDetail || "Octopal restart requested after update." : "Octopal was stopped; start it when ready.",
   ]
     .filter(Boolean)
