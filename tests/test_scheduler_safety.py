@@ -117,6 +117,26 @@ class _BrowserStub:
         return None
 
 
+def _write_worker_template(tmp_path: Path, worker_id: str = "weather_worker") -> None:
+    worker_dir = tmp_path / "workers" / worker_id
+    worker_dir.mkdir(parents=True)
+    (worker_dir / "worker.json").write_text(
+        json.dumps(
+            {
+                "id": worker_id,
+                "name": "Weather Worker",
+                "description": "Fetches weather",
+                "system_prompt": "Do weather work.",
+                "available_tools": ["web_search"],
+                "required_permissions": ["network"],
+                "max_thinking_steps": 8,
+                "default_timeout_seconds": 300,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_schedule_task_rejects_invalid_frequency(tmp_path: Path) -> None:
     scheduler = SchedulerService(store=_StoreStub(), workspace_dir=tmp_path)
     result = _tool_schedule_task(
@@ -553,23 +573,7 @@ def test_repair_scheduled_tasks_previews_candidates_without_applying(tmp_path: P
 
 def test_repair_scheduled_tasks_applies_worker_migration_with_valid_worker_id(tmp_path: Path) -> None:
     blocked_until = utc_now() + timedelta(minutes=30)
-    worker_dir = tmp_path / "workers" / "weather_worker"
-    worker_dir.mkdir(parents=True)
-    (worker_dir / "worker.json").write_text(
-        json.dumps(
-            {
-                "id": "weather_worker",
-                "name": "Weather Worker",
-                "description": "Fetches weather",
-                "system_prompt": "Do weather work.",
-                "available_tools": ["web_search"],
-                "required_permissions": ["network"],
-                "max_thinking_steps": 8,
-                "default_timeout_seconds": 300,
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_worker_template(tmp_path)
     store = _StoreStub(
         tasks=[
             {
@@ -620,6 +624,158 @@ def test_repair_scheduled_tasks_applies_worker_migration_with_valid_worker_id(tm
         "notify_user": "never",
         "execution_mode": "worker",
     }
+
+
+def test_proactive_repair_scheduled_tasks_blocks_worker_override(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    _write_worker_template(tmp_path)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": None,
+                "task_text": "Check the weather",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "blocked_by_route",
+                        "suggested_execution_mode": "worker",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    payload = json.loads(
+        _tool_repair_scheduled_tasks(
+            {"apply": True, "task_ids": ["weather_check"], "worker_id": "weather_worker"},
+            {
+                "octo": SimpleNamespace(scheduler=scheduler),
+                "route_policy_label": "octo.proactive_allowlist",
+            },
+        )
+    )
+
+    assert payload == {
+        "status": "blocked",
+        "reason": "proactive_worker_id_override_forbidden",
+    }
+    assert store.last_upsert is None
+
+
+def test_proactive_repair_scheduled_tasks_applies_existing_worker_only(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    _write_worker_template(tmp_path)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": "weather_worker",
+                "task_text": "Check the weather",
+                "inputs_json": json.dumps({"city": "Montreal"}),
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "blocked_by_route",
+                        "suggested_execution_mode": "worker",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    payload = json.loads(
+        _tool_repair_scheduled_tasks(
+            {"apply": True, "task_ids": ["weather_check"]},
+            {
+                "octo": SimpleNamespace(scheduler=scheduler),
+                "route_policy_label": "octo.proactive_allowlist",
+            },
+        )
+    )
+
+    assert payload["status"] == "applied"
+    assert payload["applied_count"] == 1
+    assert payload["skipped_count"] == 0
+    assert payload["applied"][0]["worker_id"] == "weather_worker"
+    assert store.last_upsert is not None
+    assert store.last_upsert["task_id"] == "weather_check"
+    assert store.last_upsert["worker_id"] == "weather_worker"
+    assert store.last_upsert["task_text"] == "Check the weather"
+    assert store.last_upsert["inputs"] == {"city": "Montreal"}
+    assert store.last_upsert["metadata"] == {
+        "notify_user": "never",
+        "execution_mode": "worker",
+    }
+
+
+def test_proactive_repair_scheduled_tasks_requires_blocked_by_route(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    _write_worker_template(tmp_path)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": "weather_worker",
+                "task_text": "Check the weather",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "manual_review",
+                        "suggested_execution_mode": "worker",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    payload = json.loads(
+        _tool_repair_scheduled_tasks(
+            {"apply": True, "task_ids": ["weather_check"]},
+            {
+                "octo": SimpleNamespace(scheduler=scheduler),
+                "route_policy_label": "octo.proactive_allowlist",
+            },
+        )
+    )
+
+    assert payload["status"] == "applied"
+    assert payload["applied_count"] == 0
+    assert payload["skipped_count"] == 1
+    assert payload["skipped"][0] == {
+        "task_id": "weather_check",
+        "name": "Weather Check",
+        "reason": "blocked_reason_mismatch",
+    }
+    assert payload["candidates"][0]["can_apply"] is False
+    assert payload["candidates"][0]["skip_reason"] == "blocked_reason_mismatch"
+    assert store.last_upsert is None
 
 
 def test_octo_marks_scheduled_task_after_successful_worker_run_even_if_store_lags() -> None:
@@ -761,6 +917,7 @@ async def test_route_proactive_tick_uses_queue_allowlist_and_skips_planner(monke
     async def _complete_route_with_tools(**kwargs):
         calls["complete_route"] += 1
         captured_tool_names.update(spec.name for spec in kwargs["tool_specs"])
+        assert kwargs["ctx"]["route_policy_label"] == "octo.proactive_allowlist"
         return json.dumps(
             {
                 "decision": "noop",
@@ -788,10 +945,13 @@ async def test_route_proactive_tick_uses_queue_allowlist_and_skips_planner(monke
     assert payload["decision"] == "noop"
     assert calls == {"control_prompt": 1, "complete_route": 1}
     assert "octo_opportunity_scan" in captured_tool_names
+    assert "repair_scheduled_tasks" in captured_tool_names
     assert "octo_self_queue_add" in captured_tool_names
     assert "execute_self_queue_item" in captured_tool_names
     assert "octo_self_queue_take" in captured_tool_names
     assert "start_worker" not in captured_tool_names
+    assert "schedule_task" not in captured_tool_names
+    assert "remove_task" not in captured_tool_names
 
 
 @pytest.mark.asyncio

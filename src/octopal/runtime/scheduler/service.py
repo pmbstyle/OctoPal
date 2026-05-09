@@ -129,9 +129,14 @@ class SchedulerService:
         apply: bool = False,
         task_ids: list[str] | None = None,
         worker_id: str | None = None,
+        allow_worker_id_override: bool = True,
+        required_blocked_reason: str | None = None,
     ) -> dict[str, Any]:
         selected_ids = {str(item or "").strip() for item in (task_ids or []) if str(item or "").strip()}
         provided_worker_id = str(worker_id or "").strip() or None
+        if not allow_worker_id_override:
+            provided_worker_id = None
+        required_blocked_reason_value = str(required_blocked_reason or "").strip() or None
         described = self.describe_tasks(enabled_only=False)
         candidates: list[dict[str, Any]] = []
         applied_items: list[dict[str, Any]] = []
@@ -145,15 +150,19 @@ class SchedulerService:
             if not suggested_mode:
                 continue
             resolved_worker_id = str(task.get("worker_id") or "").strip() or provided_worker_id
+            blocked_reason = str(task.get("blocked_reason") or "").strip() or None
             can_apply = True
             skip_reason = None
+            if required_blocked_reason_value and blocked_reason != required_blocked_reason_value:
+                can_apply = False
+                skip_reason = "blocked_reason_mismatch"
             if suggested_mode == "worker":
                 if not resolved_worker_id:
                     can_apply = False
-                    skip_reason = "missing_worker_id"
+                    skip_reason = skip_reason or "missing_worker_id"
                 elif get_worker_template(self.workspace_dir, resolved_worker_id) is None:
                     can_apply = False
-                    skip_reason = "unknown_worker_id"
+                    skip_reason = skip_reason or "unknown_worker_id"
             candidate = {
                 "task_id": task_id,
                 "name": task.get("name"),
@@ -162,7 +171,7 @@ class SchedulerService:
                 "worker_id": task.get("worker_id"),
                 "resolved_worker_id": resolved_worker_id,
                 "dispatch_policy_reason": task.get("dispatch_policy_reason"),
-                "blocked_reason": task.get("blocked_reason"),
+                "blocked_reason": blocked_reason,
                 "can_apply": can_apply,
             }
             if skip_reason:

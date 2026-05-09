@@ -179,6 +179,7 @@ _PROACTIVE_ALLOWED_TOOL_NAMES = {
     "octo_context_health",
     "gateway_status",
     "octo_opportunity_scan",
+    "repair_scheduled_tasks",
     "octo_self_queue_add",
     "execute_self_queue_item",
     "octo_self_queue_list",
@@ -671,6 +672,9 @@ async def route_proactive_tick(
                 "Proactive route rules:\n"
                 "- Keep this turn bounded to initiative discovery and self-queue maintenance.\n"
                 "- You may add, claim, execute, cancel, or mark self-queue items only when the payload supports it.\n"
+                "- You may preview scheduled-task repair candidates with repair_scheduled_tasks(apply=false).\n"
+                "- You may apply scheduled-task repairs only for an unambiguous blocked_by_route -> worker repair "
+                "where the task already has a valid worker_id; never provide worker_id from this route.\n"
                 "- Do not start workers directly, schedule recurring tasks, use filesystem tools, use network/MCP tools, "
                 "or perform external side effects from this route.\n"
                 "- Use execute_self_queue_item only for an existing low/medium-risk queue item with an explicit worker_id; "
@@ -685,7 +689,7 @@ async def route_proactive_tick(
                 content=(
                     "Return JSON only with this shape:\n"
                     "{\n"
-                    '  "decision": "noop|queue|claim|execute|blocked",\n'
+                    '  "decision": "noop|queue|claim|execute|repair|blocked",\n'
                     '  "confidence": 0.0,\n'
                     '  "risk": "low|medium|high",\n'
                     '  "requires_user_input": false,\n'
@@ -696,6 +700,7 @@ async def route_proactive_tick(
                     "Use decision=queue only after a successful octo_self_queue_add call. "
                     "Use decision=claim only after a successful octo_self_queue_take call. "
                     "Use decision=execute only after a successful execute_self_queue_item call. "
+                    "Use decision=repair only after a successful guarded repair_scheduled_tasks(apply=true) call. "
                     "Use decision=noop when confidence is below threshold or pending work is not safely executable here."
                 ),
             )
@@ -1386,7 +1391,7 @@ def _normalize_proactive_reply(raw: str) -> str:
         return "NO_USER_RESPONSE"
 
     decision = str(payload.get("decision", "noop") or "noop").strip().lower()
-    if decision not in {"noop", "queue", "claim", "execute", "blocked"}:
+    if decision not in {"noop", "queue", "claim", "execute", "repair", "blocked"}:
         decision = "noop"
     risk = str(payload.get("risk", "low") or "low").strip().lower()
     if risk not in {"low", "medium", "high"}:
@@ -1773,7 +1778,7 @@ def _get_control_plane_tools(
         "self_control": True,
         "service_read": True,
     }
-    ctx = {"octo": octo, "chat_id": chat_id}
+    ctx = {"octo": octo, "chat_id": chat_id, "route_policy_label": policy_label}
     policy_steps = [
         ToolPolicyPipelineStep(
             label=policy_label,
@@ -1894,6 +1899,8 @@ async def _build_proactive_tick_input(octo: Any, *, chat_id: int, reason: str) -
         f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
         "If there is already pending self-queue work with an explicit worker_id, you may use execute_self_queue_item. "
         "If pending work lacks a worker_id, prefer decision=blocked or noop. "
+        "If an opportunity kind is scheduled_task_repair and the task already has worker_id, you may preview "
+        "repair_scheduled_tasks and apply it only when the candidate is safe. "
         "If the best opportunity is confidence >= 0.75, low/medium risk, and no pending work exists, "
         "use octo_self_queue_add to queue exactly one concrete initiative. "
         "Do not call start_worker directly from this route."
