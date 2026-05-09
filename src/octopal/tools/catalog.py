@@ -489,12 +489,34 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                     "priority": {"type": "integer", "minimum": 1, "maximum": 5},
                     "source": {"type": "string"},
                     "notes": {"type": "string"},
+                    "worker_id": {"type": "string"},
+                    "inputs": {"type": "object"},
+                    "risk": {"type": "string", "enum": ["low", "medium", "high"]},
+                    "dedupe_key": {"type": "string"},
                 },
                 "required": ["title", "task"],
                 "additionalProperties": False,
             },
             permission="self_control",
             handler=_tool_octo_self_queue_add,
+            is_async=True,
+        ),
+        ToolSpec(
+            name="execute_self_queue_item",
+            description=(
+                "Execute one Octo self-queue item through the runtime-owned executor. "
+                "Starts a worker only when the item has an explicit worker_id; otherwise marks it blocked."
+            ),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "dry_run": {"type": "boolean"},
+                },
+                "additionalProperties": False,
+            },
+            permission="self_control",
+            handler=_tool_execute_self_queue_item,
             is_async=True,
         ),
         ToolSpec(
@@ -520,7 +542,10 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                 "type": "object",
                 "properties": {
                     "task_id": {"type": "string"},
-                    "status": {"type": "string", "enum": ["pending", "claimed", "done", "cancelled"]},
+                    "status": {
+                        "type": "string",
+                        "enum": ["pending", "claimed", "running", "blocked", "done", "cancelled"],
+                    },
                     "notes": {"type": "string"},
                 },
                 "required": ["task_id", "status"],
@@ -693,7 +718,10 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
         ),
         ToolSpec(
             name="repair_scheduled_tasks",
-            description="Preview or apply safe repairs for scheduled tasks with known route-compatibility suggestions.",
+            description=(
+                "Preview or apply safe repairs for scheduled tasks with known route-compatibility suggestions. "
+                "Proactive mode is guarded to existing-worker blocked_by_route repairs and cannot provide worker_id."
+            ),
             parameters={
                 "type": "object",
                 "properties": {
@@ -708,7 +736,10 @@ def get_tools(mcp_manager=None) -> list[ToolSpec]:
                     },
                     "worker_id": {
                         "type": "string",
-                        "description": "Optional worker template ID to use when repairing tasks suggested to move to worker mode.",
+                        "description": (
+                            "Optional worker template ID to use when repairing tasks suggested to move to worker mode. "
+                            "Unavailable in proactive mode."
+                        ),
                     },
                 },
                 "additionalProperties": False,
@@ -1799,11 +1830,33 @@ async def _tool_scheduler_status(args, ctx) -> str:
 
 
 def _tool_repair_scheduled_tasks(args, ctx) -> str:
+    args = args or {}
     scheduler = ctx["octo"].scheduler
+    raw_task_ids = args.get("task_ids") or []
+    if isinstance(raw_task_ids, str):
+        task_ids = [raw_task_ids]
+    elif isinstance(raw_task_ids, list):
+        task_ids = raw_task_ids
+    else:
+        task_ids = []
+    apply_repair = bool(args.get("apply", False))
+    proactive = str(ctx.get("route_policy_label") or "") == "octo.proactive_allowlist"
+    if proactive and apply_repair and not task_ids:
+        return json.dumps(
+            {"status": "blocked", "reason": "proactive_apply_requires_task_ids"},
+            ensure_ascii=False,
+        )
+    if proactive and apply_repair and str(args.get("worker_id") or "").strip():
+        return json.dumps(
+            {"status": "blocked", "reason": "proactive_worker_id_override_forbidden"},
+            ensure_ascii=False,
+        )
     payload = scheduler.repair_suggested_tasks(
-        apply=bool((args or {}).get("apply", False)),
-        task_ids=list((args or {}).get("task_ids") or []),
-        worker_id=(args or {}).get("worker_id"),
+        apply=apply_repair,
+        task_ids=task_ids,
+        worker_id=None if proactive else args.get("worker_id"),
+        allow_worker_id_override=not proactive,
+        required_blocked_reason="blocked_by_route" if proactive else None,
     )
     return json.dumps(payload, ensure_ascii=False)
 
@@ -2234,6 +2287,15 @@ async def _tool_octo_self_queue_add(args, ctx) -> str:
     if octo is None or not hasattr(octo, "add_self_queue_item"):
         return json.dumps({"status": "error", "message": "octo self queue is unavailable"}, ensure_ascii=False)
     payload = await octo.add_self_queue_item(chat_id, args or {})
+    return json.dumps(payload, ensure_ascii=False)
+
+
+async def _tool_execute_self_queue_item(args, ctx) -> str:
+    octo = ctx.get("octo")
+    chat_id = int(ctx.get("chat_id", 0) or 0)
+    if octo is None or not hasattr(octo, "execute_self_queue_item"):
+        return json.dumps({"status": "error", "message": "octo self queue executor is unavailable"}, ensure_ascii=False)
+    payload = await octo.execute_self_queue_item(chat_id, args or {})
     return json.dumps(payload, ensure_ascii=False)
 
 

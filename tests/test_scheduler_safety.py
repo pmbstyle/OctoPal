@@ -117,6 +117,26 @@ class _BrowserStub:
         return None
 
 
+def _write_worker_template(tmp_path: Path, worker_id: str = "weather_worker") -> None:
+    worker_dir = tmp_path / "workers" / worker_id
+    worker_dir.mkdir(parents=True)
+    (worker_dir / "worker.json").write_text(
+        json.dumps(
+            {
+                "id": worker_id,
+                "name": "Weather Worker",
+                "description": "Fetches weather",
+                "system_prompt": "Do weather work.",
+                "available_tools": ["web_search"],
+                "required_permissions": ["network"],
+                "max_thinking_steps": 8,
+                "default_timeout_seconds": 300,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_schedule_task_rejects_invalid_frequency(tmp_path: Path) -> None:
     scheduler = SchedulerService(store=_StoreStub(), workspace_dir=tmp_path)
     result = _tool_schedule_task(
@@ -553,23 +573,7 @@ def test_repair_scheduled_tasks_previews_candidates_without_applying(tmp_path: P
 
 def test_repair_scheduled_tasks_applies_worker_migration_with_valid_worker_id(tmp_path: Path) -> None:
     blocked_until = utc_now() + timedelta(minutes=30)
-    worker_dir = tmp_path / "workers" / "weather_worker"
-    worker_dir.mkdir(parents=True)
-    (worker_dir / "worker.json").write_text(
-        json.dumps(
-            {
-                "id": "weather_worker",
-                "name": "Weather Worker",
-                "description": "Fetches weather",
-                "system_prompt": "Do weather work.",
-                "available_tools": ["web_search"],
-                "required_permissions": ["network"],
-                "max_thinking_steps": 8,
-                "default_timeout_seconds": 300,
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_worker_template(tmp_path)
     store = _StoreStub(
         tasks=[
             {
@@ -620,6 +624,158 @@ def test_repair_scheduled_tasks_applies_worker_migration_with_valid_worker_id(tm
         "notify_user": "never",
         "execution_mode": "worker",
     }
+
+
+def test_proactive_repair_scheduled_tasks_blocks_worker_override(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    _write_worker_template(tmp_path)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": None,
+                "task_text": "Check the weather",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "blocked_by_route",
+                        "suggested_execution_mode": "worker",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    payload = json.loads(
+        _tool_repair_scheduled_tasks(
+            {"apply": True, "task_ids": ["weather_check"], "worker_id": "weather_worker"},
+            {
+                "octo": SimpleNamespace(scheduler=scheduler),
+                "route_policy_label": "octo.proactive_allowlist",
+            },
+        )
+    )
+
+    assert payload == {
+        "status": "blocked",
+        "reason": "proactive_worker_id_override_forbidden",
+    }
+    assert store.last_upsert is None
+
+
+def test_proactive_repair_scheduled_tasks_applies_existing_worker_only(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    _write_worker_template(tmp_path)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": "weather_worker",
+                "task_text": "Check the weather",
+                "inputs_json": json.dumps({"city": "Montreal"}),
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "blocked_by_route",
+                        "suggested_execution_mode": "worker",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    payload = json.loads(
+        _tool_repair_scheduled_tasks(
+            {"apply": True, "task_ids": ["weather_check"]},
+            {
+                "octo": SimpleNamespace(scheduler=scheduler),
+                "route_policy_label": "octo.proactive_allowlist",
+            },
+        )
+    )
+
+    assert payload["status"] == "applied"
+    assert payload["applied_count"] == 1
+    assert payload["skipped_count"] == 0
+    assert payload["applied"][0]["worker_id"] == "weather_worker"
+    assert store.last_upsert is not None
+    assert store.last_upsert["task_id"] == "weather_check"
+    assert store.last_upsert["worker_id"] == "weather_worker"
+    assert store.last_upsert["task_text"] == "Check the weather"
+    assert store.last_upsert["inputs"] == {"city": "Montreal"}
+    assert store.last_upsert["metadata"] == {
+        "notify_user": "never",
+        "execution_mode": "worker",
+    }
+
+
+def test_proactive_repair_scheduled_tasks_requires_blocked_by_route(tmp_path: Path) -> None:
+    blocked_until = utc_now() + timedelta(minutes=30)
+    _write_worker_template(tmp_path)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_check",
+                "name": "Weather Check",
+                "description": "Check weather",
+                "frequency": "Every 30 minutes",
+                "worker_id": "weather_worker",
+                "task_text": "Check the weather",
+                "inputs_json": "{}",
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_until": blocked_until.isoformat(),
+                        "blocked_reason": "manual_review",
+                        "suggested_execution_mode": "worker",
+                    }
+                ),
+                "last_run_at": None,
+                "enabled": 1,
+            }
+        ]
+    )
+    scheduler = SchedulerService(store=store, workspace_dir=tmp_path)
+
+    payload = json.loads(
+        _tool_repair_scheduled_tasks(
+            {"apply": True, "task_ids": ["weather_check"]},
+            {
+                "octo": SimpleNamespace(scheduler=scheduler),
+                "route_policy_label": "octo.proactive_allowlist",
+            },
+        )
+    )
+
+    assert payload["status"] == "applied"
+    assert payload["applied_count"] == 0
+    assert payload["skipped_count"] == 1
+    assert payload["skipped"][0] == {
+        "task_id": "weather_check",
+        "name": "Weather Check",
+        "reason": "blocked_reason_mismatch",
+    }
+    assert payload["candidates"][0]["can_apply"] is False
+    assert payload["candidates"][0]["skip_reason"] == "blocked_reason_mismatch"
+    assert store.last_upsert is None
 
 
 def test_octo_marks_scheduled_task_after_successful_worker_run_even_if_store_lags() -> None:
@@ -723,6 +879,426 @@ async def test_route_scheduler_tick_uses_control_plane_prompt_and_skips_planner(
 
 
 @pytest.mark.asyncio
+async def test_route_proactive_tick_uses_queue_allowlist_and_skips_planner(monkeypatch):
+    calls = {"control_prompt": 0, "complete_route": 0}
+    captured_tool_names: set[str] = set()
+
+    class DummyOcto:
+        provider = object()
+        reflection = None
+        mcp_manager = None
+
+        async def set_thinking(self, value):
+            return None
+
+        async def scan_opportunities(self, chat_id: int, limit: int = 3):
+            return {
+                "status": "ok",
+                "chat_id": chat_id,
+                "opportunities": [
+                    {
+                        "title": "Repair blocked task",
+                        "confidence": 0.82,
+                        "risk": "low",
+                        "next_action": "Queue one repair task.",
+                    }
+                ],
+            }
+
+        async def get_self_queue(self, chat_id: int):
+            return []
+
+    async def _build_control_plane_prompt(**kwargs):
+        calls["control_prompt"] += 1
+        assert kwargs["mode_label"] == "proactive"
+        assert "queue_only" in kwargs["user_text"]
+        return [octo_router.Message(role="system", content="proactive control plane")]
+
+    async def _complete_route_with_tools(**kwargs):
+        calls["complete_route"] += 1
+        captured_tool_names.update(spec.name for spec in kwargs["tool_specs"])
+        assert kwargs["ctx"]["route_policy_label"] == "octo.proactive_allowlist"
+        return json.dumps(
+            {
+                "decision": "noop",
+                "confidence": 0.2,
+                "risk": "low",
+                "requires_user_input": False,
+                "reason": "Already has enough context; no queue mutation needed.",
+            }
+        )
+
+    def _build_octo_prompt_should_not_run(*args, **kwargs):
+        raise AssertionError("build_octo_prompt should not run for proactive route")
+
+    def _build_plan_should_not_run(*args, **kwargs):
+        raise AssertionError("_build_plan should not run for proactive route")
+
+    monkeypatch.setattr(octo_router, "build_control_plane_prompt", _build_control_plane_prompt)
+    monkeypatch.setattr(octo_router, "_complete_route_with_tools", _complete_route_with_tools)
+    monkeypatch.setattr(octo_router, "build_octo_prompt", _build_octo_prompt_should_not_run)
+    monkeypatch.setattr(octo_router, "_build_plan", _build_plan_should_not_run)
+
+    result = await octo_router.route_proactive_tick(DummyOcto(), chat_id=123)
+    payload = json.loads(result)
+
+    assert payload["decision"] == "noop"
+    assert calls == {"control_prompt": 1, "complete_route": 1}
+    assert "octo_opportunity_scan" in captured_tool_names
+    assert "repair_scheduled_tasks" in captured_tool_names
+    assert "octo_self_queue_add" in captured_tool_names
+    assert "execute_self_queue_item" in captured_tool_names
+    assert "octo_self_queue_take" in captured_tool_names
+    assert "start_worker" not in captured_tool_names
+    assert "schedule_task" not in captured_tool_names
+    assert "remove_task" not in captured_tool_names
+
+
+@pytest.mark.asyncio
+async def test_execute_self_queue_item_blocks_items_without_worker_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(octo_core, "_workspace_dir", lambda: tmp_path)
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=tmp_path),
+        scheduler=SchedulerService(store=_StoreStub(), workspace_dir=tmp_path),
+    )
+    added = await octo.add_self_queue_item(
+        123,
+        {
+            "title": "Repair stale task",
+            "task": "Inspect blocked scheduled task and propose a repair.",
+            "dedupe_key": "repair:stale",
+        },
+    )
+
+    result = await octo.execute_self_queue_item(123, {"task_id": added["item"]["task_id"]})
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "missing_worker_id"
+    queue = await octo.get_self_queue(123)
+    assert queue[0]["status"] == "blocked"
+    assert queue[0]["blocked_reason"] == "missing_worker_id"
+
+
+@pytest.mark.asyncio
+async def test_execute_self_queue_item_dry_run_does_not_block_missing_worker_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(octo_core, "_workspace_dir", lambda: tmp_path)
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=tmp_path),
+        scheduler=SchedulerService(store=_StoreStub(), workspace_dir=tmp_path),
+    )
+    added = await octo.add_self_queue_item(
+        123,
+        {
+            "title": "Repair stale task",
+            "task": "Inspect blocked scheduled task and propose a repair.",
+            "dedupe_key": "repair:stale",
+        },
+    )
+
+    result = await octo.execute_self_queue_item(
+        123,
+        {"task_id": added["item"]["task_id"], "dry_run": True},
+    )
+
+    assert result["status"] == "dry_run"
+    assert result["would_block_reason"] == "missing_worker_id"
+    queue = await octo.get_self_queue(123)
+    assert queue[0]["status"] == "pending"
+    assert "blocked_reason" not in queue[0]
+
+
+@pytest.mark.asyncio
+async def test_execute_self_queue_item_blocks_high_risk_items(tmp_path, monkeypatch):
+    monkeypatch.setattr(octo_core, "_workspace_dir", lambda: tmp_path)
+    launches = []
+
+    async def _start_worker_async(self, **kwargs):
+        launches.append(kwargs)
+        return {"status": "started", "run_id": "run-123", "worker_id": "run-123"}
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=tmp_path),
+        scheduler=SchedulerService(store=_StoreStub(), workspace_dir=tmp_path),
+    )
+    added = await octo.add_self_queue_item(
+        123,
+        {
+            "title": "Do risky repair",
+            "task": "Apply a risky repair without asking.",
+            "worker_id": "repair_worker",
+            "risk": "high",
+        },
+    )
+
+    result = await octo.execute_self_queue_item(123, {"task_id": added["item"]["task_id"]})
+
+    assert result["status"] == "blocked"
+    assert result["reason"] == "high_risk_requires_user_input"
+    assert launches == []
+    queue = await octo.get_self_queue(123)
+    assert queue[0]["status"] == "blocked"
+    assert queue[0]["blocked_reason"] == "high_risk_requires_user_input"
+
+
+@pytest.mark.asyncio
+async def test_execute_self_queue_item_starts_worker_and_marks_running(tmp_path, monkeypatch):
+    monkeypatch.setattr(octo_core, "_workspace_dir", lambda: tmp_path)
+    launches = []
+
+    async def _start_worker_async(self, **kwargs):
+        launches.append(kwargs)
+        return {"status": "started", "run_id": "run-123", "worker_id": "run-123"}
+
+    monkeypatch.setattr(octo_core.Octo, "_start_worker_async", _start_worker_async)
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=tmp_path),
+        scheduler=SchedulerService(store=_StoreStub(), workspace_dir=tmp_path),
+    )
+    added = await octo.add_self_queue_item(
+        123,
+        {
+            "title": "Run safe diagnostic",
+            "task": "Inspect scheduler state and report repair options.",
+            "worker_id": "diagnostic_worker",
+            "inputs": {"scope": "scheduler"},
+            "risk": "low",
+            "dedupe_key": "diagnostic:scheduler",
+        },
+    )
+
+    result = await octo.execute_self_queue_item(123, {"task_id": added["item"]["task_id"]})
+
+    assert result["status"] == "started"
+    assert result["run_id"] == "run-123"
+    assert result["followup_required"] is True
+    assert launches == [
+        {
+            "worker_id": "diagnostic_worker",
+            "task": "Inspect scheduler state and report repair options.",
+            "chat_id": 123,
+            "inputs": {"scope": "scheduler"},
+            "tools": None,
+            "model": None,
+            "timeout_seconds": None,
+            "scheduled_task_id": None,
+        }
+    ]
+    queue = await octo.get_self_queue(123)
+    assert queue[0]["status"] == "running"
+    assert queue[0]["run_id"] == "run-123"
+
+
+@pytest.mark.asyncio
+async def test_add_self_queue_item_dedupes_active_items(tmp_path, monkeypatch):
+    monkeypatch.setattr(octo_core, "_workspace_dir", lambda: tmp_path)
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=tmp_path),
+        scheduler=SchedulerService(store=_StoreStub(), workspace_dir=tmp_path),
+    )
+
+    first = await octo.add_self_queue_item(
+        123,
+        {
+            "title": "Run safe diagnostic",
+            "task": "Inspect scheduler state.",
+            "dedupe_key": "diagnostic:scheduler",
+        },
+    )
+    duplicate = await octo.add_self_queue_item(
+        123,
+        {
+            "title": "Run safe diagnostic again",
+            "task": "Inspect scheduler state again.",
+            "dedupe_key": "diagnostic:scheduler",
+        },
+    )
+
+    assert first["status"] == "ok"
+    assert duplicate["status"] == "duplicate"
+    queue = await octo.get_self_queue(123)
+    assert len(queue) == 1
+
+
+@pytest.mark.asyncio
+async def test_scan_opportunities_includes_blocked_scheduled_task_worker_candidate(tmp_path, monkeypatch):
+    monkeypatch.setattr(octo_core, "_workspace_dir", lambda: tmp_path)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_digest",
+                "name": "Weather Digest",
+                "frequency": "Every 30 minutes",
+                "task_text": "Fetch weather and summarize it.",
+                "description": "Needs external access.",
+                "worker_id": None,
+                "inputs_json": None,
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_reason": "blocked_by_route",
+                        "suggested_execution_mode": "worker",
+                    }
+                ),
+                "enabled": 1,
+                "last_run_at": None,
+            }
+        ]
+    )
+    octo = Octo(
+        provider=object(),
+        store=store,
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=tmp_path),
+        scheduler=SchedulerService(store=store, workspace_dir=tmp_path),
+    )
+
+    async def _health(chat_id: int):
+        return {"context_health": "OK"}
+
+    octo.get_context_health_snapshot = _health
+
+    result = await octo.scan_opportunities(123, limit=5)
+
+    card = result["opportunities"][0]
+    assert card["kind"] == "scheduled_task_repair"
+    assert card["dedupe_key"] == "scheduled-task:weather_digest:suggested-worker"
+    assert card["suggested_worker_id"] == "ops_sre"
+    assert card["risk"] == "medium"
+    assert card["inputs"] == {
+        "scheduled_task_id": "weather_digest",
+        "blocked_reason": "blocked_by_route",
+        "suggested_execution_mode": "worker",
+    }
+
+
+@pytest.mark.asyncio
+async def test_scan_opportunities_skips_scheduled_candidate_when_queue_has_active_dedupe(tmp_path, monkeypatch):
+    monkeypatch.setattr(octo_core, "_workspace_dir", lambda: tmp_path)
+    store = _StoreStub(
+        tasks=[
+            {
+                "id": "weather_digest",
+                "name": "Weather Digest",
+                "frequency": "Every 30 minutes",
+                "task_text": "Fetch weather and summarize it.",
+                "description": "Needs external access.",
+                "worker_id": None,
+                "inputs_json": None,
+                "metadata_json": json.dumps(
+                    {
+                        "notify_user": "never",
+                        "execution_mode": "octo_control",
+                        "blocked_reason": "blocked_by_route",
+                        "suggested_execution_mode": "worker",
+                    }
+                ),
+                "enabled": 1,
+                "last_run_at": None,
+            }
+        ]
+    )
+    octo = Octo(
+        provider=object(),
+        store=store,
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=tmp_path),
+        scheduler=SchedulerService(store=store, workspace_dir=tmp_path),
+    )
+
+    async def _health(chat_id: int):
+        return {"context_health": "OK"}
+
+    octo.get_context_health_snapshot = _health
+    await octo.add_self_queue_item(
+        123,
+        {
+            "title": "Already queued",
+            "task": "Inspect scheduled task.",
+            "dedupe_key": "scheduled-task:weather_digest:suggested-worker",
+        },
+    )
+
+    result = await octo.scan_opportunities(123, limit=5)
+
+    assert all(item["kind"] != "scheduled_task_repair" for item in result["opportunities"])
+
+
+@pytest.mark.asyncio
+async def test_scan_opportunities_includes_stale_claimed_self_queue_item(tmp_path, monkeypatch):
+    monkeypatch.setattr(octo_core, "_workspace_dir", lambda: tmp_path)
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=tmp_path),
+        scheduler=SchedulerService(store=_StoreStub(), workspace_dir=tmp_path),
+    )
+
+    async def _health(chat_id: int):
+        return {"context_health": "OK"}
+
+    octo.get_context_health_snapshot = _health
+    added = await octo.add_self_queue_item(
+        123,
+        {
+            "title": "Half claimed task",
+            "task": "Finish stale work.",
+        },
+    )
+    queue = octo._self_queue_by_chat[123]
+    queue[0]["status"] = "claimed"
+    queue[0]["updated_at"] = (utc_now() - timedelta(hours=7)).isoformat()
+
+    result = await octo.scan_opportunities(123, limit=5)
+
+    card = result["opportunities"][0]
+    assert card["kind"] == "self_queue_recovery"
+    assert card["dedupe_key"] == f"self-queue:{added['item']['task_id']}:stale-claimed"
+    assert card["risk"] == "low"
+
+
+@pytest.mark.asyncio
 async def test_route_scheduled_octo_control_uses_control_plane_prompt_and_skips_planner(monkeypatch):
     calls = {"control_prompt": 0, "complete_route": 0}
 
@@ -775,6 +1351,7 @@ async def test_route_scheduled_octo_control_uses_control_plane_prompt_and_skips_
 @pytest.mark.asyncio
 async def test_octo_run_scheduler_tick_once_uses_bounded_scheduler_route(monkeypatch):
     calls = {"scheduler_tick": 0, "dispatch": 0}
+    monkeypatch.setattr(octo_core, "_PROACTIVE_TICK_ENABLED", False)
 
     async def _route_scheduler_tick(octo, chat_id=0, *, max_tasks=10):
         calls["scheduler_tick"] += 1
@@ -822,8 +1399,61 @@ async def test_octo_run_scheduler_tick_once_uses_bounded_scheduler_route(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_octo_run_scheduler_tick_once_runs_proactive_after_idle_dispatch(monkeypatch):
+    calls = {"scheduler_tick": 0, "dispatch": 0, "proactive": 0}
+    monkeypatch.setattr(octo_core, "_PROACTIVE_TICK_ENABLED", True)
+    monkeypatch.setattr(octo_core, "_PROACTIVE_TICK_MIN_INTERVAL_SECONDS", 0.0)
+
+    async def _route_scheduler_tick(octo, chat_id=0, *, max_tasks=10):
+        calls["scheduler_tick"] += 1
+        return "SCHEDULER_IDLE"
+
+    async def _route_proactive_tick(octo, chat_id=0, *, reason="scheduler_idle"):
+        calls["proactive"] += 1
+        assert reason == "scheduler_idle:SCHEDULER_IDLE"
+        return json.dumps({"decision": "queue", "confidence": 0.8, "risk": "low"})
+
+    async def _dispatch_due_scheduled_tasks_once(self, *, chat_id=0, max_tasks=10):
+        calls["dispatch"] += 1
+        return {
+            "due_count": 0,
+            "attempted": 0,
+            "started": 0,
+            "completed": 0,
+            "duplicates": 0,
+            "rejected_by_policy": 0,
+            "policy_reasons": {},
+            "errors": 0,
+        }
+
+    monkeypatch.setattr(octo_core, "route_scheduler_tick", _route_scheduler_tick)
+    monkeypatch.setattr(octo_core, "route_proactive_tick", _route_proactive_tick)
+    monkeypatch.setattr(
+        octo_core.Octo,
+        "_dispatch_due_scheduled_tasks_once",
+        _dispatch_due_scheduled_tasks_once,
+    )
+
+    octo = Octo(
+        provider=object(),
+        store=_StoreStub(),
+        policy=object(),
+        runtime=_RuntimeStub(),
+        approvals=_ApprovalsStub(),
+        memory=_MemoryStub(),
+        canon=SimpleNamespace(workspace_dir=Path(".")),
+        scheduler=SchedulerService(store=_StoreStub(), workspace_dir=Path(".")),
+    )
+
+    await octo._run_scheduler_tick_once(max_tasks=7)
+
+    assert calls == {"scheduler_tick": 1, "dispatch": 1, "proactive": 1}
+
+
+@pytest.mark.asyncio
 async def test_octo_run_scheduler_tick_once_delivers_user_visible_scheduler_output(monkeypatch):
     sent_messages = []
+    monkeypatch.setattr(octo_core, "_PROACTIVE_TICK_ENABLED", False)
 
     async def _route_scheduler_tick(octo, chat_id=0, *, max_tasks=10):
         return "Internal note.\n<user_visible>Планировщик нашел важное обновление.</user_visible>"
@@ -871,6 +1501,7 @@ async def test_octo_run_scheduler_tick_once_delivers_user_visible_scheduler_outp
 @pytest.mark.asyncio
 async def test_octo_run_scheduler_tick_once_suppresses_idle_text_with_control_suffix(monkeypatch):
     sent_messages = []
+    monkeypatch.setattr(octo_core, "_PROACTIVE_TICK_ENABLED", False)
 
     async def _route_scheduler_tick(octo, chat_id=0, *, max_tasks=10):
         return "No due tasks. Next task runs at 01:40 UTC. Nothing to act on.\n\nSCHEDULER_IDLE"

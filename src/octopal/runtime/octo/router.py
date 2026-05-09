@@ -91,6 +91,7 @@ _PRIORITY_TOOL_NAMES = {
     "octo_context_health",
     "tool_catalog_search",
     "octo_self_queue_add",
+    "execute_self_queue_item",
     "octo_self_queue_list",
     "octo_self_queue_take",
     "octo_self_queue_update",
@@ -114,6 +115,7 @@ _ALWAYS_INCLUDE_TOOL_NAMES = {
     "check_schedule",
     "scheduler_status",
     "tool_catalog_search",
+    "octo_opportunity_scan",
     # Scheduler control loop
     "list_schedule",
     "schedule_task",
@@ -144,6 +146,7 @@ _INITIAL_OCTO_TOOL_NAMES = _ALWAYS_INCLUDE_TOOL_NAMES | {
     "search_canon",
     "octo_opportunity_scan",
     "octo_self_queue_add",
+    "execute_self_queue_item",
     "octo_self_queue_list",
     "octo_self_queue_take",
     "octo_self_queue_update",
@@ -170,6 +173,19 @@ _SCHEDULER_ALLOWED_TOOL_NAMES = {
     "octo_context_health",
     "list_workers",
     "list_active_workers",
+}
+_PROACTIVE_ALLOWED_TOOL_NAMES = {
+    "check_schedule",
+    "scheduler_status",
+    "octo_context_health",
+    "gateway_status",
+    "octo_opportunity_scan",
+    "repair_scheduled_tasks",
+    "octo_self_queue_add",
+    "execute_self_queue_item",
+    "octo_self_queue_list",
+    "octo_self_queue_take",
+    "octo_self_queue_update",
 }
 _SCHEDULED_OCTO_CONTROL_ALLOWED_TOOL_NAMES = _SCHEDULER_ALLOWED_TOOL_NAMES | {
     "octo_context_reset",
@@ -616,6 +632,97 @@ async def route_scheduler_tick(
         await octo.set_thinking(False)
 
 
+async def route_proactive_tick(
+    octo: Any,
+    chat_id: int = 0,
+    *,
+    reason: str = "scheduler_idle",
+) -> str:
+    """Run a bounded proactive control-plane turn that may only manage initiative queue state."""
+    await octo.set_thinking(True)
+    try:
+        octo_tools, ctx = _get_proactive_tools(octo, chat_id)
+        resolution_report = ctx.get("tool_resolution_report")
+        available_count = len(getattr(resolution_report, "available_tools", ()) or ())
+        deferred_count = max(0, available_count - len(octo_tools))
+        logger.info(
+            "Proactive tick tools fetched",
+            route_mode=RouteMode.PROACTIVE.value,
+            active_tool_count=len(octo_tools),
+            available_tool_count=available_count,
+            deferred_tool_count=deferred_count,
+            mcp_refresh_attempted=bool(ctx.get("mcp_refresh_attempted")),
+            reason=reason,
+        )
+        tool_policy_summary = _build_octo_tool_policy_summary(
+            octo_tools,
+            ctx.get("tool_resolution_report"),
+        )
+        proactive_tick_text = await _build_proactive_tick_input(
+            octo,
+            chat_id=chat_id,
+            reason=reason,
+        )
+        messages = await build_control_plane_prompt(
+            user_text=proactive_tick_text,
+            chat_id=chat_id,
+            tool_policy_summary=tool_policy_summary,
+            reflection=getattr(octo, "reflection", None),
+            mode_label="proactive",
+            mode_rules=(
+                "Proactive route rules:\n"
+                "- Keep this turn bounded to initiative discovery and self-queue maintenance.\n"
+                "- You may add, claim, execute, cancel, or mark self-queue items only when the payload supports it.\n"
+                "- You may preview scheduled-task repair candidates with repair_scheduled_tasks(apply=false).\n"
+                "- You may apply scheduled-task repairs only for an unambiguous blocked_by_route -> worker repair "
+                "where the task already has a valid worker_id; never provide worker_id from this route.\n"
+                "- Do not start workers directly, schedule recurring tasks, use filesystem tools, use network/MCP tools, "
+                "or perform external side effects from this route.\n"
+                "- Use execute_self_queue_item only for an existing low/medium-risk queue item with an explicit worker_id; "
+                "the runtime will start the worker or mark the item blocked.\n"
+                "- Prefer queueing one concrete low-risk initiative when there is no safe executable queue item.\n"
+                "- Return JSON only using the proactive decision contract."
+            ),
+        )
+        messages.append(
+            Message(
+                role="system",
+                content=(
+                    "Return JSON only with this shape:\n"
+                    "{\n"
+                    '  "decision": "noop|queue|claim|execute|repair|blocked",\n'
+                    '  "confidence": 0.0,\n'
+                    '  "risk": "low|medium|high",\n'
+                    '  "requires_user_input": false,\n'
+                    '  "selected_item_id": string|null,\n'
+                    '  "queued_item_id": string|null,\n'
+                    '  "reason": string\n'
+                    "}\n"
+                    "Use decision=queue only after a successful octo_self_queue_add call. "
+                    "Use decision=claim only after a successful octo_self_queue_take call. "
+                    "Use decision=execute only after a successful execute_self_queue_item call. "
+                    "Use decision=repair only after a successful guarded repair_scheduled_tasks(apply=true) call. "
+                    "Use decision=noop when confidence is below threshold or pending work is not safely executable here."
+                ),
+            )
+        )
+        _log_system_prompt(messages, "proactive")
+        reply_text = await _complete_route_with_tools(
+            octo=octo,
+            provider=octo.provider,
+            messages=messages,
+            tool_specs=octo_tools,
+            ctx=ctx,
+            internal_followup=True,
+            user_text=proactive_tick_text,
+            images=None,
+            allow_tool_catalog_expansion=False,
+        )
+        return _normalize_proactive_reply(reply_text)
+    finally:
+        await octo.set_thinking(False)
+
+
 async def route_scheduled_octo_control(
     octo: Any,
     task: dict[str, Any],
@@ -713,6 +820,7 @@ async def _complete_route_with_tools(
         max_attempts = 10
         vision_tool_fallback_used = False
         structured_followup_required = False
+        unbacked_action_retry_used = False
 
         for _ in range(max_attempts):
             try:
@@ -997,6 +1105,34 @@ async def _complete_route_with_tools(
                 continue
 
             if content_raw:
+                if (
+                    not had_tool_calls
+                    and not unbacked_action_retry_used
+                    and await _needs_action_or_blocked_retry(
+                        provider=provider,
+                        messages=messages,
+                        candidate=str(content_raw),
+                    )
+                ):
+                    unbacked_action_retry_used = True
+                    logger.warning(
+                        "Assistant response requires concrete action state; forcing action-or-blocked retry",
+                        preview=str(content_raw)[:200],
+                    )
+                    messages.append(Message(role="assistant", content=str(content_raw)))
+                    messages.append(
+                        Message(
+                            role="system",
+                            content=(
+                                "Your previous answer was classified as requiring concrete runtime action state, "
+                                "but this turn has not used any tool, started a worker, queued a task, or changed "
+                                "runtime state. Continue this same turn now: call the appropriate tool, add/execute "
+                                "a self-queue item, or rewrite the response as a clear blocked/clarifying answer. "
+                                "Do not describe future work unless this turn creates a concrete runtime action."
+                            ),
+                        )
+                    )
+                    continue
                 logger.debug("Octo output", output=content_raw)
                 return await _finalize_response(
                     provider=provider,
@@ -1245,6 +1381,37 @@ def _normalize_worker_followup_reply(raw: str) -> str:
     if should_suppress_user_delivery(cleaned):
         return "NO_USER_RESPONSE"
     return cleaned
+
+
+def _normalize_proactive_reply(raw: str) -> str:
+    value = normalize_plain_text(raw or "")
+    if not value or should_suppress_user_delivery(value):
+        return "NO_USER_RESPONSE"
+    payload = _extract_json_object(value)
+    if not isinstance(payload, dict):
+        return "NO_USER_RESPONSE"
+
+    decision = str(payload.get("decision", "noop") or "noop").strip().lower()
+    if decision not in {"noop", "queue", "claim", "execute", "repair", "blocked"}:
+        decision = "noop"
+    risk = str(payload.get("risk", "low") or "low").strip().lower()
+    if risk not in {"low", "medium", "high"}:
+        risk = "low"
+    try:
+        confidence = float(payload.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    confidence = max(0.0, min(1.0, confidence))
+    normalized = {
+        "decision": decision,
+        "confidence": confidence,
+        "risk": risk,
+        "requires_user_input": bool(payload.get("requires_user_input")),
+        "selected_item_id": payload.get("selected_item_id") or None,
+        "queued_item_id": payload.get("queued_item_id") or None,
+        "reason": str(payload.get("reason", "") or "").strip()[:500],
+    }
+    return json.dumps(normalized, ensure_ascii=False, sort_keys=True)
 
 
 def _normalize_worker_result_entry(
@@ -1570,6 +1737,15 @@ def _get_scheduler_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[
     )
 
 
+def _get_proactive_tools(octo: Any, chat_id: int) -> tuple[list[ToolSpec], dict[str, object]]:
+    return _get_control_plane_tools(
+        octo,
+        chat_id,
+        allowed_tool_names=_PROACTIVE_ALLOWED_TOOL_NAMES,
+        policy_label="octo.proactive_allowlist",
+    )
+
+
 def _get_scheduled_octo_control_tools(
     octo: Any, chat_id: int
 ) -> tuple[list[ToolSpec], dict[str, object]]:
@@ -1603,7 +1779,7 @@ def _get_control_plane_tools(
         "self_control": True,
         "service_read": True,
     }
-    ctx = {"octo": octo, "chat_id": chat_id}
+    ctx = {"octo": octo, "chat_id": chat_id, "route_policy_label": policy_label}
     policy_steps = [
         ToolPolicyPipelineStep(
             label=policy_label,
@@ -1685,6 +1861,50 @@ def _build_scheduler_tick_input(octo: Any, *, max_tasks: int = 10) -> str:
         "Scheduler tick snapshot:\n"
         f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
         "Decide whether scheduler state is idle, needs quiet follow-up, or merits a user-visible update."
+    )
+
+
+async def _build_proactive_tick_input(octo: Any, *, chat_id: int, reason: str) -> str:
+    opportunity_snapshot: dict[str, Any] | None = None
+    self_queue: list[dict[str, Any]] | None = None
+    if hasattr(octo, "scan_opportunities"):
+        try:
+            maybe = octo.scan_opportunities(chat_id, limit=3)
+            opportunity_snapshot = await maybe if asyncio.iscoroutine(maybe) else maybe
+        except Exception:
+            logger.debug("Failed to build proactive opportunity snapshot", exc_info=True)
+            opportunity_snapshot = None
+    if hasattr(octo, "get_self_queue"):
+        try:
+            maybe = octo.get_self_queue(chat_id)
+            self_queue = await maybe if asyncio.iscoroutine(maybe) else maybe
+        except Exception:
+            logger.debug("Failed to build proactive self-queue snapshot", exc_info=True)
+            self_queue = None
+
+    pending_count = 0
+    if isinstance(self_queue, list):
+        pending_count = sum(1 for item in self_queue if str(item.get("status", "pending")) == "pending")
+
+    payload = {
+        "reason": reason,
+        "chat_id": chat_id,
+        "queue_mode": "queue_only",
+        "confidence_threshold": 0.75,
+        "pending_self_queue_items": pending_count,
+        "opportunities": opportunity_snapshot,
+        "self_queue": self_queue,
+    }
+    return (
+        "Proactive tick snapshot:\n"
+        f"{json.dumps(payload, ensure_ascii=False, sort_keys=True)}\n"
+        "If there is already pending self-queue work with an explicit worker_id, you may use execute_self_queue_item. "
+        "If pending work lacks a worker_id, prefer decision=blocked or noop. "
+        "If an opportunity kind is scheduled_task_repair and the task already has worker_id, you may preview "
+        "repair_scheduled_tasks and apply it only when the candidate is safe. "
+        "If the best opportunity is confidence >= 0.75, low/medium risk, and no pending work exists, "
+        "use octo_self_queue_add to queue exactly one concrete initiative. "
+        "Do not call start_worker directly from this route."
     )
 
 
@@ -2484,6 +2704,51 @@ def _sanitize_control_plane_contract_text(text: str) -> str:
     )
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
     return cleaned
+
+
+async def _needs_action_or_blocked_retry(
+    *,
+    provider: InferenceProvider,
+    messages: list[Message | dict[str, Any]],
+    candidate: str,
+) -> bool:
+    if not normalize_plain_text(candidate or "") or should_suppress_user_delivery(candidate):
+        return False
+    prompt = (
+        "Classify whether the draft assistant response is safe to deliver as the final answer for this turn.\n"
+        "Return JSON only with this shape:\n"
+        '{"verdict":"final|requires_runtime_action_state","confidence":0.0,"reason":"short"}\n'
+        "Use requires_runtime_action_state only when the draft tells the user that work will be done, is being done, "
+        "or will be followed up later, while the evidence contains no completed tool call, worker launch, queued task, "
+        "schedule change, or explicit blocked/clarifying answer. Use final for direct answers, questions, refusal/blocked "
+        "answers, status summaries grounded in evidence, and normal conversational replies. Do not classify from keywords; "
+        "judge the speech act and whether runtime state already supports it.\n\n"
+        "<EVIDENCE>\n"
+        f"{_messages_to_text(messages)}\n"
+        "</EVIDENCE>\n\n"
+        "<DRAFT_RESPONSE>\n"
+        f"{candidate}\n"
+        "</DRAFT_RESPONSE>"
+    )
+    try:
+        raw = await _complete_text(
+            provider,
+            [Message(role="system", content=prompt)],
+            context="action_state_verifier",
+        )
+    except Exception:
+        logger.debug("Action-state verifier skipped due to provider error", exc_info=True)
+        return False
+
+    payload = _extract_json_object(raw)
+    if not isinstance(payload, dict):
+        return False
+    verdict = str(payload.get("verdict") or "").strip().lower()
+    try:
+        confidence = float(payload.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        confidence = 0.0
+    return verdict == "requires_runtime_action_state" and confidence >= 0.55
 
 
 async def _verify_final_response(
