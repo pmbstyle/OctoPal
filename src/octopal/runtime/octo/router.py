@@ -115,6 +115,7 @@ _ALWAYS_INCLUDE_TOOL_NAMES = {
     "check_schedule",
     "scheduler_status",
     "tool_catalog_search",
+    "octo_opportunity_scan",
     # Scheduler control loop
     "list_schedule",
     "schedule_task",
