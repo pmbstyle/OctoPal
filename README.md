@@ -51,9 +51,9 @@ Download the latest desktop build from the [Octopal releases page](https://githu
 <!-- STABLE_DOWNLOADS -->
 | Platform | Download |
 |----------|----------|
-| **Windows** | [Octopal-Desktop-2026.5.5-win-x64.exe](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.05/Octopal-Desktop-2026.5.5-win-x64.exe) |
-| **macOS** | [Octopal-Desktop-2026.5.5-mac-x64.dmg](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.05/Octopal-Desktop-2026.5.5-mac-x64.dmg) |
-| **Linux** | [Octopal-Desktop-2026.5.5-linux-x86_64.AppImage](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.05/Octopal-Desktop-2026.5.5-linux-x86_64.AppImage) |
+| **Windows** | [Octopal-Desktop-2026.5.10-win-x64.exe](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.10/Octopal-Desktop-2026.5.10-win-x64.exe) |
+| **macOS** | [Octopal-Desktop-2026.5.10-mac-x64.dmg](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.10/Octopal-Desktop-2026.5.10-mac-x64.dmg) |
+| **Linux** | [Octopal-Desktop-2026.5.10-linux-x86_64.AppImage](https://github.com/pmbstyle/Octopal/releases/download/v2026.05.10/Octopal-Desktop-2026.5.10-linux-x86_64.AppImage) |
 <!-- STABLE_DOWNLOADS_END -->
 
 <p align="center">
