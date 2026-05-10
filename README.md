@@ -15,7 +15,7 @@
 
 Octopal is a local AI agent platform for people who want broad, real-world automation with a design that makes powerful actions safer and easier to predict.
 
-It lives in Telegram or WhatsApp; remembers long-running context; schedules recurring work; uses tools, MCP servers, skills, browser/search, files, and connectors; and sends hands-on work to short-lived agents instead of letting one always-on process both know everything about you and touch everything on your machine.
+It lives in Telegram or WhatsApp; remembers long-running context; schedules recurring work; uses tools, MCP servers, skills, browser/search, files, and connectors; and sends hands-on work to short-lived agents instead of letting one always-on process both know everything about you and browse the web.
 
 If you like the promise of projects like OpenClaw, Hermes Agent, and NanoClaw, but want an isolation-first default with a stronger coordinator/worker boundary, Octopal is built for that exact taste.
 
@@ -35,7 +35,7 @@ Octopal's core idea is simple:
 
 - **Octo thinks.** It holds memory, policy, user context, and the long-running conversation.
 - **Workers act.** They receive scoped tasks, limited context, explicit permissions, and disposable execution environments.
-- **You choose what gets shared.** When a task needs files, you give access to the specific places it should use. It does not start with your whole workspace in its hands.
+- **Smart choosing what gets shared.** When a task needs files, Octo gives access to the specific places it should use. It does not start with your whole workspace in its hands.
 - **Hands-on work happens in a separate place by default.** Octopal normally runs risky actions in a disposable container; direct host execution is only a fallback when containers are unavailable.
 
 So the pitch is not "AI can do anything." The pitch is better:
