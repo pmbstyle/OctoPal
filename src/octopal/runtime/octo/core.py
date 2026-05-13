@@ -70,7 +70,6 @@ from octopal.runtime.octo.context_health import (
     _RESET_SOON_THRESHOLDS,
     _WATCH_THRESHOLDS,
     _coerce_float,
-    _coerce_int,
     _is_progress_reply,
     _is_reset_soon_severe,
     _watch_conditions,
@@ -129,6 +128,7 @@ from octopal.runtime.octo.scheduler_helpers import (
     _coerce_positive_chat_id,
     _empty_scheduler_metric_counters,
 )
+from octopal.runtime.octo.self_lifecycle import OctoSelfLifecycleMixin
 from octopal.runtime.octo.self_queue import OctoSelfQueueMixin
 from octopal.runtime.octo.turn_state import OctoTurnStateMixin
 from octopal.runtime.octo.worker_records import (
@@ -150,20 +150,11 @@ from octopal.runtime.scheduler.service import (
     parse_scheduled_task_blocked_until,
 )
 from octopal.runtime.self_control import (
-    SELF_RESTART_ACTION,
-    SELF_RESTART_REQUESTED_BY,
-    SELF_UPDATE_ACTION,
-    SELF_UPDATE_REQUESTED_BY,
-    append_control_ack,
-    append_control_request,
-    check_update_status,
-    due_self_restart_requests,
-    due_self_update_requests,
-    launch_restart_helper,
-    launch_update_helper,
+    check_update_status as check_update_status,
+)
+from octopal.runtime.self_control import (
     mark_restart_resume_consumed,
     read_pending_restart_resume,
-    write_pending_restart_resume,
 )
 from octopal.runtime.state import update_last_internal_heartbeat, update_last_scheduler_tick
 from octopal.runtime.workers.contracts import (
@@ -246,7 +237,7 @@ _PROACTIVE_TICK_MIN_INTERVAL_SECONDS = float(
 
 
 @dataclass
-class Octo(OctoTurnStateMixin, OctoSelfQueueMixin):
+class Octo(OctoTurnStateMixin, OctoSelfQueueMixin, OctoSelfLifecycleMixin):
     provider: InferenceProvider
     store: Store
     policy: PolicyEngine
@@ -943,82 +934,6 @@ class Octo(OctoTurnStateMixin, OctoSelfQueueMixin):
         while True:
             await asyncio.sleep(interval_seconds)
             await self._run_scheduler_tick_once(chat_id=0, max_tasks=max_tasks)
-
-    async def _periodic_self_control_requests(self, interval_seconds: int = 1) -> None:
-        while True:
-            await asyncio.sleep(interval_seconds)
-            try:
-                await self._run_self_control_requests_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Self-control request executor failed")
-
-    async def _run_self_control_requests_once(self) -> None:
-        runtime_settings = getattr(getattr(self, "runtime", None), "settings", None)
-        if runtime_settings is None:
-            return
-        state_dir = Path(runtime_settings.state_dir)
-        for request in await asyncio.to_thread(due_self_restart_requests, state_dir):
-            request_id = str(request.get("request_id", "") or "").strip()
-            if not request_id:
-                continue
-            append_control_ack(
-                state_dir,
-                request_id,
-                status="accepted",
-                source="octo_self_control",
-                message="Self-restart request accepted; launching restart helper.",
-            )
-            try:
-                launch_restart_helper(
-                    state_dir,
-                    request_id=request_id,
-                    project_root=Path(__file__).resolve().parents[4],
-                    delay_seconds=1,
-                )
-            except Exception as exc:
-                append_control_ack(
-                    state_dir,
-                    request_id,
-                    status="error",
-                    source="octo_self_control",
-                    message=f"Failed to launch restart helper: {exc}",
-                )
-                logger.exception(
-                    "Failed to launch self-restart helper",
-                    request_id=request_id,
-                )
-        for request in await asyncio.to_thread(due_self_update_requests, state_dir):
-            request_id = str(request.get("request_id", "") or "").strip()
-            if not request_id:
-                continue
-            append_control_ack(
-                state_dir,
-                request_id,
-                status="accepted",
-                source="octo_self_control",
-                message="Self-update request accepted; launching update helper.",
-            )
-            try:
-                launch_update_helper(
-                    state_dir,
-                    request_id=request_id,
-                    project_root=Path(__file__).resolve().parents[4],
-                    delay_seconds=1,
-                )
-            except Exception as exc:
-                append_control_ack(
-                    state_dir,
-                    request_id,
-                    status="error",
-                    source="octo_self_control",
-                    message=f"Failed to launch update helper: {exc}",
-                )
-                logger.exception(
-                    "Failed to launch self-update helper",
-                    request_id=request_id,
-                )
 
     def _get_scheduled_octo_control_backoff(self, task_id: str) -> tuple[float, str] | None:
         task_id_value = str(task_id or "").strip()
@@ -2120,259 +2035,6 @@ class Octo(OctoTurnStateMixin, OctoSelfQueueMixin):
                 output=trace_output,
                 metadata=trace_metadata,
             )
-
-    async def request_update_check(self, chat_id: int, args: dict[str, Any]) -> dict[str, Any]:
-        runtime_settings = getattr(getattr(self, "runtime", None), "settings", None)
-        project_root = Path(__file__).resolve().parents[4]
-        if runtime_settings is None:
-            return {"status": "error", "message": "runtime settings are unavailable"}
-        update_status = await asyncio.to_thread(check_update_status, project_root)
-        await asyncio.to_thread(
-            self.store.append_audit,
-            AuditEvent(
-                id=str(uuid4()),
-                ts=utc_now(),
-                level="info",
-                event_type="octo.update_check",
-                data={"chat_id": chat_id, "update": update_status},
-            ),
-        )
-        return update_status
-
-    async def request_self_restart(self, chat_id: int, args: dict[str, Any]) -> dict[str, Any]:
-        runtime_settings = getattr(getattr(self, "runtime", None), "settings", None)
-        if runtime_settings is None:
-            return {"status": "error", "message": "runtime settings are unavailable"}
-        reason = str(args.get("reason", "") or "").strip()
-        if not reason:
-            return {"status": "error", "message": "reason is required"}
-        if not bool(args.get("confirm", False)):
-            return {
-                "status": "needs_confirmation",
-                "action": "octo_restart_self",
-                "message": "Self restart requires confirm=true.",
-            }
-
-        confidence = _coerce_float(args.get("confidence"), default=0.8)
-        delay_seconds = _coerce_int(args.get("delay_seconds"), default=5, minimum=3, maximum=60)
-        health = await self.get_context_health_snapshot(chat_id)
-        handoff = {
-            "chat_id": chat_id,
-            "created_at": utc_now().isoformat(),
-            "mode": "self_restart",
-            "source": "octo_restart_self",
-            "reason": reason,
-            "confidence": confidence,
-            "goal_now": str(args.get("goal_now", "") or "").strip(),
-            "done": _normalize_string_list(args.get("done")),
-            "open_threads": _normalize_string_list(args.get("open_threads")),
-            "critical_constraints": _normalize_string_list(args.get("critical_constraints")),
-            "next_step": str(args.get("next_step", "") or "").strip(),
-            "current_interest": str(args.get("current_interest", "") or "").strip(),
-            "pending_human_input": str(args.get("pending_human_input", "") or "").strip(),
-            "cognitive_state": str(args.get("cognitive_state", "") or "focused")
-            .strip()
-            .lower(),
-            "health_snapshot": health,
-        }
-        if not handoff["goal_now"]:
-            handoff["goal_now"] = "Resume the current user task after Octo restarts."
-        if not handoff["next_step"]:
-            handoff["next_step"] = "Read the restart handoff and continue or clarify."
-
-        workspace_dir = Path(
-            getattr(
-                runtime_settings,
-                "workspace_dir",
-                os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace"),
-            )
-        ).resolve()
-        state_dir = Path(runtime_settings.state_dir)
-        file_info = await asyncio.to_thread(_persist_context_reset_files, workspace_dir, handoff)
-        request = await asyncio.to_thread(
-            append_control_request,
-            state_dir,
-            action=SELF_RESTART_ACTION,
-            reason=reason,
-            requested_by=SELF_RESTART_REQUESTED_BY,
-            delay_seconds=delay_seconds,
-            metadata={"chat_id": chat_id, "handoff_file": file_info.get("handoff_md", "")},
-        )
-        resume_payload = {
-            "status": "pending",
-            "request_id": request["request_id"],
-            "created_at": utc_now().isoformat(),
-            "handoff": handoff,
-            "files": file_info,
-        }
-        await asyncio.to_thread(write_pending_restart_resume, state_dir, resume_payload)
-
-        try:
-            memchain_info = await asyncio.to_thread(
-                memchain_record,
-                workspace_dir,
-                reason="self_restart",
-                meta={
-                    "chat_id": chat_id,
-                    "source": "octo_restart_self",
-                    "request_id": request["request_id"],
-                },
-            )
-        except Exception as exc:
-            memchain_info = {"status": "error", "message": str(exc)}
-            logger.warning("Memchain record failed during self restart request", error=str(exc))
-
-        await asyncio.to_thread(
-            self.store.append_audit,
-            AuditEvent(
-                id=str(uuid4()),
-                ts=utc_now(),
-                level="info",
-                event_type="octo.self_restart_requested",
-                data={
-                    "chat_id": chat_id,
-                    "reason": reason,
-                    "request": request,
-                    "files": file_info,
-                    "memchain": memchain_info,
-                },
-            ),
-        )
-        return {
-            "status": "restart_requested",
-            "request": request,
-            "handoff": handoff,
-            "files": file_info,
-            "memchain": memchain_info,
-            "message": "Self restart requested. Handoff is durable and the restart helper will run shortly.",
-        }
-
-    async def request_self_update(self, chat_id: int, args: dict[str, Any]) -> dict[str, Any]:
-        runtime_settings = getattr(getattr(self, "runtime", None), "settings", None)
-        if runtime_settings is None:
-            return {"status": "error", "message": "runtime settings are unavailable"}
-        reason = str(args.get("reason", "") or "").strip()
-        if not reason:
-            return {"status": "error", "message": "reason is required"}
-        if not bool(args.get("confirm", False)):
-            return {
-                "status": "needs_confirmation",
-                "action": "octo_update_self",
-                "message": "Self update requires confirm=true.",
-            }
-
-        project_root = Path(__file__).resolve().parents[4]
-        update_status = await asyncio.to_thread(check_update_status, project_root)
-        if not bool(update_status.get("can_update")):
-            return {
-                "status": "blocked",
-                "message": "Update is blocked by the current checkout state.",
-                "update": update_status,
-            }
-
-        confidence = _coerce_float(args.get("confidence"), default=0.8)
-        delay_seconds = _coerce_int(args.get("delay_seconds"), default=5, minimum=3, maximum=60)
-        health = await self.get_context_health_snapshot(chat_id)
-        handoff = {
-            "chat_id": chat_id,
-            "created_at": utc_now().isoformat(),
-            "mode": "self_update",
-            "source": "octo_update_self",
-            "reason": reason,
-            "confidence": confidence,
-            "goal_now": str(args.get("goal_now", "") or "").strip(),
-            "done": _normalize_string_list(args.get("done")),
-            "open_threads": _normalize_string_list(args.get("open_threads")),
-            "critical_constraints": _normalize_string_list(args.get("critical_constraints")),
-            "next_step": str(args.get("next_step", "") or "").strip(),
-            "current_interest": str(args.get("current_interest", "") or "").strip(),
-            "pending_human_input": str(args.get("pending_human_input", "") or "").strip(),
-            "cognitive_state": str(args.get("cognitive_state", "") or "focused")
-            .strip()
-            .lower(),
-            "health_snapshot": health,
-            "update_status": update_status,
-        }
-        if not handoff["goal_now"]:
-            handoff["goal_now"] = "Resume the current user task after Octo updates and restarts."
-        if not handoff["next_step"]:
-            handoff["next_step"] = "Read the update handoff and report whether update and restart completed."
-
-        workspace_dir = Path(
-            getattr(
-                runtime_settings,
-                "workspace_dir",
-                os.getenv("OCTOPAL_WORKSPACE_DIR", "workspace"),
-            )
-        ).resolve()
-        state_dir = Path(runtime_settings.state_dir)
-        file_info = await asyncio.to_thread(_persist_context_reset_files, workspace_dir, handoff)
-        request = await asyncio.to_thread(
-            append_control_request,
-            state_dir,
-            action=SELF_UPDATE_ACTION,
-            reason=reason,
-            requested_by=SELF_UPDATE_REQUESTED_BY,
-            delay_seconds=delay_seconds,
-            metadata={
-                "chat_id": chat_id,
-                "handoff_file": file_info.get("handoff_md", ""),
-                "update": update_status,
-            },
-        )
-        resume_payload = {
-            "status": "pending",
-            "request_id": request["request_id"],
-            "created_at": utc_now().isoformat(),
-            "handoff": handoff,
-            "files": file_info,
-            "update": update_status,
-        }
-        await asyncio.to_thread(write_pending_restart_resume, state_dir, resume_payload)
-
-        try:
-            memchain_info = await asyncio.to_thread(
-                memchain_record,
-                workspace_dir,
-                reason="self_update",
-                meta={
-                    "chat_id": chat_id,
-                    "source": "octo_update_self",
-                    "request_id": request["request_id"],
-                    "local_version": update_status.get("local_version"),
-                    "latest_version": update_status.get("latest_version"),
-                },
-            )
-        except Exception as exc:
-            memchain_info = {"status": "error", "message": str(exc)}
-            logger.warning("Memchain record failed during self update request", error=str(exc))
-
-        await asyncio.to_thread(
-            self.store.append_audit,
-            AuditEvent(
-                id=str(uuid4()),
-                ts=utc_now(),
-                level="info",
-                event_type="octo.self_update_requested",
-                data={
-                    "chat_id": chat_id,
-                    "reason": reason,
-                    "request": request,
-                    "files": file_info,
-                    "update": update_status,
-                    "memchain": memchain_info,
-                },
-            ),
-        )
-        return {
-            "status": "update_requested",
-            "request": request,
-            "handoff": handoff,
-            "files": file_info,
-            "update": update_status,
-            "memchain": memchain_info,
-            "message": "Self update requested. Handoff is durable and the update helper will run shortly.",
-        }
 
     async def handle_message(
         self,
