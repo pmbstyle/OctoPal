@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
@@ -71,6 +70,7 @@ from octopal.runtime.octo.output_runtime import OctoOutputRuntimeMixin
 from octopal.runtime.octo.prompt_builder import (
     build_bootstrap_context_prompt,
 )
+from octopal.runtime.octo.recent_task_runtime import OctoRecentTaskRuntimeMixin
 from octopal.runtime.octo.reply import OctoReply
 from octopal.runtime.octo.router import (
     route_heartbeat,
@@ -149,13 +149,6 @@ _HEARTBEAT_USER_VISIBLE_COOLDOWN_SECONDS = _env_int(
     300,
     minimum=0,
 )
-_RECENT_WORKER_TASK_TTL_SECONDS = float(
-    _env_int(
-        "OCTOPAL_RECENT_WORKER_TASK_TTL_SECONDS",
-        1800,
-        minimum=60,
-    )
-)
 _SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS = float(
     _env_int(
         "OCTOPAL_SCHEDULED_OCTO_CONTROL_BACKOFF_SECONDS",
@@ -183,6 +176,7 @@ class Octo(
     OctoOutputRuntimeMixin,
     OctoStartupRuntimeMixin,
     OctoWorkerInstructionRuntimeMixin,
+    OctoRecentTaskRuntimeMixin,
 ):
     provider: InferenceProvider
     store: Store
@@ -352,38 +346,6 @@ class Octo(
         self._tg_progress = self.internal_progress_send
         self._tg_worker_event = self.internal_worker_event_send
         self._tg_typing = self.internal_typing_control
-
-    def _reserve_recent_task(
-        self,
-        *,
-        chat_id: int,
-        correlation_id: str | None,
-        task_signature: str,
-    ) -> bool:
-        self._prune_recent_tasks()
-        scope_id = str(correlation_id or f"chat:{chat_id}")
-        key = (chat_id, scope_id, task_signature)
-        if key in self._recent_tasks:
-            return False
-        self._recent_tasks[key] = time.monotonic()
-        return True
-
-    def _release_recent_task(
-        self,
-        *,
-        chat_id: int,
-        correlation_id: str | None,
-        task_signature: str,
-    ) -> None:
-        scope_id = str(correlation_id or f"chat:{chat_id}")
-        self._recent_tasks.pop((chat_id, scope_id, task_signature), None)
-
-    def _prune_recent_tasks(self) -> None:
-        now = time.monotonic()
-        cutoff = now - _RECENT_WORKER_TASK_TTL_SECONDS
-        stale_keys = [key for key, seen_at in self._recent_tasks.items() if seen_at < cutoff]
-        for key in stale_keys:
-            self._recent_tasks.pop(key, None)
 
     async def handle_message(
         self,
