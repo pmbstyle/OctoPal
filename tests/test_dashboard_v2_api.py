@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 from octopal.gateway.app import build_app
 from octopal.infrastructure.config.models import OctopalConfig
 from octopal.infrastructure.config.settings import Settings
-from octopal.infrastructure.store.models import WorkerRecord
+from octopal.infrastructure.store.models import AuditEvent, WorkerRecord
 from octopal.infrastructure.store.sqlite import SQLiteStore
 from octopal.runtime.state import (
     update_last_internal_heartbeat,
@@ -95,6 +96,26 @@ def test_dashboard_v2_workers_exposes_worker_result_details(tmp_path) -> None:
             template_name="Research Worker",
         )
     )
+    store.append_audit(
+        AuditEvent(
+            id=str(uuid.uuid4()),
+            ts=now,
+            correlation_id="worker-12345678",
+            level="info",
+            event_type="worker_spawned",
+            data={"template_id": "researcher", "task": "Summarize latest sync"},
+        )
+    )
+    store.append_audit(
+        AuditEvent(
+            id=str(uuid.uuid4()),
+            ts=now,
+            correlation_id="worker-12345678",
+            level="info",
+            event_type="worker_result",
+            data={"summary": "Sync finished successfully"},
+        )
+    )
     app.state.dashboard_store = store
     client = TestClient(app)
 
@@ -108,6 +129,12 @@ def test_dashboard_v2_workers_exposes_worker_result_details(tmp_path) -> None:
     assert recent[0]["summary"] == "Sync finished successfully"
     assert recent[0]["result_preview"] == "Sync finished successfully"
     assert recent[0]["output"] == {"report": {"status": "ok", "items": 3}}
+    assert recent[0]["created_at"] == now.isoformat()
+    assert [event["event_type"] for event in recent[0]["audit_timeline"]] == [
+        "worker_spawned",
+        "worker_result",
+    ]
+    assert "Sync finished successfully" in recent[0]["audit_timeline"][1]["data_preview"]
 
 
 def test_dashboard_v2_workers_returns_16_recent_workers_by_default(tmp_path) -> None:

@@ -2011,6 +2011,7 @@ def _serialize_recent_worker(
         "template_id": worker.template_id,
         "status": worker.status,
         "task": worker.task,
+        "created_at": worker.created_at.isoformat(),
         "updated_at": worker.updated_at.isoformat(),
         "summary": worker.summary or "",
         "error": worker.error or "",
@@ -2021,6 +2022,29 @@ def _serialize_recent_worker(
         "result_preview": _worker_result_preview(worker),
         "output": output,
         "template_config": template_config,
+        "audit_timeline": _worker_audit_timeline(worker.id, store),
+    }
+
+
+def _worker_audit_timeline(worker_id: str, store: SQLiteStore | None) -> list[dict[str, Any]]:
+    if store is None:
+        return []
+    try:
+        events = store.list_audit_for_correlation(worker_id, limit=40)
+    except Exception:
+        logger.debug("Failed to load worker audit timeline", exc_info=True, extra={"worker_id": worker_id})
+        return []
+    return [_serialize_worker_audit_event(event) for event in events]
+
+
+def _serialize_worker_audit_event(event: AuditEvent) -> dict[str, Any]:
+    data = event.data if isinstance(event.data, dict) else {}
+    return {
+        "id": event.id,
+        "ts": event.ts.isoformat(),
+        "level": event.level,
+        "event_type": event.event_type,
+        "data_preview": _truncate_preview(_safe_preview_json(data), 420) if data else "",
     }
 
 

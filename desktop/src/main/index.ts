@@ -63,10 +63,30 @@ type DashboardWorkerRun = {
   template_id?: string;
   status?: string;
   task?: string;
+  created_at?: string;
   updated_at?: string;
   summary?: string;
   error?: string;
+  tools_used?: string[];
+  parent_worker_id?: string | null;
+  lineage_id?: string | null;
+  spawn_depth?: number;
   result_preview?: string;
+  output?: Record<string, unknown> | null;
+  template_config?: {
+    model?: string | null;
+    max_thinking_steps?: number | null;
+    default_timeout_seconds?: number | null;
+    available_tools?: string[];
+    can_spawn_children?: boolean;
+  } | null;
+  audit_timeline?: Array<{
+    id?: string;
+    ts?: string;
+    level?: string;
+    event_type?: string;
+    data_preview?: string;
+  }>;
 };
 
 type DesktopDashboardSnapshot = {
