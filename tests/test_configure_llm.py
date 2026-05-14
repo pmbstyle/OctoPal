@@ -15,7 +15,7 @@ def test_configure_llm_keeps_existing_custom_base_url_for_same_provider(monkeypa
     prompt_answers = iter(
         [
             "router-key",
-            "anthropic/claude-sonnet-4",
+            "x-ai/grok-4.3",
             "https://custom.router/v1",
         ]
     )
@@ -49,7 +49,7 @@ def test_configure_llm_resets_base_url_to_provider_preset_when_switching(monkeyp
         if message == "Minimax API key":
             return "mini-key"
         if message == "Minimax model":
-            return "minimax-m2.5"
+            return "MiniMax-M2.7"
         if message == "Minimax base URL":
             captured_defaults["base_url"] = default or ""
             return default or ""

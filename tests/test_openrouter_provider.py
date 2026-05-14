@@ -25,11 +25,11 @@ def _settings(**overrides) -> Settings:
         "litellm_drop_params": True,
         "litellm_caching": False,
         "openrouter_api_key": "router-key",
-        "openrouter_model": "anthropic/claude-sonnet-4",
+        "openrouter_model": "x-ai/grok-4.3",
         "openrouter_base_url": "https://openrouter.ai/api/v1/",
         "openrouter_timeout": 30.0,
         "zai_api_key": None,
-        "zai_model": "glm-5",
+        "zai_model": "glm-5.1",
         "zai_base_url": "https://api.z.ai/api/paas/v4/",
         "zai_chat_path": "/chat/completions",
         "zai_timeout_seconds": 45.0,
@@ -131,7 +131,7 @@ def test_complete_posts_expected_payload(monkeypatch) -> None:
     assert call["base_url"] == "https://openrouter.ai/api/v1"
     assert call["path"] == "/chat/completions"
     assert call["headers"]["Authorization"] == "Bearer router-key"
-    assert call["json"]["model"] == "anthropic/claude-sonnet-4"
+    assert call["json"]["model"] == "x-ai/grok-4.3"
     assert call["json"]["temperature"] == 0.7
     assert call["json"]["messages"] == [{"role": "user", "content": "hello"}]
 

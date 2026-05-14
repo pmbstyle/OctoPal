@@ -49,7 +49,7 @@ def test_load_settings_prefers_config_json_telegram_values(tmp_path, monkeypatch
                 },
                 "llm": {
                     "provider_id": "zai",
-                    "model": "glm-5",
+                    "model": "glm-5.1",
                 },
             }
         ),

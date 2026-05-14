@@ -483,6 +483,9 @@ export function App() {
       if (provider?.model) {
         form.setValue("model", provider.model, { shouldValidate: true });
       }
+      if (provider) {
+        form.setValue("apiBase", provider.apiBase, { shouldValidate: true });
+      }
       return;
     }
 
@@ -492,6 +495,9 @@ export function App() {
     form.setValue("workerProviderId", providerId, { shouldValidate: true });
     if (provider?.model) {
       form.setValue("workerModel", provider.model, { shouldValidate: true });
+    }
+    if (provider) {
+      form.setValue("workerApiBase", provider.apiBase, { shouldValidate: true });
     }
   }
 

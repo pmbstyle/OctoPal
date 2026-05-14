@@ -769,8 +769,8 @@ def test_runtime_ignores_task_level_model_override(tmp_path: Path) -> None:
 
     settings = Settings(
         config_obj=OctopalConfig(
-            llm=LLMConfig(provider_id="zai", model="glm-5"),
-            worker_llm_default=LLMConfig(provider_id="openrouter", model="anthropic/claude-sonnet-4"),
+            llm=LLMConfig(provider_id="zai", model="glm-5.1"),
+            worker_llm_default=LLMConfig(provider_id="openrouter", model="x-ai/grok-4.3"),
         )
     )
     runtime = WorkerRuntime(
@@ -794,7 +794,7 @@ def test_runtime_ignores_task_level_model_override(tmp_path: Path) -> None:
 
     spec = captured["spec"]
     assert spec.model is None
-    assert spec.llm_config.model == "anthropic/claude-sonnet-4"
+    assert spec.llm_config.model == "x-ai/grok-4.3"
 
 
 def test_runtime_rejects_task_tool_override_that_widens_template(tmp_path: Path) -> None:
