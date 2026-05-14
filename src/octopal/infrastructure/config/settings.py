@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     # OpenRouter Settings (used via LiteLLM with openrouter/ model prefix)
     openrouter_api_key: str | None = Field(default=None, alias="OPENROUTER_API_KEY")
     openrouter_base_url: str = Field("https://openrouter.ai/api/v1", alias="OPENROUTER_BASE_URL")
-    openrouter_model: str = Field("anthropic/claude-sonnet-4", alias="OPENROUTER_MODEL")
+    openrouter_model: str = Field("x-ai/grok-4.3", alias="OPENROUTER_MODEL")
     openrouter_timeout: float = Field(120.0, alias="OPENROUTER_TIMEOUT")
 
     # Legacy ZAI Settings (used as defaults for LiteLLM)
@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     zai_timeout_seconds: float = Field(45.0, alias="ZAI_TIMEOUT_SECONDS")
     zai_connect_timeout_seconds: float = Field(15.0, alias="ZAI_CONNECT_TIMEOUT_SECONDS")
     zai_accept_language: str = Field("en-US,en", alias="ZAI_ACCEPT_LANGUAGE")
-    zai_model: str = Field("glm-5", alias="ZAI_MODEL")
+    zai_model: str = Field("glm-5.1", alias="ZAI_MODEL")
 
     minimax_api_key: str | None = Field(default=None, alias="MINIMAX_API_KEY")
 

@@ -7,15 +7,26 @@ export function isExistingSecret(value: string | undefined | null): boolean {
 }
 
 export const providers = [
-  { id: "openrouter", label: "OpenRouter", model: "anthropic/claude-sonnet-4" },
-  { id: "zai", label: "Z.AI", model: "glm-4.6" },
-  { id: "openai", label: "OpenAI", model: "gpt-5.2" },
-  { id: "anthropic", label: "Anthropic", model: "claude-sonnet-4-5" },
-  { id: "google", label: "Google Gemini", model: "gemini-2.5-pro" },
-  { id: "mistral", label: "Mistral", model: "mistral-large-latest" },
-  { id: "together", label: "Together AI", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo" },
-  { id: "groq", label: "Groq", model: "llama-3.3-70b-versatile" },
-  { id: "custom", label: "Custom LiteLLM", model: "" },
+  {
+    id: "openrouter",
+    label: "OpenRouter",
+    model: "x-ai/grok-4.3",
+    apiBase: "https://openrouter.ai/api/v1",
+  },
+  { id: "zai", label: "Z.AI", model: "glm-5.1", apiBase: "https://api.z.ai/api/coding/paas/v4" },
+  { id: "openai", label: "OpenAI", model: "gpt-5.5", apiBase: "https://api.openai.com/v1" },
+  { id: "anthropic", label: "Anthropic", model: "claude-opus-4-7", apiBase: "https://api.anthropic.com" },
+  { id: "google", label: "Google Gemini", model: "gemini-3.1-pro-preview", apiBase: "" },
+  { id: "mistral", label: "Mistral", model: "mistral-medium-3-5+1", apiBase: "https://api.mistral.ai/v1" },
+  {
+    id: "together",
+    label: "Together AI",
+    model: "moonshotai/Kimi-K2.5",
+    apiBase: "https://api.together.xyz/v1",
+  },
+  { id: "groq", label: "Groq", model: "openai/gpt-oss-120b", apiBase: "https://api.groq.com/openai/v1" },
+  { id: "minimax", label: "Minimax", model: "MiniMax-M2.7", apiBase: "https://api.minimax.io/anthropic/v1" },
+  { id: "custom", label: "Custom LiteLLM", model: "", apiBase: "" },
 ] as const;
 
 export const searchProviders = [
@@ -151,12 +162,12 @@ export const defaultInstallValues: InstallForm = {
   whatsappMode: "separate",
   whatsappAllowedNumbers: "",
   providerId: "openrouter",
-  model: "anthropic/claude-sonnet-4",
+  model: "x-ai/grok-4.3",
   apiKey: "",
   apiBase: "",
   sameWorker: false,
   workerProviderId: "openrouter",
-  workerModel: "anthropic/claude-sonnet-4",
+  workerModel: "x-ai/grok-4.3",
   workerApiKey: "",
   workerApiBase: "",
   searchProvider: undefined,
