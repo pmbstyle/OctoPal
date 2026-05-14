@@ -1,4 +1,4 @@
-import { Download, ExternalLink, Pencil, Play, Plus, RotateCw, Square, Trash2, X } from "lucide-react";
+import { Clock, Download, ExternalLink, Eye, FileJson, GitBranch, ListChecks, Pencil, Play, Plus, RotateCw, Square, Trash2, Wrench, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -120,6 +120,94 @@ function formatTime(value?: string | number): string {
   return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(date);
 }
 
+function formatDateTime(value?: string | number): string {
+  if (!value) {
+    return "-";
+  }
+  const date = typeof value === "number" ? new Date(value) : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+function formatDuration(start?: string, end?: string): string {
+  if (!start || !end) {
+    return "-";
+  }
+  const startDate = new Date(start);
+  const endDate = new Date(end);
+  const ms = endDate.getTime() - startDate.getTime();
+  if (!Number.isFinite(ms) || ms < 0) {
+    return "-";
+  }
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  if (minutes < 60) {
+    return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function formatEventName(value?: string): string {
+  const labels: Record<string, string> = {
+    worker_spawned: "Worker spawned",
+    worker_started: "Process started",
+    worker_recovery_attempt: "Recovery attempt",
+    worker_waiting_for_children: "Waiting for children",
+    worker_resumed_after_children: "Children finished",
+    worker_resumed_for_child_instruction: "Child needs instruction",
+    worker_awaiting_instruction: "Awaiting instruction",
+    worker_instruction_answered: "Instruction answered",
+    worker_instruction_timeout: "Instruction timed out",
+    worker_result_repaired: "Result repaired",
+    worker_result: "Result returned",
+    worker_failed: "Worker failed",
+    worker_stopped: "Worker stopped",
+    intent_approval_requested: "Approval requested",
+    intent_approval_granted: "Approval granted",
+    intent_approval_denied: "Approval denied",
+    intent_executed_reported: "Intent executed",
+  };
+  if (!value) {
+    return "Worker event";
+  }
+  return labels[value] ?? value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function countItems(values?: string[]): Array<{ name: string; count: number }> {
+  const counts = new Map<string, number>();
+  for (const value of values ?? []) {
+    const key = String(value || "").trim();
+    if (!key) {
+      continue;
+    }
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([name, count]) => ({ name, count }));
+}
+
+function jsonPreview(value: unknown): string {
+  if (!value) {
+    return "";
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 function limitDisplayText(value: string, maxLength: number): string {
   const normalized = value.replace(/\s+/g, " ").trim();
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 3).trim()}...` : normalized;
@@ -196,6 +284,7 @@ export function DashboardScreen({
   const [templateError, setTemplateError] = useState("");
   const [templateNotice, setTemplateNotice] = useState("");
   const [editingTemplateId, setEditingTemplateId] = useState<string | null>(null);
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [templateForm, setTemplateForm] = useState<WorkerTemplateForm>(emptyTemplateForm);
   const [templateSaving, setTemplateSaving] = useState(false);
 
@@ -265,6 +354,9 @@ export function DashboardScreen({
   }, [history, snapshot?.load]);
 
   const recentWorkers = snapshot?.workers?.recent ?? [];
+  const selectedWorker = selectedWorkerId
+    ? recentWorkers.find((worker) => worker.id === selectedWorkerId) ?? null
+    : null;
   const octoState = snapshot?.octo?.state || runtimeView.state || "idle";
   const octoHeadlineRaw = snapshot?.octo?.headline || runtimeView.title;
   const octoDetailRaw = snapshot?.octo?.detail || runtimeView.detail || copy("octopalStarted");
@@ -278,6 +370,9 @@ export function DashboardScreen({
     ? templates.find((template) => template.id === editingTemplateId) ?? null
     : null;
   const isCreatingTemplate = editingTemplateId === "";
+  const selectedWorkerTemplate = selectedWorker?.template_id
+    ? templates.find((template) => template.id === selectedWorker.template_id) ?? null
+    : null;
 
   function startCreateTemplate(): void {
     setEditingTemplateId("");
@@ -340,6 +435,15 @@ export function DashboardScreen({
     }
   }
 
+  function openSelectedWorkerTemplate(): void {
+    if (!selectedWorkerTemplate) {
+      return;
+    }
+    setSelectedWorkerId(null);
+    setView("workers");
+    startEditTemplate(selectedWorkerTemplate);
+  }
+
   function renderControl() {
     return (
       <section className="dashboard-control">
@@ -399,18 +503,28 @@ export function DashboardScreen({
               <span>{copy("template")}</span>
               <span>{copy("task")}</span>
               <span>{copy("updated")}</span>
+              <span>Details</span>
             </div>
             {recentWorkers.length === 0 ? (
               <div className="dashboard-empty-row">{copy("noRecentWorkers")}</div>
             ) : (
               recentWorkers.slice(0, 8).map((worker, index) => (
-                <div className="dashboard-worker-row" key={worker.id ?? `${worker.updated_at}-${index}`}>
+                <button
+                  type="button"
+                  className="dashboard-worker-row dashboard-worker-row-button"
+                  key={worker.id ?? `${worker.updated_at}-${index}`}
+                  onClick={() => setSelectedWorkerId(worker.id ?? null)}
+                >
                   <strong>{shortId(worker.id)}</strong>
                   <span className={statusClass(worker.status)}>{worker.status ?? "unknown"}</span>
                   <span>{worker.template_name ?? worker.template_id ?? "-"}</span>
                   <span>{worker.task ?? worker.result_preview ?? worker.summary ?? worker.error ?? "-"}</span>
                   <span>{formatTime(worker.updated_at)}</span>
-                </div>
+                  <span className="worker-row-open">
+                    <Eye />
+                    Open
+                  </span>
+                </button>
               ))
             )}
           </div>
@@ -560,6 +674,232 @@ export function DashboardScreen({
     );
   }
 
+  function renderWorkerDetailModal() {
+    if (!selectedWorker) {
+      return null;
+    }
+    const timeline = selectedWorker.audit_timeline?.length
+      ? selectedWorker.audit_timeline
+      : [
+          {
+            id: `${selectedWorker.id}-created`,
+            ts: selectedWorker.created_at,
+            level: "info",
+            event_type: "worker_spawned",
+            data_preview: selectedWorker.task ?? "",
+          },
+          {
+            id: `${selectedWorker.id}-updated`,
+            ts: selectedWorker.updated_at,
+            level: selectedWorker.error ? "error" : "info",
+            event_type: selectedWorker.error ? "worker_failed" : "worker_result",
+            data_preview: selectedWorker.result_preview ?? selectedWorker.summary ?? selectedWorker.error ?? "",
+          },
+        ].filter((event) => event.ts || event.data_preview);
+    const outputText = jsonPreview(selectedWorker.output);
+    const usedTools = countItems(selectedWorker.tools_used);
+    const allowedTools = selectedWorker.template_config?.available_tools ?? [];
+    const preview = selectedWorker.result_preview || selectedWorker.summary || selectedWorker.error || "No result yet.";
+
+    return (
+      <div className="worker-detail-backdrop" role="presentation">
+        <section className="worker-detail-modal" role="dialog" aria-modal="true" aria-label="Worker details">
+          <header className="worker-detail-header">
+            <div>
+              <p className="worker-detail-kicker">Worker run</p>
+              <h2>{selectedWorker.template_name ?? selectedWorker.template_id ?? shortId(selectedWorker.id)}</h2>
+              <p>{selectedWorker.task ?? preview}</p>
+            </div>
+            <div className="worker-detail-header-actions">
+              {selectedWorkerTemplate ? (
+                <Button type="button" variant="ghost" onClick={openSelectedWorkerTemplate}>
+                  <Pencil data-icon="inline-start" />
+                  Edit template
+                </Button>
+              ) : null}
+              <button type="button" className="template-icon-button" onClick={() => setSelectedWorkerId(null)}>
+                <X />
+              </button>
+            </div>
+          </header>
+
+          <div className="worker-detail-summary">
+            <div>
+              <Clock />
+              <span>Started</span>
+              <strong>{formatDateTime(selectedWorker.created_at)}</strong>
+            </div>
+            <div>
+              <Clock />
+              <span>Updated</span>
+              <strong>{formatDateTime(selectedWorker.updated_at)}</strong>
+            </div>
+            <div>
+              <Clock />
+              <span>Duration</span>
+              <strong>{formatDuration(selectedWorker.created_at, selectedWorker.updated_at)}</strong>
+            </div>
+            <div>
+              <GitBranch />
+              <span>Lineage</span>
+              <strong>{shortId(selectedWorker.lineage_id) || "-"}</strong>
+            </div>
+            <div>
+              <Wrench />
+              <span>Tools</span>
+              <strong>{selectedWorker.tools_used?.length ?? 0}</strong>
+            </div>
+            <div>
+              <ListChecks />
+              <span>Status</span>
+              <strong className={statusClass(selectedWorker.status)}>{selectedWorker.status ?? "unknown"}</strong>
+            </div>
+          </div>
+
+          <div className="worker-detail-body">
+            <section className="worker-detail-main">
+              <div className="worker-detail-section worker-detail-section-result">
+                <div className="worker-detail-section-head">
+                  <h3>Result</h3>
+                  <span>{selectedWorker.error ? "Needs attention" : selectedWorker.summary ? "Completed output" : "Waiting for output"}</span>
+                </div>
+                {selectedWorker.summary ? <p className="worker-detail-result">{selectedWorker.summary}</p> : null}
+                {selectedWorker.error ? <p className="worker-detail-error">{selectedWorker.error}</p> : null}
+                {!selectedWorker.summary && !selectedWorker.error ? <p className="worker-detail-muted">{preview}</p> : null}
+              </div>
+
+              <div className="worker-detail-section">
+                <div className="worker-detail-section-head">
+                  <h3>Action timeline</h3>
+                  <span>{timeline.length} event{timeline.length === 1 ? "" : "s"}</span>
+                </div>
+                <ol className="worker-timeline">
+                  {timeline.map((event, index) => (
+                    <li key={event.id ?? `${event.ts}-${index}`} className={`worker-timeline-item worker-timeline-${event.level ?? "info"}`}>
+                      <time>{formatTime(event.ts)}</time>
+                      <div>
+                        <strong>{formatEventName(event.event_type)}</strong>
+                        {event.data_preview ? <p>{event.data_preview}</p> : null}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+
+              {outputText ? (
+                <div className="worker-detail-section">
+                  <div className="worker-detail-section-head">
+                    <h3>Structured output</h3>
+                    <span>JSON</span>
+                  </div>
+                  <pre className="worker-output-json">{outputText}</pre>
+                </div>
+              ) : null}
+            </section>
+
+            <aside className="worker-detail-side">
+              <div className="worker-detail-section">
+                <div className="worker-detail-section-head">
+                  <h3>Run context</h3>
+                  <span>{shortId(selectedWorker.id)}</span>
+                </div>
+                <dl className="worker-detail-facts">
+                  <div>
+                    <dt>ID</dt>
+                    <dd>{selectedWorker.id ?? "-"}</dd>
+                  </div>
+                  <div>
+                    <dt>Parent</dt>
+                    <dd>{selectedWorker.parent_worker_id ? shortId(selectedWorker.parent_worker_id) : "root"}</dd>
+                  </div>
+                  <div>
+                    <dt>Depth</dt>
+                    <dd>{selectedWorker.spawn_depth ?? 0}</dd>
+                  </div>
+                  <div>
+                    <dt>Template</dt>
+                    <dd>{selectedWorker.template_id ?? selectedWorker.template_name ?? "-"}</dd>
+                  </div>
+                </dl>
+              </div>
+
+              <div className="worker-detail-section">
+                <div className="worker-detail-section-head">
+                  <h3>Tools used</h3>
+                  <span>{usedTools.length ? `${usedTools.length} kind${usedTools.length === 1 ? "" : "s"}` : "None"}</span>
+                </div>
+                {usedTools.length > 0 ? (
+                  <div className="worker-tool-cloud">
+                    {usedTools.map((tool) => (
+                      <span key={tool.name}>
+                        {tool.name}
+                        {tool.count > 1 ? ` x${tool.count}` : ""}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="worker-detail-muted">No tool usage was reported for this run.</p>
+                )}
+              </div>
+
+              <div className="worker-detail-section">
+                <div className="worker-detail-section-head">
+                  <h3>Template settings</h3>
+                  {selectedWorkerTemplate ? (
+                    <button type="button" className="worker-detail-link" onClick={openSelectedWorkerTemplate}>
+                      Open editor
+                    </button>
+                  ) : (
+                    <span>Snapshot</span>
+                  )}
+                </div>
+                {selectedWorker.template_config ? (
+                  <>
+                    <dl className="worker-detail-facts">
+                      <div>
+                        <dt>Model</dt>
+                        <dd>{selectedWorker.template_config.model || "default"}</dd>
+                      </div>
+                      <div>
+                        <dt>Thinking steps</dt>
+                        <dd>{selectedWorker.template_config.max_thinking_steps ?? "n/a"}</dd>
+                      </div>
+                      <div>
+                        <dt>Timeout</dt>
+                        <dd>{selectedWorker.template_config.default_timeout_seconds ?? "n/a"}s</dd>
+                      </div>
+                      <div>
+                        <dt>Children</dt>
+                        <dd>{selectedWorker.template_config.can_spawn_children ? "allowed" : "off"}</dd>
+                      </div>
+                    </dl>
+                    {allowedTools.length > 0 ? (
+                      <div className="worker-tool-cloud worker-tool-cloud-muted">
+                        {allowedTools.map((toolName) => (
+                          <span key={toolName}>{toolName}</span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <p className="worker-detail-muted">No template snapshot was available for this worker.</p>
+                )}
+              </div>
+
+              <div className="worker-detail-section">
+                <div className="worker-detail-section-head">
+                  <h3>Task</h3>
+                  <FileJson />
+                </div>
+                <p className="worker-detail-task">{selectedWorker.task ?? "-"}</p>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <motion.section
       className="dashboard-screen"
@@ -585,6 +925,8 @@ export function DashboardScreen({
         {view === "workers" ? renderWorkers() : null}
         {view === "system" ? renderSystem() : null}
       </div>
+
+      {renderWorkerDetailModal()}
 
       {editingTemplateId !== null ? (
         <div className="template-modal-backdrop" role="presentation">

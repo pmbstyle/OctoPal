@@ -255,6 +255,8 @@ class SQLiteStore(Store):
             );
 
             CREATE INDEX IF NOT EXISTS ix_workers_status_updated_at ON workers (status, updated_at);
+            CREATE INDEX IF NOT EXISTS ix_audit_events_correlation_ts
+                ON audit_events (correlation_id, ts DESC);
             CREATE INDEX IF NOT EXISTS ix_memory_entries_id ON memory_entries (id);
             """
         )
@@ -729,6 +731,13 @@ class SQLiteStore(Store):
         cursor = self._conn.execute(
             "SELECT * FROM audit_events ORDER BY ts DESC LIMIT ?",
             (limit,),
+        )
+        return [self._row_to_audit(row) for row in cursor.fetchall()]
+
+    def list_audit_for_correlation(self, correlation_id: str, limit: int = 100) -> list[AuditEvent]:
+        cursor = self._conn.execute(
+            "SELECT * FROM audit_events WHERE correlation_id = ? ORDER BY ts ASC, rowid ASC LIMIT ?",
+            (correlation_id, limit),
         )
         return [self._row_to_audit(row) for row in cursor.fetchall()]
 
