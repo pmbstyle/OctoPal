@@ -17,6 +17,7 @@ async def send_peer_message(
     *,
     peer_id: str,
     text: str,
+    context_id: str | None = None,
     timeout_seconds: float = 60.0,
 ) -> dict[str, Any]:
     peer = config.peers.get(peer_id)
@@ -34,6 +35,7 @@ async def send_peer_message(
             "role": "ROLE_USER",
             "parts": [{"text": text}],
             "messageId": f"octopal-message-{uuid4().hex}",
+            "contextId": context_id or f"octopal-peer-{peer_id}",
         }
     }
     headers = {
@@ -63,4 +65,3 @@ def _message_send_endpoint(peer: A2APeerConfig) -> str:
     if not base_url:
         raise A2AClientError("A2A peer requires base_url or agent_card_url.")
     return base_url.rstrip("/") + "/message:send"
-

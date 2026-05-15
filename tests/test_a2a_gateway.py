@@ -10,6 +10,7 @@ from octopal.infrastructure.config.models import A2AConfig, A2APeerConfig
 from octopal.infrastructure.config.settings import Settings
 from octopal.interop.a2a.client import _message_send_endpoint
 from octopal.interop.a2a.routes import register_a2a_routes
+from octopal.tools.communication.a2a import a2a_list_peers
 
 
 class _DummyOcto:
@@ -155,13 +156,15 @@ def test_message_send_routes_authenticated_peer_message_to_octo() -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["task"]["status"]["state"] == "completed"
+    assert payload["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
     assert payload["task"]["status"]["message"]["parts"] == [{"text": "hello peer"}]
+    assert payload["task"]["contextId"] == "octopal-peer-bob"
     assert payload["task"]["metadata"]["octopalPeerId"] == "bob"
     assert len(octo.calls) == 1
     call = octo.calls[0]
     assert "Peer ID: bob" in str(call["text"])
     assert "hi Alice" in str(call["text"])
+    assert "Do not call `a2a_send_message` back to this same peer" in str(call["text"])
     assert call["chat_id"] > 0
     assert call["kwargs"]["is_ws"] is True
     assert call["kwargs"]["include_wakeup"] is False
@@ -206,6 +209,36 @@ def test_message_send_enforces_peer_rate_limit() -> None:
     response = client.post("/a2a/v1/message:send", headers=headers, json=body)
 
     assert response.status_code == 429
+
+
+def test_a2a_list_peers_exposes_enabled_configured_peers_without_tokens() -> None:
+    ctx = {
+        "octo": SimpleNamespace(
+            runtime=SimpleNamespace(
+                settings=SimpleNamespace(
+                    a2a=A2AConfig(
+                        enabled=True,
+                        peers={
+                            "bob": A2APeerConfig(
+                                name="Bob",
+                                token="secret",
+                                base_url="https://bob.example/a2a/v1",
+                            ),
+                            "off": A2APeerConfig(enabled=False, token="hidden"),
+                        },
+                    )
+                )
+            )
+        )
+    }
+
+    payload = a2a_list_peers({}, ctx)
+
+    assert '"enabled": true' in payload
+    assert '"peer_id": "bob"' in payload
+    assert '"Bob"' in payload
+    assert "secret" not in payload
+    assert '"peer_id": "off"' not in payload
 
 
 def test_message_send_endpoint_can_be_derived_from_agent_card_url() -> None:

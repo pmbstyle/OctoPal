@@ -6,6 +6,11 @@ from octopal.tools.metadata import ToolMetadata
 from octopal.tools.registry import ToolSpec
 
 _TOOL_METADATA_BY_NAME: dict[str, ToolMetadata] = {
+    "a2a_list_peers": ToolMetadata(
+        category="communication",
+        profile_tags=("communication", "minimal"),
+        capabilities=("agent_peer_read",),
+    ),
     "a2a_send_message": ToolMetadata(
         category="communication",
         risk="guarded",

@@ -10,6 +10,7 @@ from octopal.interop.a2a.client import A2AClientError, send_peer_message
 async def a2a_send_message(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     peer_id = str((args or {}).get("peer_id") or "").strip()
     text = str((args or {}).get("text") or "").strip()
+    context_id = str((args or {}).get("context_id") or "").strip() or None
     if not peer_id:
         return _json({"status": "error", "message": "peer_id is required."})
     if not text:
@@ -19,7 +20,7 @@ async def a2a_send_message(args: dict[str, Any], ctx: dict[str, Any]) -> str:
     if not config.enabled:
         return _json({"status": "error", "message": "A2A interop is disabled."})
     try:
-        payload = await send_peer_message(config, peer_id=peer_id, text=text)
+        payload = await send_peer_message(config, peer_id=peer_id, text=text, context_id=context_id)
     except A2AClientError as exc:
         return _json({"status": "error", "message": str(exc)})
     except Exception as exc:
@@ -28,7 +29,34 @@ async def a2a_send_message(args: dict[str, Any], ctx: dict[str, Any]) -> str:
         {
             "status": "ok",
             "peer_id": peer_id,
+            "context_id": context_id or f"octopal-peer-{peer_id}",
             "response": payload,
+        }
+    )
+
+
+def a2a_list_peers(args: dict[str, Any], ctx: dict[str, Any]) -> str:
+    config = _resolve_a2a_config(ctx)
+    peers: list[dict[str, Any]] = []
+    for peer_id, peer in sorted(config.peers.items()):
+        if not peer.enabled:
+            continue
+        peers.append(
+            {
+                "peer_id": peer_id,
+                "name": peer.name or peer_id,
+                "capabilities": list(peer.capabilities),
+                "trust_level": peer.trust_level,
+                "has_base_url": bool(str(peer.base_url or "").strip()),
+                "has_agent_card_url": bool(str(peer.agent_card_url or "").strip()),
+            }
+        )
+    return _json(
+        {
+            "status": "ok",
+            "enabled": config.enabled,
+            "count": len(peers),
+            "peers": peers,
         }
     )
 
@@ -48,4 +76,3 @@ def _resolve_a2a_config(ctx: dict[str, Any]) -> A2AConfig:
 
 def _json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
-
