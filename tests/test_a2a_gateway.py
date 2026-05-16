@@ -136,6 +136,80 @@ def test_message_send_rejects_invalid_payload() -> None:
     assert response.status_code == 400
 
 
+def test_message_send_rejects_unknown_task_id_until_task_store_exists() -> None:
+    octo = _DummyOcto()
+    client = TestClient(
+        _app(
+            A2AConfig(
+                enabled=True,
+                peers={"bob": A2APeerConfig(token="secret")},
+            ),
+            octo=octo,
+        )
+    )
+
+    response = client.post(
+        "/a2a/v1/message:send",
+        headers={"Authorization": "Bearer secret"},
+        json={
+            "message": {
+                "role": "ROLE_USER",
+                "taskId": "client-supplied-task",
+                "parts": [{"text": "hi"}],
+            }
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "TaskNotFoundError"
+    assert octo.calls == []
+
+
+def test_message_send_rejects_unsupported_a2a_version() -> None:
+    octo = _DummyOcto()
+    client = TestClient(
+        _app(
+            A2AConfig(
+                enabled=True,
+                protocol_version="1.0",
+                peers={"bob": A2APeerConfig(token="secret")},
+            ),
+            octo=octo,
+        )
+    )
+
+    response = client.post(
+        "/a2a/v1/message:send",
+        headers={"Authorization": "Bearer secret", "A2A-Version": "2.0"},
+        json={"message": {"role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "VersionNotSupportedError"
+    assert octo.calls == []
+
+
+def test_message_send_accepts_supported_a2a_patch_version() -> None:
+    client = TestClient(
+        _app(
+            A2AConfig(
+                enabled=True,
+                protocol_version="1.0",
+                peers={"bob": A2APeerConfig(token="secret")},
+            ),
+            octo=_DummyOcto(),
+        )
+    )
+
+    response = client.post(
+        "/a2a/v1/message:send",
+        headers={"Authorization": "Bearer secret", "A2A-Version": "1.0.3"},
+        json={"message": {"role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+    )
+
+    assert response.status_code == 200
+
+
 def test_message_send_routes_authenticated_peer_message_to_octo() -> None:
     octo = _DummyOcto()
     client = TestClient(

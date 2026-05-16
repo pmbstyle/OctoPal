@@ -4,7 +4,7 @@ import time
 from typing import Any
 from uuid import uuid4
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import ValidationError
 
 from octopal.infrastructure.config.models import A2AConfig
@@ -26,8 +26,12 @@ def register_a2a_routes(app: FastAPI) -> None:
         return build_agent_card(config, base_url=str(request.base_url))
 
     @app.post("/a2a/v1/message:send")
-    async def a2a_send_message(request: Request) -> dict[str, Any]:
+    async def a2a_send_message(
+        request: Request,
+        a2a_version: str | None = Header(default=None, alias="A2A-Version"),
+    ) -> dict[str, Any]:
         config = _a2a_config(app)
+        _validate_a2a_version(config, a2a_version)
         peer = authenticate_peer(request, config)
         require_peer_capability(peer, "chat")
         _enforce_rate_limit(app, peer.peer_id, limit_per_minute=config.max_requests_per_minute)
@@ -45,8 +49,20 @@ def register_a2a_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail="A2A message must contain text")
         if len(text) > max(1, int(config.max_payload_chars)):
             raise HTTPException(status_code=413, detail="A2A message is too large")
+        if request_payload.message.task_id:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "TaskNotFoundError",
+                    "message": (
+                        "This Octopal A2A MVP does not persist task state yet, so inbound "
+                        "messages cannot reference an existing taskId."
+                    ),
+                    "taskId": request_payload.message.task_id,
+                },
+            )
 
-        task_id = request_payload.message.task_id or f"a2a-task-{uuid4().hex}"
+        task_id = f"a2a-task-{uuid4().hex}"
         context_id = request_payload.message.context_id or f"octopal-peer-{peer.peer_id}"
         peer_label = peer.config.name or peer.peer_id
         octo_text = _build_octo_peer_prompt(peer_id=peer.peer_id, peer_name=peer_label, text=text)
@@ -104,6 +120,36 @@ def _a2a_config(app: FastAPI) -> A2AConfig:
     if isinstance(candidate, A2AConfig):
         return candidate
     return A2AConfig()
+
+
+def _validate_a2a_version(config: A2AConfig, requested_version: str | None) -> None:
+    if not requested_version:
+        return
+    expected = _major_minor(config.protocol_version)
+    requested = _major_minor(requested_version)
+    if requested != expected:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "VersionNotSupportedError",
+                "message": (
+                    f"A2A protocol version {requested_version!r} is not supported. "
+                    f"This server supports {config.protocol_version!r}."
+                ),
+                "supportedVersion": config.protocol_version,
+                "requestedVersion": requested_version,
+            },
+        )
+
+
+def _major_minor(version: str) -> tuple[int, int] | None:
+    parts = str(version or "").strip().split(".")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
 
 
 def _build_octo_peer_prompt(*, peer_id: str, peer_name: str, text: str) -> str:
