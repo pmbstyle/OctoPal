@@ -375,15 +375,9 @@ def test_control_plane_tools_do_not_hydrate_dynamic_mcp_catalog(monkeypatch) -> 
     assert internal_maintenance_ctx["mcp_refresh_attempted"] is False
     assert "mcp_agentmail_list_inboxes" not in {tool.name for tool in heartbeat_tools}
     assert "mcp_agentmail_list_inboxes" not in {tool.name for tool in scheduler_tools}
-    assert "mcp_agentmail_list_inboxes" not in {
-        tool.name for tool in scheduled_octo_control_tools
-    }
-    assert "mcp_agentmail_list_inboxes" not in {
-        tool.name for tool in internal_maintenance_tools
-    }
-    assert {"list_workers", "list_active_workers"}.issubset(
-        {tool.name for tool in scheduler_tools}
-    )
+    assert "mcp_agentmail_list_inboxes" not in {tool.name for tool in scheduled_octo_control_tools}
+    assert "mcp_agentmail_list_inboxes" not in {tool.name for tool in internal_maintenance_tools}
+    assert {"list_workers", "list_active_workers"}.issubset({tool.name for tool in scheduler_tools})
     assert {
         "list_workers",
         "list_active_workers",
@@ -505,10 +499,7 @@ def test_worker_followup_fs_write_context_is_limited_to_durable_artifacts(
     assert ctx["allowed_paths"] == ["reports", "artifacts"]
     assert ctx["restrict_to_allowed_paths"] is True
 
-    assert (
-        fs_write_tool.handler({"path": "reports/out.md", "content": "ok"}, ctx)
-        == "fs_write ok"
-    )
+    assert fs_write_tool.handler({"path": "reports/out.md", "content": "ok"}, ctx) == "fs_write ok"
     assert (tmp_path / "reports" / "out.md").read_text(encoding="utf-8") == "ok"
 
     blocked = fs_write_tool.handler({"path": "mcp_servers.json", "content": "pwn"}, ctx)
@@ -1096,7 +1087,9 @@ def test_route_retries_image_message_with_saved_file_paths(monkeypatch, tmp_path
     asyncio.run(scenario())
 
 
-def test_image_fallback_without_saved_paths_uses_channel_neutral_directory(monkeypatch, tmp_path) -> None:
+def test_image_fallback_without_saved_paths_uses_channel_neutral_directory(
+    monkeypatch, tmp_path
+) -> None:
     monkeypatch.setenv("OCTOPAL_WORKSPACE_DIR", str(tmp_path))
 
     saved_paths = _decode_and_save_images(["data:image/jpeg;base64,SGVsbG8="])
